@@ -33,6 +33,9 @@ public sealed class AgentToolRosterTests
         { "lunit", "labview-lunit-unit-test" },
         { "dqmh", "labview-dqmh-module" },
         { "caraya", "labview-caraya-unit-test" },
+        // No agent is the Actor Framework's own; actors are classes, so their override tools
+        // belong to the class generator. `_af_` and not `af`, which `graft` also contains.
+        { "_af_", "labview-class-generator" },
     };
 
     [Theory]
