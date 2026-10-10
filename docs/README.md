@@ -48,7 +48,7 @@ so an assistant gets the same text you do.
 | [`lvclass-creation.md`](lvclass-creation.md) | classes and their private data, including why a converted VI could not build one for weeks |
 | [`lvclass-interfaces.md`](lvclass-interfaces.md) | interfaces, multiple inheritance, and the link you can only set at creation time |
 | [`class-method-tooling.md`](class-method-tooling.md) | scripting a class method, and the four traps under it |
-| [`labview-actor-framework.md`](labview-actor-framework.md) | actors, messages, and why the library must exist first |
+| [`labview-actor-framework.md`](labview-actor-framework.md) | actors, messages, why the library must exist first, lifecycle overrides and stopping a helper loop; §0 is the current recipe |
 | [`dqmh-scripting.md`](dqmh-scripting.md) | driving Delacor's own scripting VIs over VI Server |
 | [`malleable-vis.md`](malleable-vis.md) | `.vim` files, and why AIXML alone writes a broken one |
 | [`labview-vit-templates.md`](labview-vit-templates.md) | starting from an NI `.vit`, event structures, dynamic events |
