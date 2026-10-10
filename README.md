@@ -5,6 +5,7 @@ change, why, how each change was measured, and what upstream may want to know be
 
 | File | What it holds |
 |---|---|
+| `SUMMARY.md` | A short (2–3 sentences) and a long (a paragraph per topic) summary to send |
 | `CHANGES.md` | The overall change log, per branch |
 | `pr/<branch>.md` | A ready-to-paste pull request description per branch |
 | `MEASUREMENTS.md` | What was run in LabVIEW, with dates and results, and what is still open |

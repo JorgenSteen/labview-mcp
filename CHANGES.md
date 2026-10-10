@@ -20,7 +20,9 @@ and unit-tested, LabVIEW measurement not finished yet.
   handler belongs after Call Parent; create resources in Pre Launch Init after Call Parent with the error wired.
 - **§§1–18 kept, outdated passages marked** inline ("Superseded by §N"), and a new **§0 "Current recipe"** at the top
   with a table of every superseded passage.
-- Status: pending (nine claims marked unmeasured or reasoned are in `MEASUREMENTS.md`).
+- Status: **measured 2026-10-10**: ten claims run (1608 at an Emergency Stop, overruling `stop actor?`, Pre Launch Init
+  self-cleanup, deferred start, Generate/Destroy in Stop Core, a lost early stop that hangs the actor, the library entry
+  LabVIEW does not write, the graft crash); one stays unmeasured (Register For Events with an incoming error).
 
 ## 2. `feat/af-overrides`: AF override and hook tools (12 commits)
 - **`lvai_create_override`** wraps the existing but unwrapped `scripts/lvai_create_override.xml` (NI's
