@@ -37,9 +37,10 @@ internal sealed class FakeLabViewMachine : ILabViewMachine
         return p;
     }
 
-    public MachineWindow AddWindow(int pid, string cls, string title, bool visible, long? handle = null)
+    public MachineWindow AddWindow(int pid, string cls, string title, bool visible, long? handle = null,
+                                   long owner = 0, bool enabled = true)
     {
-        var w = new MachineWindow(handle ?? 1000 + WindowList.Count, pid, cls, title, visible);
+        var w = new MachineWindow(handle ?? 1000 + WindowList.Count, pid, cls, title, visible, owner, enabled);
         WindowList.Add(w);
         return w;
     }

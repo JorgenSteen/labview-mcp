@@ -12,7 +12,10 @@ namespace LabVIEWMcp.Infra;
 internal sealed record MachineProcess(int Id, string Name, DateTime? StartTime, string? Path);
 
 /// <summary>One top-level window, read with no LabVIEW call.</summary>
-internal sealed record MachineWindow(long Handle, int ProcessId, string ClassName, string Title, bool Visible);
+/// <param name="Owner">The owner window's handle (GetWindow GW_OWNER), 0 when it has none.</param>
+/// <param name="Enabled">IsWindowEnabled: a modal dialog disables the windows it blocks.</param>
+internal sealed record MachineWindow(long Handle, int ProcessId, string ClassName, string Title, bool Visible,
+                                     long Owner = 0, bool Enabled = true);
 
 /// <summary>One child window of a dialog: a button or a static text, when the dialog has any.</summary>
 internal sealed record MachineChild(string ClassName, string Text);
@@ -110,7 +113,8 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
             GetWindowThreadProcessId(window, out var owner);
             if (owner == (uint)processId)
                 rows.Add(new MachineWindow(window.ToInt64(), processId, ClassOf(window), TextOf(window),
-                                           IsWindowVisible(window)));
+                                           IsWindowVisible(window), GetWindow(window, GwOwner).ToInt64(),
+                                           IsWindowEnabled(window)));
             return true;
         }, IntPtr.Zero);
         return rows;
@@ -228,6 +232,8 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc callback, IntPtr param);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindowEnabled(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr window, StringBuilder text, int max);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -241,6 +247,7 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
     private static extern bool CloseHandle(IntPtr handle);
 
     private const uint ProcessQueryLimitedInformation = 0x1000;
+    private const uint GwOwner = 4;
 
     private static string ClassOf(IntPtr window)
     {

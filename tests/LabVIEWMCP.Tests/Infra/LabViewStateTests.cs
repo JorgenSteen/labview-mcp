@@ -112,6 +112,116 @@ public class LabViewWindowClassifierTests
     }
 }
 
+/// <summary>
+/// The untitled modal dialog, measured 2026-10-10 12:15: LabVIEW's "… has changed on disk" prompt
+/// ([Revert] [Cancel]) was a visible, untitled LVDChild owned by the LabVIEW frame, with the frame and
+/// the Project Explorer disabled - and the title-only classifier called it `untitled`.
+/// </summary>
+public class ModalDialogClassifierTests
+{
+    private const int Pid = 4520;
+
+    /// <summary>The measured window list (titles, classes, visibility), with the owner and enabled state.</summary>
+    private static FakeLabViewMachine Measured1215(bool frameDisabled = true, bool ownedByFrame = true)
+    {
+        var m = new FakeLabViewMachine();
+        m.AddProcess(Pid, "LabVIEW");
+        m.AddWindow(Pid, "CiceroUIWndFrame", "CiceroUIWndFrame", false);
+        m.AddWindow(Pid, "LVDChild", "LV AI gRPC Service.lvlibp:gRPC Implementations.lvlib:RunService.vi", false);
+        m.AddWindow(Pid, "LVDChild", "VI Hierarchy", false);
+        m.AddWindow(Pid, "LVDChild", "", true, handle: 50, owner: ownedByFrame ? 61 : 0);
+        m.AddWindow(Pid, "LVDChild", "PB-H10.lvproj - Project Explorer", true, enabled: !frameDisabled);
+        m.AddWindow(Pid, "LVDChild", "LabVIEW", false, handle: 60);
+        m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61, enabled: !frameDisabled);
+        m.AddWindow(Pid, "NI-RPC Message Thread Class", "NI-RPC Message Thread Instance 4520", false);
+        m.AddWindow(Pid, "CiceroUIWndFrame", "CiceroUIWndFrame", false);
+        m.AddWindow(Pid, "Internet Explorer_Hidden", "", true, owner: 61);
+        return m;
+    }
+
+    [Fact]
+    public void The_measured_untitled_modal_dialog_is_a_possible_dialog_and_nothing_else_is()
+    {
+        var s = LabViewState.Take(Measured1215(), @"X:
+one");
+
+        var dialog = Assert.Single(s.Dialogs);
+        Assert.Equal(50, dialog.Window.Handle);
+        Assert.Contains("owned by the LabVIEW frame", dialog.Reason);
+        Assert.Contains("disabled", dialog.Reason);
+        // Visible and untitled too, but a known helper class: not a dialog.
+        Assert.Contains(s.Windows, w => w.Window.ClassName == "Internet Explorer_Hidden" && w.Kind == WindowKinds.Untitled);
+    }
+
+    [Fact]
+    public void Windows_text_services_and_the_NI_RPC_thread_are_system_windows_now()
+    {
+        var s = LabViewState.Take(Measured1215(), @"X:
+one");
+        Assert.All(s.Windows.Where(w => w.Window.ClassName is "CiceroUIWndFrame" or "NI-RPC Message Thread Class"),
+                   w => Assert.Equal(WindowKinds.HiddenSystem, w.Kind));
+        // VI Hierarchy is LabVIEW's, but one sighting does not say it is always there: still named.
+        Assert.Equal("VI Hierarchy", Assert.Single(s.HiddenUnrecognised).Window.Title);
+    }
+
+    [Fact]
+    public void Owned_by_the_frame_is_enough_and_a_disabled_frame_is_enough()
+    {
+        Assert.Single(LabViewState.Take(Measured1215(frameDisabled: false), @"X:
+one").Dialogs);
+        var unowned = LabViewState.Take(Measured1215(ownedByFrame: false), @"X:
+one");
+        Assert.Contains("disabled", Assert.Single(unowned.Dialogs).Reason);
+    }
+
+    [Fact]
+    public void An_untitled_window_neither_owned_by_the_frame_nor_beside_a_disabled_one_stays_untitled()
+    {
+        var s = LabViewState.Take(Measured1215(frameDisabled: false, ownedByFrame: false), @"X:
+one");
+        Assert.Empty(s.Dialogs);
+    }
+
+    [Fact]
+    public void While_the_frame_is_disabled_an_enabled_vi_window_is_a_possible_dialog_and_a_disabled_one_is_not()
+    {
+        var m = Measured1215();
+        m.AddWindow(Pid, "LVDChild", "Ask User.vi", true);
+        m.AddWindow(Pid, "LVDChild", "Main.vi Front Panel", true, enabled: false);
+        var s = LabViewState.Take(m, @"X:
+one");
+
+        Assert.Contains(s.Dialogs, d => d.Window.Title == "Ask User.vi");
+        Assert.DoesNotContain(s.Dialogs, d => d.Window.Title == "Main.vi Front Panel");
+
+        var calm = Measured1215(frameDisabled: false, ownedByFrame: false);
+        calm.AddWindow(Pid, "LVDChild", "Ask User.vi", true);
+        Assert.Empty(LabViewState.Take(calm, @"X:
+one").Dialogs);
+    }
+
+    [Fact]
+    public void A_hidden_untitled_window_owned_by_the_frame_stays_a_hidden_system_window()
+    {
+        var m = new FakeLabViewMachine();
+        m.AddProcess(Pid, "LabVIEW");
+        m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61);
+        m.AddWindow(Pid, "LVDChild", "", false, owner: 61);
+        Assert.Empty(LabViewState.Take(m, @"X:
+one").Dialogs);
+    }
+
+    [Fact]
+    public async Task The_state_tool_names_it_with_its_reason()
+    {
+        var state = await RestartTools.StateAsync(Measured1215(), @"X:
+one", 0, includeHiddenWindows: false, default);
+        var d = Assert.Single(state["possibleDialogs"]!.AsArray())!;
+        Assert.Equal("", d["title"]!.GetValue<string>());
+        Assert.Contains("owned by the LabVIEW frame", d["reason"]!.GetValue<string>());
+    }
+}
+
 public class LabViewSnapshotTests
 {
     private const string AutoSave = @"D:\Docs\LabVIEW Data\LVAutoSave";

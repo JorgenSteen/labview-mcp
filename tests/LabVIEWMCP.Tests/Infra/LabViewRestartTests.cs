@@ -111,6 +111,20 @@ public class LabViewRestartTests
     }
 
     [Fact]
+    public async Task An_untitled_modal_dialog_owned_by_the_frame_is_refused_whatever_the_go_ahead()
+    {
+        // Measured 2026-10-10: "... has changed on disk" was a visible UNTITLED window owned by the frame.
+        var w = new World { ServerStarted = true };
+        var frame = w.M.WindowList.First(x => x.ClassName == "LVFrame");
+        w.M.WindowList[w.M.WindowList.IndexOf(frame)] = frame with { Enabled = false };
+        w.M.AddWindow(10, "LVDChild", "", true, owner: frame.Handle);
+        var a = await w.Run("close", goAhead: "close it (the user)");
+
+        Assert.Equal("dialog", Str(a, "stoppedBy"));
+        Assert.Empty(w.M.ClosesSent);
+    }
+
+    [Fact]
     public async Task An_unrecognised_hidden_window_needs_the_go_ahead_even_on_the_server_s_labview()
     {
         var w = new World { ServerStarted = true };

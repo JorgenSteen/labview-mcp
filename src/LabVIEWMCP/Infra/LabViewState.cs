@@ -8,7 +8,8 @@ using System.Text.RegularExpressions;
 namespace LabVIEWMcp.Infra;
 
 /// <summary>A top-level window with the kind the guards gave it.</summary>
-internal sealed record ClassifiedWindow(MachineWindow Window, string Kind)
+/// <param name="Reason">Why a window that its title alone does not flag is a possible dialog.</param>
+internal sealed record ClassifiedWindow(MachineWindow Window, string Kind, string? Reason = null)
 {
     /// <summary>An unsaved window of labview-mcp's own scratch VIs (`LVMCP Validate…`, `LVMCP Convert…`).</summary>
     public bool IsLabViewMcpScratch => Kind == WindowKinds.Unsaved && LabViewState.IsScratchTitle(Window.Title);
@@ -113,6 +114,9 @@ internal static class LabViewState
     [
         "OleAutomationWnd", "HwndWrapper[", "GDI+ Hook Window Class", "LVWinSessionMonitor",
         "OleDdeWndClass", "IME", "MSCTFIME UI", "ATL:", "Internet Explorer_Hidden",
+        // Measured 2026-10-10 in a LabVIEW 2026 Q3 listing: Windows' text services frame and NI-RPC's
+        // message thread, both hidden and titled after their class.
+        "CiceroUIWndFrame", "NI-RPC Message Thread Class",
     ];
 
     private static readonly Regex ViTitle = new(
@@ -148,8 +152,7 @@ internal static class LabViewState
         if (!window.Visible)
         {
             if (title.Length == 0 || HiddenSystemTitles.Contains(title)) return WindowKinds.HiddenSystem;
-            if (SystemClassPrefixes.Any(p => window.ClassName.StartsWith(p, StringComparison.Ordinal)))
-                return WindowKinds.HiddenSystem;
+            if (IsSystemClass(window.ClassName)) return WindowKinds.HiddenSystem;
         }
 
         if (title.Length == 0) return WindowKinds.Untitled;
@@ -164,6 +167,52 @@ internal static class LabViewState
         return window.Visible ? WindowKinds.PossibleDialog : WindowKinds.HiddenUnrecognised;
     }
 
+    /// <summary>
+    /// The kinds with the context one window cannot give: who owns it, and whether LabVIEW's frame or
+    /// a Project Explorer is disabled.
+    ///
+    /// THE UNTITLED MODAL DIALOG. Measured 2026-10-10: LabVIEW's "… has changed on disk" prompt
+    /// ([Revert] [Cancel]) was a VISIBLE, UNTITLED `LVDChild` window of about 281x189, owned by the
+    /// LabVIEW frame, with the frame and the Project Explorer disabled. By its title alone it is
+    /// `untitled`, which the restart counts as empty - a close would have run into a modal dialog.
+    /// So a visible window that its title leaves as `untitled` is a possible dialog when a LabVIEW
+    /// frame owns it, or when a visible frame or Project Explorer is disabled (a modal dialog
+    /// disables the windows it blocks). In that disabled state an ENABLED visible VI or start window
+    /// is one too: a dialog VI titled after its file looks like any panel. Known helper classes
+    /// (`Internet Explorer_Hidden`, visible and untitled on the measured station) stay out.
+    /// </summary>
+    internal static IReadOnlyList<ClassifiedWindow> ClassifyAll(IEnumerable<MachineWindow> windows)
+    {
+        var first = windows.Select(w => new ClassifiedWindow(w, Classify(w))).ToList();
+        var frames = first.Where(c => c.Kind == WindowKinds.Frame).Select(c => c.Window.Handle).ToHashSet();
+        var disabled = first.Where(c => c.Window.Visible && !c.Window.Enabled &&
+                                        c.Kind is WindowKinds.Frame or WindowKinds.Project)
+                            .Select(c => $"'{c.Window.Title}'").ToList();
+        var blocked = disabled.Count > 0
+            ? $"{string.Join(" and ", disabled)} disabled, as a modal dialog leaves them"
+            : null;
+
+        return [.. first.Select(c =>
+        {
+            var w = c.Window;
+            if (!w.Visible || IsSystemClass(w.ClassName)) return c;
+            if (c.Kind == WindowKinds.Untitled)
+            {
+                if (w.Owner != 0 && frames.Contains(w.Owner))
+                    return c with { Kind = WindowKinds.PossibleDialog, Reason = "untitled, owned by the LabVIEW frame" +
+                                                                         (blocked is null ? "" : "; " + blocked) };
+                if (blocked is not null)
+                    return c with { Kind = WindowKinds.PossibleDialog, Reason = "untitled; " + blocked };
+            }
+            if (blocked is not null && w.Enabled && c.Kind is WindowKinds.Vi or WindowKinds.GettingStarted)
+                return c with { Kind = WindowKinds.PossibleDialog, Reason = $"enabled {c.Kind} window; " + blocked };
+            return c;
+        })];
+    }
+
+    internal static bool IsSystemClass(string className) =>
+        SystemClassPrefixes.Any(p => className.StartsWith(p, StringComparison.Ordinal));
+
     /// <summary>Where LabVIEW keeps its recovery files; Documents may be redirected (OneDrive).</summary>
     internal static string DefaultAutoSaveDirectory() => AutoSaveRecovery.DefaultDirectory();
 
@@ -172,7 +221,7 @@ internal static class LabViewState
         var labview = machine.Processes(LabViewProcess);
         var windows = new List<ClassifiedWindow>();
         foreach (var process in labview)
-            windows.AddRange(machine.TopWindows(process.Id).Select(w => new ClassifiedWindow(w, Classify(w))));
+            windows.AddRange(ClassifyAll(machine.TopWindows(process.Id)));
 
         return new LabViewSnapshot(
             machine.Now, labview,
@@ -241,6 +290,7 @@ internal static class LabViewState
             ["class"] = dialog.Window.ClassName,
             ["visible"] = dialog.Window.Visible,
             ["processId"] = dialog.Window.ProcessId,
+            ["reason"] = dialog.Reason,
             ["buttons"] = new JsonArray(buttons),
             ["texts"] = new JsonArray(texts),
             ["note"] = children.Count == 0
@@ -288,7 +338,11 @@ internal static class LabViewState
         ["visible"] = w.Window.Visible,
         ["class"] = w.Window.ClassName,
         ["title"] = w.Window.Title,
+        ["enabled"] = w.Window.Enabled ? null : false,
+        ["ownerHandle"] = w.Window.Owner == 0 ? null : w.Window.Owner,
+        ["handle"] = w.Window.Handle,
         ["labviewMcpScratch"] = w.IsLabViewMcpScratch ? true : null,
+        ["reason"] = w.Reason,
     };
 }
 

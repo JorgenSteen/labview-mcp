@@ -42,8 +42,11 @@ internal sealed class RestartTools(LvaiConnection connection)
         LVAutoSave folder (resolved through the Documents known folder, which may be redirected)
         and its file count, every LabVIEW window sorted into kinds, and one CPU sample.
         `unsaved` = titles with `*`. `possibleDialogs` = VISIBLE titled windows that are not a VI,
-        project or frame window, named with class, buttons and text where Windows exposes them
-        (LabVIEW draws its own dialogs, so their buttons usually cannot be read).
+        project or frame window, and VISIBLE UNTITLED windows that a LabVIEW frame owns or that sit
+        beside a disabled frame or Project Explorer (measured 2026-10-10: LabVIEW's "has changed on
+        disk" prompt is untitled and owned by the frame, which it disables), each with a `reason`,
+        named with class, buttons and text where Windows exposes them (LabVIEW draws its own
+        dialogs, so their buttons usually cannot be read).
         `hiddenUnrecognised` = HIDDEN titled windows nothing measured explains, named the same way:
         measured 2026-10-06, LabVIEW dialogs on screen reported themselves invisible
         (docs/scratch-vis-in-memory.md §2a). Hidden windows of measured system classes (IME, OLE,
