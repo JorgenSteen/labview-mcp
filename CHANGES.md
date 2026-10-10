@@ -57,7 +57,12 @@ and unit-tested, LabVIEW measurement not finished yet.
   not with the IDE), once per LabVIEW process.
 - A timed-out call's error names a dialog if one is up. The LUnit agent restarts through the tool instead of
   `Stop-Process -Force`.
-- Status: pending.
+- **`lvai_answer_dialog`** (added after the user's decision): answers a dialog only in the caller's own LabVIEW and only
+  from an allowlist (the exit prompt for labview-mcp's own scratch VIs, the "changed on disk" quirk, a Nigel box);
+  everything else is refused with a screenshot for the person.
+- Status: **measured 2026-10-10** with real closes and restarts, partly with a person at the machine; four bugs found
+  and fixed on the way (untitled dialogs missed, a new VI taken for a dialog, NI packed-library lines blocking
+  "empty", the session's own project refused).
 
 ## 4. `feat/class-icons`: class and library icons (8 commits)
 - **`lvai_set_owner_icon`**: a `.lvclass` or plain `.lvlib` icon from a 32x32 PNG; with `applyToMembers`, applies it
