@@ -5,7 +5,7 @@
 I have built four additions to labview-mcp on top of v1.9.5: tools that create Actor Framework overrides and hook
 code into them, a guarded close/restart of LabVIEW that never kills and protects unsaved work, class and library icons
 with read-back, and a corrected Actor Framework doc. All of them were measured against LabVIEW 2026 Q3 on throwaway
-projects, fixing nine bugs on the way, and I also found a dozen issues in v1.9.5 itself — I'd like to know how you
+projects, fixing seven bugs on the way, and I also found a dozen issues in v1.9.5 itself — I'd like to know how you
 want them as pull requests.
 
 ## Long version
