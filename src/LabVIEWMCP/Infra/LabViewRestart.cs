@@ -165,9 +165,15 @@ internal static class LabViewRestart
                 ? null : Path.GetFileName(request.ProjectPath.Trim());
 
             // ---------- 3. windows the user may be working in ----------
-            if (snapshot.Unsaved.Count > 0)
+            // This session's own Project Explorer with a `*` is not the user's work: when it is the
+            // active project this tool saves and closes it below. Measured 2026-10-10: a project opened
+            // by lvai_open_file showed `PB-H10.lvproj * - Project Explorer` at once, before any edit.
+            // It is set aside here and judged after the active-project read (step 5).
+            var ownProjectUnsaved = snapshot.Unsaved.Where(w => IsOwnProjectExplorer(w, ownProjectFile)).ToList();
+            var unsaved = snapshot.Unsaved.Except(ownProjectUnsaved).ToList();
+            if (unsaved.Count > 0)
             {
-                var scratchOnly = snapshot.Unsaved.All(w => w.IsLabViewMcpScratch);
+                var scratchOnly = unsaved.All(w => w.IsLabViewMcpScratch);
                 NeedGoAhead(GuardUnsaved, scratchOnly
                     ? "Unsaved labview-mcp scratch VIs are open (LVMCP Validate/Convert/DQMH/TD Carrier): " +
                       "the IDE close will raise LabVIEW's save prompt. " + ScratchCannotBeClosed
@@ -223,6 +229,18 @@ internal static class LabViewRestart
                 {
                     _deviations.Add("the active project could not be read: " + active.Note);
                 }
+            }
+            if (ownProjectUnsaved.Count > 0)
+            {
+                _guards["ownProjectUnsaved"] = new JsonObject
+                {
+                    ["windows"] = new JsonArray([.. ownProjectUnsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
+                    ["savedByTheProjectClose"] = closeOwnProject,
+                };
+                if (!closeOwnProject)
+                    NeedGoAhead(GuardUnsaved, "This session's project has unsaved changes, and it is not the " +
+                        "active project (or the active project could not be read), so this tool cannot save " +
+                        "and close it: the IDE close would raise LabVIEW's save prompt.");
             }
             var otherProjectWindows = snapshot.Of(WindowKinds.Project)
                 .Where(w => ownProjectFile is null ||
@@ -455,11 +473,18 @@ internal static class LabViewRestart
             }
         }
 
+        /// <summary>`Mine.lvproj - Project Explorer` or, unsaved, `Mine.lvproj * - Project Explorer`.</summary>
+        internal static bool IsOwnProjectExplorer(ClassifiedWindow w, string? ownProjectFile) =>
+            ownProjectFile is not null &&
+            (string.Equals(w.Window.Title, ownProjectFile + " - Project Explorer", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(w.Window.Title, ownProjectFile + " * - Project Explorer", StringComparison.OrdinalIgnoreCase));
+
         private static bool WindowsEmpty(LabViewSnapshot s, string? ownProjectFile, out string note)
         {
             var blocking = s.Windows.Where(w =>
             {
                 if (EmptyKinds.Contains(w.Kind)) return false;
+                if (IsOwnProjectExplorer(w, ownProjectFile)) return false;
                 if (ownProjectFile is not null)
                 {
                     if (w.Kind == WindowKinds.Project &&

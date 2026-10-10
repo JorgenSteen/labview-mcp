@@ -370,6 +370,42 @@ public class LabViewRestartTests
         Assert.Contains(a["sideEffects"]!.AsArray(), s => s!.GetValue<string>().Contains("SAVED and closed"));
     }
 
+    /// <summary>Measured 2026-10-10: lvai_open_file left `PB-H10.lvproj * - Project Explorer` before any edit.</summary>
+    [Fact]
+    public async Task This_session_s_own_unsaved_project_is_saved_by_the_project_close_not_refused()
+    {
+        var w = new World { ServerStarted = true, Active = new ActiveProjectProbe(true, MyProject, "active") };
+        w.M.AddWindow(10, "LVDChild", "Mine.lvproj * - Project Explorer", true);
+        var a = await w.Run("close", project: MyProject);
+
+        Assert.True(a["ok"]!.GetValue<bool>());
+        Assert.True(a["guards"]!["ownProjectUnsaved"]!["savedByTheProjectClose"]!.GetValue<bool>());
+        Assert.Contains("closeProject " + MyProject, w.Log);
+        Assert.Single(w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task This_session_s_unsaved_project_that_is_not_active_still_needs_the_go_ahead()
+    {
+        var w = new World { ServerStarted = true };   // no project active
+        w.M.AddWindow(10, "LVDChild", "Mine.lvproj * - Project Explorer", true);
+        var a = await w.Run("close", project: MyProject);
+
+        Assert.Equal("unsaved", Str(a, "stoppedBy"));
+        Assert.Empty(w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task Another_project_s_unsaved_explorer_is_the_user_s_unsaved_work()
+    {
+        var w = new World { ServerStarted = true, Active = new ActiveProjectProbe(true, MyProject, "active") };
+        w.M.AddWindow(10, "LVDChild", "Theirs.lvproj * - Project Explorer", true);
+        var a = await w.Run("close", project: MyProject);
+
+        Assert.Equal("unsaved", Str(a, "stoppedBy"));
+        Assert.Empty(w.M.ClosesSent);
+    }
+
     [Fact]
     public async Task A_modified_vi_in_memory_needs_the_go_ahead()
     {
