@@ -41,7 +41,9 @@ internal sealed class RestartTools(LvaiConnection connection)
         lvai_ensure_labview), the Nigel processes (NI.NigelLocalService, LVNigelChat), the
         LVAutoSave folder (resolved through the Documents known folder, which may be redirected)
         and its file count, every LabVIEW window sorted into kinds, and one CPU sample.
-        `unsaved` = titles with `*`. `possibleDialogs` = VISIBLE titled windows that are not a VI,
+        `unsaved` = titles with `*`. Each possible dialog carries `screenshot`, a PNG path to READ:
+        LabVIEW draws its dialogs, so the picture is the only way to see which one it is.
+        `possibleDialogs` = VISIBLE titled windows that are not a VI,
         project or frame window, and VISIBLE UNTITLED windows that a LabVIEW frame owns or that sit
         beside a disabled frame or Project Explorer (measured 2026-10-10: LabVIEW's "has changed on
         disk" prompt is untitled and owned by the frame, which it disables), each with a `reason`,
@@ -59,13 +61,15 @@ internal sealed class RestartTools(LvaiConnection connection)
     public static async Task<string> LabViewStateAsync(
         [Description("Seconds of CPU sampling, 0 to skip (capped at 30)")] int cpuSampleSeconds = 5,
         [Description("Also list hidden system windows (normally left out)")] bool includeHiddenWindows = false,
+        [Description(@"A PNG of each VISIBLE possible dialog (PrintWindow: nothing is brought to the front), path under `screenshot`, in %TEMP%\LabVIEWMCP\dialogs. On by default: a few ms, and only when a dialog is up.")]
+        bool screenshots = true,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
-            (await StateAsync(Win32LabViewMachine.Instance, null, cpuSampleSeconds, includeHiddenWindows, ct))
-                .ToJsonString(Indented));
+            (await StateAsync(Win32LabViewMachine.Instance, null, cpuSampleSeconds, includeHiddenWindows, ct,
+                              screenshots)).ToJsonString(Indented));
 
     internal static async Task<JsonObject> StateAsync(ILabViewMachine machine, string? autoSaveDirectory,
-        int cpuSampleSeconds, bool includeHiddenWindows, CancellationToken ct)
+        int cpuSampleSeconds, bool includeHiddenWindows, CancellationToken ct, bool screenshots = true)
     {
         var s = LabViewState.Take(machine, autoSaveDirectory);
         var now = machine.Now;
@@ -108,8 +112,8 @@ internal sealed class RestartTools(LvaiConnection connection)
             ["autoSave"] = s.AutoSave.ToJson(),
             ["windowCounts"] = counts,
             ["unsaved"] = new JsonArray([.. s.Unsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
-            ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
-            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
+            ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, screenshots))]),
+            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, false))]),
             ["windows"] = new JsonArray([.. visibleOrFlagged.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
             ["cpu"] = cpu,
             ["note"] = "No LabVIEW call was made. A modified VI with no open window does not show here, " +

@@ -83,6 +83,12 @@ internal sealed class FakeLabViewMachine : ILabViewMachine
         return new CloseOutcome(true, true, true, 4.3, 0, started, Now);
     }
 
+    /// <summary>Pictures by window handle; a window without one cannot be captured.</summary>
+    public Dictionary<long, WindowImage> Images { get; } = [];
+
+    public WindowImage? Capture(long handle) =>
+        WindowList.Any(w => w.Handle == handle) && Images.TryGetValue(handle, out var image) ? image : null;
+
     public Task Delay(TimeSpan delay, CancellationToken ct)
     {
         Now += delay;

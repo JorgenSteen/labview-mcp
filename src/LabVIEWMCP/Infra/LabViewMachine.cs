@@ -69,6 +69,12 @@ internal interface ILabViewMachine
     CloseOutcome CloseMainWindow(int processId, TimeSpan wait);
 
     Task Delay(TimeSpan delay, CancellationToken ct);
+
+    /// <summary>
+    /// A picture of one window as it renders itself (PrintWindow), whatever covers it; nothing is
+    /// brought to the front. Null when the window is gone or cannot be captured.
+    /// </summary>
+    WindowImage? Capture(long handle);
 }
 
 /// <summary>The real machine: Win32 window enumeration and System.Diagnostics.Process.</summary>
@@ -224,6 +230,49 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
 
     public Task Delay(TimeSpan delay, CancellationToken ct) => Task.Delay(delay, ct);
 
+    public WindowImage? Capture(long handle)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var window = new IntPtr(handle);
+        if (!IsWindow(window) || !GetWindowRect(window, out var rect)) return null;
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0 || width > 8000 || height > 8000) return null;
+
+        var screen = GetDC(IntPtr.Zero);
+        var memory = CreateCompatibleDC(screen);
+        var bitmap = CreateCompatibleBitmap(screen, width, height);
+        var old = SelectObject(memory, bitmap);
+        try
+        {
+            // PW_RENDERFULLCONTENT (2): the window draws itself into our DC, covered or not.
+            if (!PrintWindow(window, memory, 2)) return null;
+            SelectObject(memory, old);
+            old = IntPtr.Zero;
+            var info = new BitmapInfo
+            {
+                Size = 40, Width = width, Height = -height, Planes = 1, BitCount = 32, Compression = 0,
+            };
+            var bgra = new byte[width * height * 4];
+            if (GetDIBits(memory, bitmap, 0, (uint)height, bgra, ref info, 0) == 0) return null;
+            var rgb = new byte[width * height * 3];
+            for (int i = 0, j = 0; i < bgra.Length; i += 4, j += 3)
+            {
+                rgb[j] = bgra[i + 2];
+                rgb[j + 1] = bgra[i + 1];
+                rgb[j + 2] = bgra[i];
+            }
+            return new WindowImage(width, height, rgb);
+        }
+        finally
+        {
+            if (old != IntPtr.Zero) SelectObject(memory, old);
+            DeleteObject(bitmap);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
     // ---------- Win32 ----------
 
     private delegate bool EnumProc(IntPtr window, IntPtr param);
@@ -247,6 +296,32 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
     private static extern bool CloseHandle(IntPtr handle);
 
     private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfo
+    {
+        public uint Size; public int Width; public int Height; public ushort Planes; public ushort BitCount;
+        public uint Compression; public uint SizeImage; public int XPelsPerMeter; public int YPelsPerMeter;
+        public uint ClrUsed; public uint ClrImportant;
+        public uint Color0, Color1, Color2, Color3;   // room for masks: GetDIBits may write them
+    }
+
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int width, int height);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")]
+    private static extern int GetDIBits(IntPtr dc, IntPtr bitmap, uint start, uint lines, byte[] bits,
+                                        ref BitmapInfo info, uint usage);
     private const uint GwOwner = 4;
 
     private static string ClassOf(IntPtr window)

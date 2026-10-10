@@ -285,7 +285,7 @@ internal static class LabViewState
     /// buttons cannot be read; a Win32 message box (`#32770`) lists its buttons and text. Read only:
     /// nothing is pressed, fronted or closed.
     /// </summary>
-    public static JsonObject DescribeDialog(ILabViewMachine machine, ClassifiedWindow dialog)
+    public static JsonObject DescribeDialog(ILabViewMachine machine, ClassifiedWindow dialog, bool screenshot = true)
     {
         var children = machine.Children(dialog.Window.Handle);
         var buttons = children.Where(c => c.ClassName == "Button" && c.Text.Length > 0)
@@ -299,6 +299,8 @@ internal static class LabViewState
             ["visible"] = dialog.Window.Visible,
             ["processId"] = dialog.Window.ProcessId,
             ["reason"] = dialog.Reason,
+            // A VISIBLE dialog only: its picture is what tells a caller which dialog this is.
+            ["screenshot"] = screenshot && dialog.Window.Visible ? WindowShot.Save(machine, dialog.Window) : null,
             ["buttons"] = new JsonArray(buttons),
             ["texts"] = new JsonArray(texts),
             ["note"] = children.Count == 0
