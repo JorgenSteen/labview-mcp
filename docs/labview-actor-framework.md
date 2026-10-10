@@ -606,6 +606,14 @@ classes to a library that already exists, instead of rebuilding it.
 `lvai_create_message_class` per method. Result: `Aquarium.lvlib` holding the actor and three message
 classes, every VI `execState 1` after a project close.
 
+**The hand edit of the `.lvproj` is still needed on this route** (measured 2026-10-10). A class made by
+`lvai_create_class` with no `projectPath`, then put into a new library by the same chain
+(`Library.Create` + folder + `AddItem` class + `Save`) with the project open and active: the library
+came out right (it lists the folder and the class; the class carries `NI.Lib.ContainingLib`), but the
+`.lvproj` named no `.lvlib` while open, and after `lvai_close_active_project` the `.lvproj` was
+byte-for-byte unchanged. §16b and §18a saw LabVIEW write the library entry itself only where it
+REPLACED a class entry the project already had.
+
 ### 8a. RETRACTED — see 8b. The claim below did not survive a clean probe
 
 > Superseded by §8b (2026-09-17, same day), directly below. Only its observation that `Bellen.vi`
@@ -1513,8 +1521,10 @@ both disabled), the call gave no answer within 300 s, and the files were unchang
 "The VI <Class>.lvclass:Stop Core.vi has changed on disk since last saved or loaded by LabVIEW ..."
 [Revert] [Cancel]. The tool copies `panelViPath` over `outputViPath` before its first LabVIEW step,
 and the output was the override, loaded in the open project, so LabVIEW met a file that had changed
-under a loaded VI (a byte-identical copy with a new file time). Do not graft in place onto a loaded
-VI, which for an override means any time its project is open. By the tool's own description, `replaceDiagram` deletes every node on the
+under a loaded VI (a byte-identical copy with a new file time). The dialog was cancelled, and the
+next call, an open of the same project, ended in a fatal LabVIEW crash (LabVIEW's own crash
+report). Not retried. Do not graft in place onto a loaded VI, which for an override means any time
+its project is open. By the tool's own description, `replaceDiagram` deletes every node on the
 diagram, which would include Call Parent, and a scaffold cannot carry Call Parent (AIXML cannot
 author it); so even a graft that completes could not leave Call Parent in place (reasoned, not run).
 
@@ -1629,8 +1639,11 @@ depends on what the loop waits on:
    (measured, 2026-09). Generate followed at once by Destroy does not lose the event: 0–1 ms apart,
    both error 0, the loop exited and the actor stopped in 4 of 4 runs (measured, 2026-09). NI's AF
    designers state the same on the NI forum; the older LabVIEW help for Destroy User Event says the
-   opposite. With both nodes in `Stop Core` this is NI's documented form; that exact placement was
-   not run here.
+   opposite. With both nodes in `Stop Core` this is NI's documented form, **measured 2026-10-10**: a
+   body after `Stop Core`'s Call Parent doing Generate, then Destroy chained on the Generate's error
+   (both error 0) ended the helper loop in the same millisecond, 3 of 3 runs, and the actor stopped
+   (`Actor Core` and the loop state 1 cold afterwards). That actor also kept stop site 2 below: its
+   Generate then answered error 1 on the destroyed refnum each time, so an actor uses one stop site.
 2. **After `Actor Core`'s Call Parent.** A stop body in a one-frame flat sequence after Call Parent,
    with Call Parent's `error out` entering the frame only as an order tunnel, so the body runs on a
    **fresh error chain**: chained on Call Parent's error it would be skipped whenever Call Parent
@@ -1672,10 +1685,20 @@ run). Where a body on `Actor Core` must create it anyway, tap the loop's branch 
 in it does not run, nothing is registered, and a loop whose only exit is the stop event hangs the
 actor at stop (the node's behaviour is documented in the LabVIEW help; the hang is reasoned).
 Register right before the loop and Unregister right after it. Events generated before Register are
-not seen, so a stop generated before the loop registered is lost (documented); an actor stopped
-immediately after launch is the case to test, and it has not been tested here. Generating an event
+not seen, so a stop generated before the loop registered is lost (documented). Generating an event
 nobody registered for does nothing and answers no error (documented), so it cannot rescue such a
 loop.
+
+**A stop sent right after Launch is LOST with stop site 2, and the actor hangs** (measured
+2026-10-10, 1 of 1, not repeated because only a LabVIEW restart frees the loop). The launcher sent
+Normal Stop straight after Launch Root Actor: the stop body after Call Parent generated the stop in
+the same millisecond as the send (error 0), while the helper loop VI's first node ran 38 ms later. So
+`Handle Error`, `Stop Core` and Call Parent's return had all happened before the loop existed; it then
+registered, waited for an event that had already fired, and `Actor Core` and the loop read
+`execState 3` afterwards. A loop branched beside Call Parent starts later than the message loop, so
+any stop site that does not wait for the loop's registration can lose an early stop. What makes an
+early stop safe (for example a signal that the loop has registered, or a stop the loop polls) has not
+been measured here.
 
 Log the loop's exit from data leaving the loop through a tunnel: a log node fed from a constant runs
 at start, in parallel with the loop.
@@ -1715,13 +1738,9 @@ overwrite each other's line (measured, 2026-09).
 
 ### 19e. Still not measured after the 2026-10-10 series
 
-The 2026-10-10 series stopped at the graft attempt of §19a (a modal dialog blocks every later
-call), so these claims keep the status they have above:
+The series ended with the lost early stop of §19c, which left an actor hung until a LabVIEW
+restart. One claim keeps the status it has above:
 
-- a stop sent right after Launch, with the stop fired after `Actor Core`'s Call Parent: delivered or
-  lost (§19c, "Registration");
 - Register For Events with an incoming error: the loop never registers and the actor hangs at stop
-  (§19c, reasoned);
-- Generate and Destroy both in `Stop Core` (§19c, stop site 1: documented, not run here);
-- §8: whether LabVIEW lists a new `.lvlib` in the `.lvproj` by itself when its class was created with
-  no `projectPath` (§18a saw it replace a class entry that existed).
+  (§19c, "Registration" and "Do not create it in a series body on `Actor Core`": reasoned). The early
+  stop shows the same end state, a loop waiting on a registration that never sees its stop.
