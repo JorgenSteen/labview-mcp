@@ -51,6 +51,10 @@ the same tool names.
 
 ## Every later update
 
+**Close every Claude Code session first.** Measured 2026-10-10: Claude Code runs a local-directory plugin straight
+from the build folder (`claude plugin list` shows "Read from: …\labview-mcp-local-plugin\labview-mcp"), so while any
+session is open its `bin\LabVIEWMCP.exe` is running and locked, and the script cannot replace the folder.
+
 ```
 git checkout main            # with the change merged in, see below
 powershell -NoProfile -ExecutionPolicy Bypass -File local\Update-LocalPlugin.ps1
