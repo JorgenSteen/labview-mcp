@@ -1,7 +1,7 @@
 # Closing and restarting LabVIEW under guards
 
-`lvai_restart_labview`, `lvai_labview_state`, `lvai_vis_in_memory`, and the Nigel-chat start in
-`lvai_ensure_labview`. The route itself was measured by a LabVIEW skill on a production Actor
+`lvai_restart_labview`, `lvai_labview_state`, `lvai_vis_in_memory`, `lvai_answer_dialog`, and the
+Nigel-chat start in `lvai_ensure_labview`. The route itself was measured by a LabVIEW skill on a production Actor
 Framework station in October 2026 (labview-mcp 1.8.5, LabVIEW 2026 Q3 32-bit). The C# port in this
 repository first ran against LabVIEW on 2026-10-10, with real closes and restarts. Section 11
 separates what is measured from what is not, and section 12 is the checklist with its results.
@@ -122,8 +122,9 @@ while the guards run (a project close can raise one) is caught by the last windo
 close. A timed-out call's error lists both kinds. A VI panel with a custom window title is flagged
 too, as the kit already documented. Dialogs are named with their title, class, visibility and child
 windows. LabVIEW draws its own dialogs (`LVDChild`) without child controls, so their buttons cannot
-be read. A Win32 message box (`#32770`) lists its buttons and text. Nothing is pressed, fronted or
-closed.
+be read, so each visible one comes with a screenshot (section 13). A Win32 message box (`#32770`)
+lists its buttons and text. These tools press, front or close nothing; `lvai_answer_dialog` may,
+in the caller's own LabVIEW only (section 13).
 
 **labview-mcp's own scratch VIs.** The server hands LabVIEW throwaway `_name`s it never saves
 under, so that a refused validate or convert cannot burn a real name: `LVMCP Validate`
@@ -236,6 +237,8 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | the add-on folder from the exe's file version | derived from one station: **unmeasured** |
 | the port: window classification on a fresh LabVIEW, the empty restart (resumable, collected on the second call), the server-started close, refusals `busy`, `activeProject`, `autoSave` and `unsaved` (scratch VI), `lvai_vis_in_memory` | measured 2026-10-10 (section 12) |
 | the untitled modal dialog (owner and disabled frame) | the window list measured 2026-10-10; the classifier on it is unit-tested, not re-run against a live dialog |
+| dialog screenshots (`PrintWindow`), `lvai_answer_dialog`: Esc = Cancel and a click on the found "Don't Save" picture on a real "Save changes? (Exit)" | measured 2026-10-10 in the caller's own LabVIEW (section 13) |
+| `lvai_answer_dialog` for `Don't Save - All`, `changedOnDisk`, `nigelBox` | **unmeasured**: unit tests only (section 13) |
 | the `dialog` stop with a go-ahead, the `ownership` refusal, a close that ends in the save prompt (`closeDidNotFinish`) | measured 2026-10-10 with a person at the machine (section 12) |
 | the replay, the Nigel chat start, the dialog fold in timeouts, `hiddenWindows` overridden, the `processes`, `service` and `memory` refusals | **unmeasured** |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
@@ -311,3 +314,62 @@ LabVIEW auto-saves an unsaved project into `LVAutoSave` within minutes: two file
 project file (`NI32LV2631f1ASD1_<name>.lvproj`, `…_<name>.txt`), removed at the clean close. By
 the user's decision of 2026-10-10 those files do not block a close that saves that project (it is
 `projectPath` and active); any other file still needs a go-ahead. The naming rests on one sample.
+
+## 13. Dialogs: screenshots, and the allowlist the server may answer
+
+**Screenshots.** LabVIEW draws its dialogs (`LVDChild`) without child controls, so Win32 cannot
+read their text or buttons. Each VISIBLE possible dialog in `lvai_labview_state` (parameter
+`screenshots`, on by default; a few ms, and only when a dialog is up) and in every dialog list of
+`lvai_restart_labview` carries `screenshot`: a PNG under `%TEMP%\LabVIEWMCP\dialogs`, taken with
+`PrintWindow` (`PW_RENDERFULLCONTENT`). The window renders itself into the picture whatever covers
+it, and nothing is brought to the front. A screen copy of the dialog's rectangle, tried first on
+2026-10-10, captured the terminal that lay on top of it. Each entry also has the dialog's `handle`.
+
+**Who may answer.** Until 2026-10-10 every dialog was the user's to answer. The user's decision
+of that day: "if you are operating labview on your own like starting and stopping then answering
+these by yourself is fine." `lvai_answer_dialog` implements exactly that, and nothing wider:
+
+1. The LabVIEW is the caller's own: started by THIS server process (the pid and start time that
+   `lvai_ensure_labview` recorded), or the caller passes `ownLabviewPid` equal to the running pid
+   with `ownNote` saying how its session started it. Otherwise: `notOwnLabview`.
+2. The dialog is on the allowlist, with the one answer each kind allows. Otherwise:
+   `notAllowlisted`.
+
+| `dialogKind` | the dialog | allowed `action` | extra conditions |
+|---|---|---|---|
+| `exitSaveScratchOnly` | "Save changes? (Exit)" | `Don't Save` (one VI listed), `Don't Save - All` (several), `Cancel` | for a Don't Save: every `*` window of the process is an `LVMCP …` scratch VI, and `listedVis` (every VI the dialog lists, read from its screenshot) are all `LVMCP …` |
+| `changedOnDisk` | the untitled "… has changed on disk since last saved or loaded by LabVIEW …" modal [Revert] [Cancel] | `Cancel` | untitled `LVDChild` classified as a possible dialog (section 4); `viName`, the VI this session touched |
+| `nigelBox` | a Win32 message box (`#32770`) of an `LVNigelChat` this server started | `OK` | |
+
+A refusal presses nothing and returns the screenshot, so the user can decide. Before the press,
+the window is read again (same handle, same title, still visible) and a `before` picture is
+taken. After it, the tool waits up to 10 s for the dialog to go and, for a Don't Save, up to
+20 s for LabVIEW to exit. The answer reports what was pressed, by which means, `dialogGone`,
+`processExited`, and the `asked`/`before`/`after` pictures. A press that does not take is reported
+as `dialogStillThere`, and nothing else is tried.
+
+**How it presses, measured 2026-10-10** (LabVIEW 2026 Q3 32-bit, Windows 10, 96 dpi, the
+caller's own LabVIEW, one `LVMCP Validate.vi` scratch VI in memory, the IDE closed through
+`lvai_restart_labview`):
+
+- **Cancel = Esc posted to the dialog window** (`WM_KEYDOWN`/`WM_KEYUP`, `PostMessage`). Nothing
+  was brought to the front. On the real "Save changes? (Exit)" prompt the dialog went in 0.6 s and
+  LabVIEW stayed.
+- **A named button = a left click posted where the button's PICTURE is found.** With one unsaved
+  VI the prompt reads "LVMCP Validate.vi has unsaved changes" with buttons Save / Don't Save /
+  Cancel. There is no "Don't Save - All" in that form. The "Don't Save" picture (58x15 px, the text
+  on the button face) was cut from a screenshot of that prompt and ships in `DialogButtons.cs`. It
+  was found again at 0.0 mean difference in three pictures of two prompts, and the next-best place
+  scored 21.2 (threshold 6). Before a click the tool searches a fresh picture and clicks only at a
+  single match. Another layout, DPI, theme or a hovered button finds nothing, and nothing is
+  pressed (`buttonNotFound`). Measured: the click was posted at (63,181) of the dialog, the dialog
+  went, and LabVIEW exited, 4.0 s in all. No real mouse moved.
+- **OK of a message box = `BM_CLICK` on its OK button**, the skill kit's measured route
+  (`lv_press_ok.ps1`) for a box raised by `LVNigelChat`.
+
+Not measured live, and unit-tested only: `Don't Save - All` (no picture yet, so it answers
+`buttonNotFound` until a multi-VI prompt has been measured), `changedOnDisk` and `nigelBox`.
+**`changedOnDisk` carries a warning.** On 2026-10-10 LabVIEW crashed on the next call after that
+dialog had been answered: a graft call had left a VI inconsistent in memory. Answering the dialog
+does not make the VI in memory safe, so close or restart LabVIEW next. That dialog was not raised
+on purpose to test this tool.
