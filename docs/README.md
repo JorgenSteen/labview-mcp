@@ -58,6 +58,7 @@ so an assistant gets the same text you do.
 | [`control-reference-binding.md`](control-reference-binding.md) | why a generated diagram cannot hold a bound control reference |
 | [`pylabview-controls.md`](pylabview-controls.md) and [`pylabview-comments.md`](pylabview-comments.md) | the no-LabVIEW route into `.ctl` files and labels |
 | [`bulk-operations.md`](bulk-operations.md) | one call instead of six |
+| [`labview-restart.md`](labview-restart.md) | closing or restarting the user's LabVIEW without losing their work, and the dialog that says it is invisible |
 | [`aixml-lint.md`](aixml-lint.md) | checking AIXML with no LabVIEW at all |
 
 ## Testing
