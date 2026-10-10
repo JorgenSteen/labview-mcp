@@ -241,6 +241,7 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | `lvai_answer_dialog` for `Don't Save - All`, `changedOnDisk`, `nigelBox` | **unmeasured**: unit tests only (section 13) |
 | the `dialog` stop with a go-ahead, the `ownership` refusal, a close that ends in the save prompt (`closeDidNotFinish`) | measured 2026-10-10 with a person at the machine (section 12) |
 | the replay, the Nigel chat start, the dialog fold in timeouts, `hiddenWindows` overridden, the `processes`, `service` and `memory` refusals | **unmeasured** |
+| `CloseMainWindow` on a LabVIEW with a hung actor (running VIs, no dialog) | measured 2026-10-10: exits in 1.72 s, no prompt (section 12, item C) |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
 
 ## 12. Measurement checklist
@@ -306,6 +307,7 @@ plugin at the same time.
 | 9 | **pass**, with a person at the machine, and the go-ahead half of item 4: the user pressed Cancel on the item 2 prompt; `close` WITH the go-ahead answered `stillRunning` at 40.0 s, then `closeDidNotFinish`: `closeMainWindow: true`, 20.01 s waited, `dialogsNow` naming "Save changes? (Exit)", `sideEffects` none. The user saw both the edited VI and `LVMCP Validate.vi` listed, pressed "Don't Save - All", and LabVIEW exited. |
 | 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. So the chat appears to be needed when the local service is down, not after every LabVIEW start. |
 | 11 | not run: no call timed out |
+| C | **pass**, the real use case (14:27): an AF actor left hung by a lost early stop - its `Actor Core` clone and its helper loop at execState 3, the loop's front panel open, Abort not possible. `lvai_labview_state`: no dialog, CPU quiet; `lvai_vis_in_memory`: 499 lines, none modified, 95 `other` (the actor's and AF's VIs). `restart` WITH the go-ahead: `stillRunning` at 40 s, then `restarted`. `CloseMainWindow` closed the LabVIEW with the running actor in **1.72 s, with no prompt**; start 22.2 s, new pid and port, the same `NI.NigelLocalService` pid. |
 
 Found and fixed on the way: a new VI (`Untitled N`, section 4) blocked as a possible dialog. Its
 fix is unit-tested on the measured window list and has not been re-run live.
