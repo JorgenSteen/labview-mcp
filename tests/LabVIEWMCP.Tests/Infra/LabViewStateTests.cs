@@ -130,7 +130,7 @@ public class ModalDialogClassifierTests
         m.AddWindow(Pid, "LVDChild", "LV AI gRPC Service.lvlibp:gRPC Implementations.lvlib:RunService.vi", false);
         m.AddWindow(Pid, "LVDChild", "VI Hierarchy", false);
         m.AddWindow(Pid, "LVDChild", "", true, handle: 50, owner: ownedByFrame ? 61 : 0);
-        m.AddWindow(Pid, "LVDChild", "PB-H10.lvproj - Project Explorer", true, enabled: !frameDisabled);
+        m.AddWindow(Pid, "LVDChild", "Probe.lvproj - Project Explorer", true, enabled: !frameDisabled);
         m.AddWindow(Pid, "LVDChild", "LabVIEW", false, handle: 60);
         m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61, enabled: !frameDisabled);
         m.AddWindow(Pid, "NI-RPC Message Thread Class", "NI-RPC Message Thread Instance 4520", false);

@@ -53,8 +53,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         DDE, GDI+) and LabVIEW's measured hidden windows are not listed there. A VI panel
         with a custom window title is flagged too - look at it. CPU: quiet below 1 CPU s per 30 s,
         the threshold the skill measured with; idle is not safe - a modal dialog leaves LabVIEW
-        idle. The window classes and titles come from a measured listing; this C# port itself is
-        UNMEASURED (docs/labview-restart.md).
+        idle. The window classes and titles come from measured listings; the port ran against
+        LabVIEW 2026 Q3 on 2026-10-10 (docs/labview-restart.md section 12).
         """)]
     public static async Task<string> LabViewStateAsync(
         [Description("Seconds of CPU sampling, 0 to skip (capped at 30)")] int cpuSampleSeconds = 5,
@@ -134,7 +134,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         an `LVMCP Validate` VI in memory, which can itself raise the save prompt at LabVIEW's exit;
         lvai_restart_labview therefore never generates it and reports the memory check as not run
         until it exists. The helper is ported unchanged from a skill kit helper measured
-        2026-10-07/08 (419 lines, none modified); this tool around it is UNMEASURED.
+        2026-10-07/08 (419 lines, none modified). This tool measured 2026-10-10: 419 lines, none
+        modified; NI's packed-library .ctl lines answer 1035 and do not count against "empty".
         """)]
     public async Task<string> VisInMemoryAsync(
         [Description("Regenerate the helper VI even when it already exists")] bool regenerateHelper = false,
@@ -285,8 +286,10 @@ internal sealed class RestartTools(LvaiConnection connection)
         means call again with the SAME arguments to collect the answer - it never starts a second
         restart. The report has before/after pids, start times, ports, the Nigel service pid, the
         LVAutoSave count before and after, and the side effects.
-        The route is the measured one of a LabVIEW skill (labview-mcp 1.8.5); this C# port is
-        UNMEASURED - docs/labview-restart.md has the checklist.
+        The route is the measured one of a LabVIEW skill (labview-mcp 1.8.5). This port measured
+        2026-10-10: the empty restart, the server-started close and the busy, activeProject, autoSave
+        and unsaved refusals (close 3.2-4.0 s, warm start 22 s); docs/labview-restart.md section 12
+        lists what is still open.
         """)]
     public async Task<string> RestartLabViewAsync(
         [Description("'close' or 'restart'")] string mode,

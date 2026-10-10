@@ -167,7 +167,7 @@ internal static class LabViewRestart
             // ---------- 3. windows the user may be working in ----------
             // This session's own Project Explorer with a `*` is not the user's work: when it is the
             // active project this tool saves and closes it below. Measured 2026-10-10: a project opened
-            // by lvai_open_file showed `PB-H10.lvproj * - Project Explorer` at once, before any edit.
+            // by lvai_open_file showed `Probe.lvproj * - Project Explorer` at once, before any edit.
             // It is set aside here and judged after the active-project read (step 5).
             var ownProjectUnsaved = snapshot.Unsaved.Where(w => IsOwnProjectExplorer(w, ownProjectFile)).ToList();
             var unsaved = snapshot.Unsaved.Except(ownProjectUnsaved).ToList();

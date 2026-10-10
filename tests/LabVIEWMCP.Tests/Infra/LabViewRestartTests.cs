@@ -370,7 +370,7 @@ public class LabViewRestartTests
         Assert.Contains(a["sideEffects"]!.AsArray(), s => s!.GetValue<string>().Contains("SAVED and closed"));
     }
 
-    /// <summary>Measured 2026-10-10: lvai_open_file left `PB-H10.lvproj * - Project Explorer` before any edit.</summary>
+    /// <summary>Measured 2026-10-10: lvai_open_file left `Probe.lvproj * - Project Explorer` before any edit.</summary>
     [Fact]
     public async Task This_session_s_own_unsaved_project_is_saved_by_the_project_close_not_refused()
     {
