@@ -1329,8 +1329,13 @@ Measured 2026-09-25 to 2026-09-26 on LabVIEW 2026 Q3 (26.3.1f1) 32-bit with labv
 1.8.0, while building a two-actor tree: a root that launches a nested actor, a helper loop in the
 nested actor, an interface message that carries a class object up the tree, and a UI loop with a
 Stop button. Every verdict below is a cold `execState` with the project closed, plus a timestamped
-log of a real run. §§1–18 cover messages and libraries; this section covers the four AF overrides
-nothing above touches: `Pre Launch Init`, `Actor Core`, `Stop Core` and `Handle Error`.
+log of a real run. A second series on 2026-10-09, same LabVIEW, added the failure paths (an error
+out of `Pre Launch Init`, an error into `Actor Core`'s Call Parent) and the `close` join of §19c;
+those facts carry that date. **Documented** below means NI's AF help, or NI's AF designers on the NI
+forum, and was not run here; **reasoned** means it follows from what was measured or documented and
+was not run. §§1–18 cover messages and libraries; this section covers the four AF overrides nothing
+above touches: `Pre Launch Init`, `Actor Core`, `Stop Core` and `Handle Error`, and says what is
+known of a fifth, `Handle Last Ack Core`.
 
 ### 19a. The override is NI's; its body is a separate VI wired in by scripting
 
@@ -1341,21 +1346,45 @@ because it can be avoided:
 1. **Create the override** with `scripts/lvai_create_override.xml`, project open and active:
    `parent method path` = `<LabVIEW>\vi.lib\ActorFramework\Actor\<Pre Launch Init | Actor Core |
    Stop Core | Handle Error>.vi`, `new vi path` = `<class folder>\<same file name>.vi`, and
-   `vi name in memory` **library-qualified**: `<Lib>.lvlib:<Class>.lvclass:<same file name>.vi`.
-   The provider places `Call Parent Class Method` itself. This matters because Call Parent cannot be
-   authored in AIXML on a plain class either (validate: "Object terminal not found"; convert:
-   Error 1), not only on the interface members CLAUDE.md names.
+   `vi name in memory` **library-qualified**: `<Lib>.lvlib:<Class>.lvclass:<same file name>.vi`
+   (`<Class>.lvclass:<file>.vi` only for a class in no library; otherwise `open new vi error` and
+   nothing is saved). The provider places `Call Parent Class Method` itself. This matters because
+   Call Parent cannot be authored in AIXML on a plain class either (validate: "Object terminal not
+   found"; convert: Error 1), not only on the interface members CLAUDE.md names. A tool that wraps
+   the script, `lvai_create_override`, is **proposed** in a separate PR; it is not in this build.
 2. **Write the body as its own class member** with `lvai_add_class_method`, like any method. Its
    one class terminal is `<Class> in`, or `<Class> in`/`<Class> out` when it has to hand a modified
    object on.
 3. **Drop the body into the override's diagram by VI Server scripting, and never convert the
    override again.** `New VI Object` with a `ref{LV.Node}` class and the body's path places the
-   node; `Connect Wire` wires it, matching terminals by NAME.
+   node; `Connect Wire` wires it, matching terminals by NAME. A tool for these shapes,
+   `lvai_af_add_hook`, is **proposed** in the same separate PR.
    - **Branch:** wire the override's panel terminal `<Class> in` to the body's `<Class> in`. The
      body runs beside Call Parent. On `Actor Core` this is where a helper loop goes.
-   - **In series:** `{LV.Wire}` `Delete` on the wire from the panel terminal to Call Parent, then
-     `Connect Wire` panel → body in and body out → Call Parent, for the class wire and optionally
-     the error wire. Use this when the body stores something in the object, e.g. a stop reference.
+   - **In series, before Call Parent:** `{LV.Wire}` `Delete` on the wire from the panel terminal to
+     Call Parent, then `Connect Wire` panel → body in and body out → Call Parent, for the class wire
+     and optionally the error wire. Use this when the body stores something in the object that Call
+     Parent must carry. Not for creating references on `Actor Core`: see §19c.
+   - **In series, after Call Parent:** the same insertion with the roles swapped: Call Parent's
+     `<Class> out` and `error out` into the body, the body's outputs into the override's indicators.
+     Measured 2026-10-09 on `Pre Launch Init` with both wires: the body's error 5000 came out of the
+     Launch call. This is the shape for a body whose failure must fail the launch (§19c).
+
+The scripting quirks that cost the most, each measured on this LabVIEW:
+
+- Call Parent is a `CallParentNode` and is **not** in the diagram's `SubVIs[]`: find it over
+  `All Objects[]` by its `Actor out` terminal.
+- `Actor Core`'s `Actor out` is typed `Actor`, on the Call Parent node too, not the child class. A
+  body after Call Parent that needs the child type takes the class wire from before Call Parent.
+- Merge Errors by scripting is `New VI Object` with class **`GrowableFunction`**, style **2147**; the
+  node then reads class name `Bundler`. Class `Function` answers 1057. (2026-10-09)
+- LabVIEW **deletes a flat-sequence tunnel that has no wire on either side**. A step that deletes a
+  net and then wires to "the old tunnel" answers 1055: rebuild the tunnel by wiring through it
+  again. (2026-10-09)
+- Scripting cannot wire into a bare structure frame: wire to an inner terminal, then delete that
+  inner wire.
+- The flat-sequence hooks of §19c were saved by a separate helper run after the wiring run
+  (`Save.Instrument` with the class loaded), not by the run that wired them. (2026-10-09)
 
 The override stays `protected`, dynamic dispatch and a member, keeps Call Parent in its export, and
 reads `execState 1` cold. `Do.vi` was **not** tried this way; Message Maker (§4) remains the route
@@ -1367,7 +1396,7 @@ Four facts about the bodies, each measured:
 |---|---|---|
 | a body with an **unwired required input** (a logger with a required `line`, hooked off `error in` by mistake) | the override reads 0 cold, and nothing else reports it. `BD.Remove Bad Wires` does not repair it | every required input of a body must be satisfied by the wire the scripting makes. Repair: delete the node (`{LV.Node}` `Delete`) and hook the right VI |
 | a **branch tapped from the panel terminal** after a series body was inserted | the branch is fed by the panel's wire, so it runs **beside** the series body and never sees what the body stored | tap the series body's `<Class> out` **node** terminal instead of the panel terminal |
-| re-running `lvai_add_class_method` on a method that any loaded VI calls (1.7.2 and 1.8.0) | **Error 56003**, after the member entry has already been removed. It applies to override bodies and to plain subVI callers alike | unhook every caller first (delete the body's node, or `lvai_swap_subvis` the caller onto a placeholder), regenerate, re-hook. One VI kept failing even then, while the same AIXML under a fresh name added cleanly, so the name stays held; the fallback is a new body in series |
+| re-running `lvai_add_class_method` on a method that any loaded VI calls (1.7.2 and 1.8.0) | **Error 56003**, after the member entry has already been removed. It applies to override bodies and to plain subVI callers alike. Since 1.8.5 a re-run drops the existing members first (`dropExistingMembers`) and answers no 56003 when nothing holds the VI; 56003 remains when a loaded caller holds it | unhook every caller first (delete the body's node, or `lvai_swap_subvis` the caller onto a placeholder), regenerate, re-hook. One VI kept failing even then, while the same AIXML under a fresh name added cleanly, so the name stays held; the fallback is a new body in series |
 | a body that calls a `Send` VI of a message **that does not exist yet** (e.g. a `Pre Launch Init` body sending the actor's own `init`) | the message can only be made after the library step, so the body is built first | build the body with a placeholder for that `Send`, make the message, swap the placeholder, and only **then** hook the body. Swapping after hooking means changing a hooked member, i.e. the row above |
 
 ### 19b. The panes, and when each override runs
@@ -1383,21 +1412,58 @@ Read from NI's own VIs in `vi.lib\ActorFramework\Actor\` (`lvai_vi_terminals`, 2
 
 In an override `Actor in`/`Actor out` take the class name, except `Actor Core`'s output, which stays
 `Actor out`. A series insertion on the error wire must name the panel terminal exactly: `error in`
-finds nothing on `Handle Error`, and `Pre Launch Init` has no error input at all.
+finds nothing on `Handle Error`, and `Pre Launch Init` has no error input at all. Its Call Parent has
+none either, so a body in series **before** Call Parent in `Pre Launch Init` has no path to the
+override's `error out`.
 
-The order in a run, read from the log: `Pre Launch Init` → `Actor Core` → (Normal Stop) →
-**`Stop Core`, called from inside Actor Core's Call Parent, before the `Actor Core` override
-returns** → the override's branches finish → the queue is released.
+**The order in a run**, read from the timestamped logs (2026-09):
+
+`Pre Launch Init` → `Actor Core` (series bodies, then branch bodies) → a Normal Stop arrives →
+**`Handle Error`, with 43** → **`Stop Core`, called from inside Actor Core's Call Parent** → Call
+Parent returns → **code placed after Call Parent** → the override's branches finish → the queue is
+released.
+
+The `Stop Core` line and a line from a body after Call Parent fell in the same millisecond tick,
+`Stop Core` first. NI's AF designers describe the same nesting on the NI forum.
+
+**`Stop Core` runs only if `Actor Core` started.** Measured 2026-10-09: a `Pre Launch Init` body
+after Call Parent that returned error 5000 made the Launch call return 5000, with no `Stop Core` log
+line and no hang; the control run without the error logged `Stop Core`. Documented the same way on
+the NI forum. So whatever `Pre Launch Init` created before it failed is released by `Pre Launch Init`
+itself, or it leaks.
+
+**An error wired into `Actor Core`'s Call Parent ends the actor silently.** Measured 2026-10-09, with
+error 5001 from a series body on `Actor Core` and a control run in which `Handle Error` logged 43:
+`Handle Error` is skipped, `Stop Core` still runs and the actor stops by itself, the launcher sees
+**error 0** from Launch, and its next `Send` to the actor fails with **1556**. Documented the same
+way on the NI forum. What `Actor Core` returns in that case was not observed: a root actor's output
+reaches no caller.
 
 `Handle Error` runs **only when a message's `Do.vi` returned an error**: NI's description says so,
 and each run logged exactly one `Handle Error` line. A Normal Stop counts as one, because
 `Stop Msg`'s `Do.vi` returns 43, and a run without a failing message still logged one `Handle Error`
 with 43. NI's body clears 43 ("Cancel Error means stop, but No Error to caller"), passes every other
-code on, and always answers `stop actor?` = TRUE. So an application handler in series before Call
-Parent must pass 43 through untouched, and Emergency Stop's **1608** too. The 1608 was read from
-`Stop Msg`'s `Do.vi`, not seen in a run.
+code on, and always answers `stop actor?` = TRUE. Emergency Stop's **1608** was read from `Stop Msg`'s
+`Do.vi`, and that the parent passes it on was read from NI's diagram; neither was seen in a run.
 
-### 19c. THE STOPPING RULE: a helper loop needs its own stop signal, fired from `Stop Core`
+What that means for an application handler:
+
+- **A VI chained on `Handle Error`'s incoming error, before Call Parent, is skipped at every normal
+  stop**, because 43 arrives there (measured, 2026-09). Side work on that error (logging) needs its
+  own fresh error chain, or it never runs at a stop.
+- **Put the handler AFTER Call Parent, on its outputs.** There the parent has already turned 43 into
+  no error, and only code there can set `stop actor?` back to FALSE, since the parent always answers
+  TRUE. By the diagram reading above, an emergency stop's 1608 still arrives there. The placement
+  after Call Parent is measured on `Pre Launch Init` (2026-10-09), not on `Handle Error`; overruling
+  `stop actor?` is reasoned, not run.
+
+**`Handle Last Ack Core`** runs in the caller when a nested actor has stopped; its Last Ack carries
+the stopped actor's object and error. The base version only returns that error, so by default a
+child's error stops its caller, and the stop travels up the tree (documented, AF help). Override it
+only for a relaunch or status plan, and keep the parent's error unless the plan says otherwise. Its
+pane has not been read here: read it with `lvai_connector_pane` before writing a body for it.
+
+### 19c. THE STOPPING RULE: a helper loop needs its own stop signal, and there are two places to fire it
 
 A loop branch-hooked on `Actor Core` **never sees its actor stop by itself**. The actor's queue is
 released only after the `Actor Core` override returns, and the override cannot return while the loop
@@ -1406,27 +1472,84 @@ button or a failed `Send` to self. After an external Normal Stop there was no ex
 loop and `Actor Core` were still `execState 3` ten seconds later.
 
 So **checking the actor's own queue is not a stop condition**: it stays valid until the loop has
-already ended. Every helper loop needs a signal of its own, created before the loop and fired in
-`Stop Core`, which AF calls while the loop is still running. Which signal depends on what the loop
-waits on:
+already ended. Every helper loop needs a signal of its own, created before the loop starts and fired
+at one of the two stop sites below, both of which run while the loop is still running. Which signal
+depends on what the loop waits on:
 
 | the loop waits on | stop signal | measured here |
 |---|---|---|
-| **an event structure**: UI events, or events from elsewhere. The most common helper loop | a **user event**: create it in a series body on `Actor Core` and store it in the object; register it on the loop's event structure; fire it in a `Stop Core` body; its frame ends the loop; then Unregister and Destroy | yes: `Stop Core` and the loop's exit were logged in the same millisecond |
-| **a timed or polled loop** (acquisition, periodic work) | a **notifier**: `Pre Launch Init` body in series obtains it and stores it; `Stop Core` body fires it; the loop checks `Wait on Notification` (timeout 0) each iteration | yes: the loop exited 215–313 ms after `Stop Core` with a 200 ms tick, so expect about one loop period |
-| **a queue or other reference of its own** that it blocks on | **release that reference** in `Stop Core`; the blocked read returns an error and the loop exits on it | no, this is standard LabVIEW behaviour. Tell the stop error apart from a real one |
+| **an event structure**: UI events, or events from elsewhere. The most common helper loop | a **user event**: create it in a `Pre Launch Init` body after Call Parent and store it in the object; register it on the loop's event structure with a fresh error; fire it at a stop site; its frame ends the loop; Unregister after the loop; Destroy in one place, after the Generate | yes: fired in `Stop Core`, `Stop Core` and the loop's exit were logged in the same millisecond (2026-09); fired after Call Parent with the `close` join, 5 of 5 runs (2026-10-09). User events created in `Pre Launch Init` outlive a launcher that exits right after Launch: a stop about 12 s later answered 0 and the loop exited, 2 of 2 runs (2026-09) |
+| **a timed or polled loop** (acquisition, periodic work) | a **notifier**: obtain it in a `Pre Launch Init` body after Call Parent, error wired, and store it; fire it at a stop site; the loop checks `Wait on Notification` (timeout 0) each iteration | yes, fired from `Stop Core`: the loop exited 215–313 ms after `Stop Core` with a 200 ms tick, so expect about one loop period. That run obtained the notifier in a body before Call Parent; the placement after it is the error-path fix below, not a different stop |
+| **a queue or other reference of its own** that it blocks on | **release that reference** at the stop site; the blocked read returns an error and the loop exits on it | no, this is standard LabVIEW behaviour. Tell the stop error apart from a real one |
 
-Create the reference once and store it in the object before the loop starts. When it is created in
-a series body on `Actor Core` itself, tap the loop's branch from that body's output (19a), or the
-loop gets the object without the reference. Log the loop's exit from data leaving the loop through a tunnel: a log node fed from a
-constant runs at start, in parallel with the loop.
+**The two stop sites.**
+
+1. **In `Stop Core`.** Generate the stop there. If `Stop Core` also destroys the event, Destroy
+   **after** the Generate, never before: a Destroy first makes the Generate answer error 1 on the dead
+   refnum, the loop never gets its stop, `Actor Core` cannot return, and the actor hangs at stop
+   (measured, 2026-09). Generate followed at once by Destroy does not lose the event: 0–1 ms apart,
+   both error 0, the loop exited and the actor stopped in 4 of 4 runs (measured, 2026-09). NI's AF
+   designers state the same on the NI forum; the older LabVIEW help for Destroy User Event says the
+   opposite. With both nodes in `Stop Core` this is NI's documented form; that exact placement was
+   not run here.
+2. **After `Actor Core`'s Call Parent.** A stop body in a one-frame flat sequence after Call Parent,
+   with Call Parent's `error out` entering the frame only as an order tunnel, so the body runs on a
+   **fresh error chain**: chained on Call Parent's error it would be skipped whenever Call Parent
+   returns one, because Generate User Event skips on an incoming error (documented). Its class wire
+   comes from before Call Parent (19a). Then a `close` body that destroys the events, fed by
+   `Merge Errors(loop error out, stop body error out)` so it runs only after both, and a second
+   `Merge Errors(Call Parent error out, close error out)` into `Actor Core`'s `error out`. Measured
+   2026-10-09: in 5 of 5 runs (four with a launcher that stops the actor after 1 s, one with a
+   launcher that exits at once and a stop about 16 s later) `close` ran 7–112 ms after both the
+   loop's exit and the stop, error 0, the actor stopped, no hang. This site sees every exit of Call
+   Parent in one VI.
+
+**Destroy each event in one place.** In those runs the loop also destroyed the events and `close`
+destroyed them again, and the second Destroy answered 0; do not build on that. And **nothing a body
+after Call Parent needs may be released in `Stop Core`**: `Stop Core` runs inside Call Parent, before
+it (19b).
+
+**Create the reference in `Pre Launch Init`, after its Call Parent, with the error wired to the
+override's `error out`**, so a failed create fails the launch (19a, measured 2026-10-09). A body in
+series before `Pre Launch Init`'s Call Parent has no error path to `error out` (19b). `Stop Core`
+does not run after a failed `Pre Launch Init` (19b), so the body releases whatever it already created
+when a later create fails. That cleanup shape (a case structure on the merged error inside the body)
+has not been run.
+
+**Do not create it in a series body on `Actor Core`.** If that create fails and its error goes on into
+Call Parent, the actor ends at once and the launcher sees no error (19b). A loop branched from that
+body's output then holds an invalid refnum, and if its Register For Events is chained on that error,
+nothing registers, the loop waits forever and the `Actor Core` override never returns (reasoned, not
+run). Where a body on `Actor Core` must create it anyway, tap the loop's branch from that body's
+`<Class> out` node terminal (19a), or the loop gets the object without the reference.
+
+**Registration.** Give Register For Events a fresh "no error", not the incoming chain: with an error
+in it does not run, nothing is registered, and a loop whose only exit is the stop event hangs the
+actor at stop (the node's behaviour is documented in the LabVIEW help; the hang is reasoned).
+Register right before the loop and Unregister right after it. Events generated before Register are
+not seen, so a stop generated before the loop registered is lost (documented); an actor stopped
+immediately after launch is the case to test, and it has not been tested here. Generating an event
+nobody registered for does nothing and answers no error (documented), so it cannot rescue such a
+loop.
+
+Log the loop's exit from data leaving the loop through a tunnel: a log node fed from a constant runs
+at start, in parallel with the loop.
 
 **A UI loop needs both exits.** On its Stop button it first sends Normal Stop to its own actor, and
 it also exits on the stop signal. That way the button and an external Normal Stop both end the tree.
 
-To confirm a stop after a run: `execState` on every `Actor Core`. **3 means it is still running.**
-Read it cold, from outside. `Execution:State` read by qualified name from inside a VI whose own
-hierarchy holds the actor classes reads 3 for a reserved VI whether it is running or not.
+**A hung loop cannot be freed from outside.** Abort VI on it answers error 1000, and Callers' Names
+returns the original `Actor Core.vi`, not the running clone; only a LabVIEW restart frees it
+(measured, 2026-09). A wrong stop therefore costs a restart.
+
+**Proving a stop.** Read `execState` cold, from outside, on every `Actor Core` and loop VI: **3 means
+still running.** A reading other than 3 is evidence only for LabVIEW's default application instance:
+`lvai_exec_state` reads that instance, and a tree running in a project's instance is not seen there.
+`Execution:State` read by qualified name from inside a VI whose own hierarchy holds the actor classes
+reads 3 for a reserved VI whether it is running or not. So prove the stop with a timestamped line from
+each writer (the stop, the loop's exit, `close`), `error out`, and a Normal Stop to the caller that
+succeeds, and give each writer its own log file: two VIs appending to one file at the same moment
+overwrite each other's line (measured, 2026-09).
 
 ### 19d. Two scope facts that break an actor silently
 
@@ -1436,4 +1559,7 @@ hierarchy holds the actor classes reads 3 for a reserved VI whether it is runnin
 - **`Read Self Enqueuer.vi` is protected:** a plain VI that calls it is broken (1003). Only members
   of an actor class may call it. So a deferred start (the root launches its children as its first
   message) is a branch body on the root's `Pre Launch Init` doing `Read Self Enqueuer` →
-  `Send <launch>`. Measured: the child starts with nothing sent by the launcher.
+  `Send <launch>`. Measured: the child starts with nothing sent by the launcher. **The branch wires
+  the class only, so the `Send`'s error goes nowhere**: a failed send of the launch message is seen by
+  nothing. Log that error inside the body, or hook the body after Call Parent with its error wired
+  into the override's `error out` (19a), so that a failed send fails the launch (reasoned, not run).
