@@ -6,7 +6,7 @@ counts on this page against the registration in the source, so they cannot drift
 
 ## What is served
 
-**102 tools over 23 RPCs.** Sixty-three map to no RPC: `lvai_status`, `lvai_dump_schema`,
+**103 tools over 23 RPCs.** Sixty-four map to no RPC: `lvai_status`, `lvai_dump_schema`,
 `lvai_palette_index`, `lvai_example_index`, `lvai_set_vi_icon`, `lvai_render_diagrams` and `lvai_discuss_file` — which compose three RPCs
 rather than wrapping one — `lvai_check_aixml`, which reads an AIXML file, `lvai_describe_class` and `lvai_describe_ctl`, which read a `.lvclass`
 and a `.ctl` off disk and need no LabVIEW at all, the knowledge tools below, and the five `pylv_*`
@@ -117,6 +117,7 @@ resources rather than call tools.
 | `lvai_dqmh_create_module_template` | — (composes `RunVIAsTopLevel` + `ConvertVIToAIXML`) | **turns a module into a DQMH module TEMPLATE** in LabVIEW Data with no dialog - Delacor's own tool ends in a modal even on success, so its two steps are repeated here with the metadata text read from the installed DQMH at run time; confirms the new type in Delacor's catalogue |
 | `lvai_ensure_labview` | — (process start + service discovery) | **starts LabVIEW** if it is not running, and clears the auto-save store first; records the LabVIEW it started; **starts the Nigel chat once** when the service stays down |
 | `lvai_restart_labview` | — (window and process reads, `lvai_close_active_project`, `CloseMainWindow`, the `lvai_ensure_labview` launch) | **closes or restarts LabVIEW** under the user's guards: no go-ahead only for a LabVIEW this server started or an empty one; never kills, never answers a dialog; resumable. [Restart](../labview-restart.md) |
+| `lvai_answer_dialog` | — (Win32 window reads, `PrintWindow`, posted input) | **presses one button of one allowlisted dialog** in the caller's OWN LabVIEW only: "Save changes? (Exit)" listing only LVMCP scratch VIs (Don't Save / Cancel), the "changed on disk" modal (Cancel), a Nigel message box (OK); anything else refused with its screenshot. [Restart](../labview-restart.md) |
 
 ### Without LabVIEW — the pylabview route
 

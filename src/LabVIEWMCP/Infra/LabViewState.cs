@@ -296,6 +296,7 @@ internal static class LabViewState
         {
             ["title"] = dialog.Window.Title,
             ["class"] = dialog.Window.ClassName,
+            ["handle"] = dialog.Window.Handle,
             ["visible"] = dialog.Window.Visible,
             ["processId"] = dialog.Window.ProcessId,
             ["reason"] = dialog.Reason,

@@ -89,6 +89,23 @@ internal sealed class FakeLabViewMachine : ILabViewMachine
     public WindowImage? Capture(long handle) =>
         WindowList.Any(w => w.Handle == handle) && Images.TryGetValue(handle, out var image) ? image : null;
 
+    /// <summary>Every input posted, in order: "key 27 @77", "click 120,40 @77", "button 5".</summary>
+    public List<string> Inputs { get; } = [];
+
+    /// <summary>What an input does to the fake world - e.g. remove the dialog window.</summary>
+    public Action<string>? OnInput { get; set; }
+
+    public bool PostKey(long handle, int virtualKey) => Input($"key {virtualKey} @{handle}");
+    public bool PostClick(long handle, int windowX, int windowY) => Input($"click {windowX},{windowY} @{handle}");
+    public bool ClickButton(long buttonHandle) => Input($"button {buttonHandle}");
+
+    private bool Input(string what)
+    {
+        Inputs.Add(what);
+        OnInput?.Invoke(what);
+        return true;
+    }
+
     public Task Delay(TimeSpan delay, CancellationToken ct)
     {
         Now += delay;

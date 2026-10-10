@@ -18,7 +18,7 @@ internal sealed record MachineWindow(long Handle, int ProcessId, string ClassNam
                                      long Owner = 0, bool Enabled = true);
 
 /// <summary>One child window of a dialog: a button or a static text, when the dialog has any.</summary>
-internal sealed record MachineChild(string ClassName, string Text);
+internal sealed record MachineChild(string ClassName, string Text, long Handle = 0);
 
 /// <summary>What <see cref="ILabViewMachine.CloseMainWindow"/> did. It never kills.</summary>
 /// <param name="Found">The process was there to close.</param>
@@ -75,6 +75,20 @@ internal interface ILabViewMachine
     /// brought to the front. Null when the window is gone or cannot be captured.
     /// </summary>
     WindowImage? Capture(long handle);
+
+    // ---- input, for lvai_answer_dialog only: posted to ONE window, nothing brought to the front ----
+
+    /// <summary>Post a key press (WM_KEYDOWN + WM_KEYUP) to the window. False when the post failed.</summary>
+    bool PostKey(long handle, int virtualKey);
+
+    /// <summary>
+    /// Post a left click at (<paramref name="windowX"/>, <paramref name="windowY"/>), measured from the
+    /// window's top-left corner as in its <see cref="Capture"/> picture.
+    /// </summary>
+    bool PostClick(long handle, int windowX, int windowY);
+
+    /// <summary>BM_CLICK posted to a Win32 button (a message box's OK).</summary>
+    bool ClickButton(long buttonHandle);
 }
 
 /// <summary>The real machine: Win32 window enumeration and System.Diagnostics.Process.</summary>
@@ -133,7 +147,7 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
 
         EnumChildWindows(new IntPtr(handle), (child, _) =>
         {
-            rows.Add(new MachineChild(ClassOf(child), TextOf(child)));
+            rows.Add(new MachineChild(ClassOf(child), TextOf(child), child.ToInt64()));
             return rows.Count < 64;   // a dialog with more children than this is not a dialog
         }, IntPtr.Zero);
         return rows;
@@ -230,6 +244,36 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
 
     public Task Delay(TimeSpan delay, CancellationToken ct) => Task.Delay(delay, ct);
 
+    public bool PostKey(long handle, int virtualKey)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        var window = new IntPtr(handle);
+        var scan = MapVirtualKey((uint)virtualKey, 0);
+        var down = (IntPtr)(1 | (scan << 16));
+        var up = (IntPtr)unchecked((int)(1 | (scan << 16) | 0xC0000000));
+        return PostMessage(window, 0x0100, (IntPtr)virtualKey, down) &&      // WM_KEYDOWN
+               PostMessage(window, 0x0101, (IntPtr)virtualKey, up);          // WM_KEYUP
+    }
+
+    public bool PostClick(long handle, int windowX, int windowY)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        var window = new IntPtr(handle);
+        if (!GetWindowRect(window, out var rect)) return false;
+        var origin = new Point { X = 0, Y = 0 };
+        if (!ClientToScreen(window, ref origin)) return false;
+        // Picture coordinates are from the window's corner; mouse messages want client coordinates.
+        var x = windowX - (origin.X - rect.Left);
+        var y = windowY - (origin.Y - rect.Top);
+        var at = (IntPtr)((y << 16) | (x & 0xFFFF));
+        return PostMessage(window, 0x0200, IntPtr.Zero, at) &&            // WM_MOUSEMOVE
+               PostMessage(window, 0x0201, (IntPtr)1, at) &&              // WM_LBUTTONDOWN, MK_LBUTTON
+               PostMessage(window, 0x0202, IntPtr.Zero, at);              // WM_LBUTTONUP
+    }
+
+    public bool ClickButton(long buttonHandle) =>
+        OperatingSystem.IsWindows() && PostMessage(new IntPtr(buttonHandle), 0x00F5, IntPtr.Zero, IntPtr.Zero);
+
     public WindowImage? Capture(long handle)
     {
         if (!OperatingSystem.IsWindows()) return null;
@@ -309,6 +353,12 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
         public uint Color0, Color1, Color2, Color3;   // room for masks: GetDIBits may write them
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
+
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, int message, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] private static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
     [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);

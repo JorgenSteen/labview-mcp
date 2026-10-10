@@ -93,6 +93,13 @@ internal static class NigelChat
         lock (Gate) return Attempts.TryGetValue(labviewPid, out var o) ? (JsonObject)o.DeepClone() : null;
     }
 
+    /// <summary>True when <paramref name="chatPid"/> is a chat this server process started.</summary>
+    public static bool StartedChat(int chatPid)
+    {
+        lock (Gate)
+            return Attempts.Values.Any(o => o["pid"] is JsonValue v && v.TryGetValue<int>(out var p) && p == chatPid);
+    }
+
     internal static void Reset()
     {
         lock (Gate) Attempts.Clear();

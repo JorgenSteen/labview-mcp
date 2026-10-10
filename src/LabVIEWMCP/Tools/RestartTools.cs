@@ -236,6 +236,51 @@ internal sealed class RestartTools(LvaiConnection connection)
             : $"could not generate the helper VI '{helperVi}': {generation.ErrorMessage}";
     }
 
+    // ------------------------------------------------------------------ dialogs
+
+    [McpServerTool(Name = "lvai_answer_dialog", Destructive = true, OpenWorld = true,
+                   Title = "Answer one allowlisted dialog in YOUR OWN LabVIEW")]
+    [Description("""
+        MUTATING: presses one button of one dialog. ONLY in the caller's own LabVIEW - started by THIS
+        server (lvai_ensure_labview recorded it), or ownLabviewPid = the running pid with ownNote
+        saying this session started it - and ONLY these kinds (the user's decision of 2026-10-10:
+        operating LabVIEW on your own, answering its dialogs is fine; anything else is the user's):
+        exitSaveScratchOnly - "Save changes? (Exit)" where every `*` window of the process is an
+        LVMCP scratch VI AND listedVis (every VI the dialog lists, read from its screenshot) are all
+        `LVMCP …`: action "Don't Save" (ONE VI listed: buttons Save / Don't Save / Cancel, measured)
+        or "Don't Save - All" (several VIs: no measured picture yet, so it presses nothing), or
+        "Cancel". LabVIEW then exits; the answer waits up to 20 s for that.
+        changedOnDisk - LabVIEW's untitled "… has changed on disk since last saved or loaded by
+        LabVIEW" modal [Revert][Cancel], on a VI this session touched (viName): action "Cancel".
+        WARNING, measured 2026-10-10: LabVIEW CRASHED on the next call after this dialog had been
+        answered. Answering it does not make the VI in memory safe; close or restart LabVIEW next.
+        Not exercised live by this tool (unit tests only).
+        nigelBox - a message box of an LVNigelChat this server started: action "OK".
+        Anything else: refused (notAllowlisted, notOwnLabview) with the screenshot; nothing pressed.
+        The window is read again right before the press (same handle, title, still visible), with
+        screenshots asked/before/after. Means, all POSTED to the dialog window, nothing brought to
+        the front: Cancel = Esc; a named button = a click where its picture, cut from a measured
+        screenshot, is found again (not found = nothing pressed); OK = BM_CLICK. The answer says
+        what was pressed, how, whether the dialog went and (Don't Save - All) whether LabVIEW exited.
+        Take the handle and screenshot from lvai_labview_state or lvai_restart_labview's dialogs.
+        """)]
+    public static async Task<string> AnswerDialogAsync(
+        [Description("The dialog window's handle, as lvai_labview_state lists it")] long handle,
+        [Description("exitSaveScratchOnly, changedOnDisk or nigelBox")] string dialogKind,
+        [Description("\"Don't Save\", \"Don't Save - All\", \"Cancel\" or \"OK\" - see the description for which kind allows which")]
+        string action,
+        [Description("The LabVIEW pid your session started, when this server process did not start it")]
+        int? ownLabviewPid = null,
+        [Description("With ownLabviewPid: how your session started it (the call, the time)")] string? ownNote = null,
+        [Description("exitSaveScratchOnly: every VI the dialog lists, as read from its screenshot, one per line")]
+        string? listedVis = null,
+        [Description("changedOnDisk: the VI this session touched that the dialog names")] string? viName = null,
+        CancellationToken ct = default) =>
+        await Rpc.GuardAsync(async () =>
+            (await DialogAnswer.RunAsync(
+                new DialogAnswerRequest(handle, dialogKind, action, ownLabviewPid, ownNote, listedVis, viName),
+                Win32LabViewMachine.Instance, NigelChat.StartedChat, ct)).ToJsonString(Indented));
+
     // ------------------------------------------------------------------ restart
 
     /// <summary>How long one call waits before answering "still running" - under the client's 60 s.</summary>
