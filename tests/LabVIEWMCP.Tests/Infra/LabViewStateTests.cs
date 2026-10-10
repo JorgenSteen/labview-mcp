@@ -130,7 +130,7 @@ public class ModalDialogClassifierTests
         m.AddWindow(Pid, "LVDChild", "LV AI gRPC Service.lvlibp:gRPC Implementations.lvlib:RunService.vi", false);
         m.AddWindow(Pid, "LVDChild", "VI Hierarchy", false);
         m.AddWindow(Pid, "LVDChild", "", true, handle: 50, owner: ownedByFrame ? 61 : 0);
-        m.AddWindow(Pid, "LVDChild", "PB-H10.lvproj - Project Explorer", true, enabled: !frameDisabled);
+        m.AddWindow(Pid, "LVDChild", "Probe.lvproj - Project Explorer", true, enabled: !frameDisabled);
         m.AddWindow(Pid, "LVDChild", "LabVIEW", false, handle: 60);
         m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61, enabled: !frameDisabled);
         m.AddWindow(Pid, "NI-RPC Message Thread Class", "NI-RPC Message Thread Instance 4520", false);
@@ -199,6 +199,47 @@ one");
         Assert.Empty(LabViewState.Take(calm, @"X:
 one").Dialogs);
     }
+
+    /// <summary>
+    /// Measured 2026-10-10 13:30 with a person at the machine: File > New VI gave these two visible,
+    /// titled LVDChild windows, owned by the frame, frame enabled - and they were flagged as possible
+    /// dialogs, a hard stop. They are a VI. The 13:3x save prompt (frame disabled) must stay caught.
+    /// </summary>
+    [Fact]
+    public void A_new_untitled_vi_is_a_vi_and_the_save_prompt_beside_a_disabled_frame_is_still_a_dialog()
+    {
+        var m = new FakeLabViewMachine();
+        m.AddProcess(Pid, "LabVIEW");
+        m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61);
+        m.AddWindow(Pid, "LVDChild", "Untitled 7 Front Panel", true, owner: 61);
+        m.AddWindow(Pid, "LVDChild", "Untitled 7 Block Diagram", true, owner: 61);
+        m.AddWindow(Pid, "LVDChild", "LVMCP Validate.vi Front Panel *", false, owner: 61);
+        m.AddWindow(Pid, "LVDChild", "LV AI gRPC Service.lvlibp:gRPC Implementations.lvlib:RunService.vi", false, owner: 61);
+        var s = LabViewState.Take(m, @"X:
+one");
+        Assert.Empty(s.Dialogs);
+        Assert.Equal(2, s.Of(WindowKinds.Vi).Count());
+
+        // The measured prompt: frame disabled, the VI's windows disabled, the prompt titled.
+        var h3 = new FakeLabViewMachine();
+        h3.AddProcess(Pid, "LabVIEW");
+        h3.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61, enabled: false);
+        h3.AddWindow(Pid, "LVDChild", "Save changes before closing?", true, owner: 61);
+        h3.AddWindow(Pid, "LVDChild", "Save changes before closing?", false, owner: 61);
+        h3.AddWindow(Pid, "LVDChild", "Pilot.lvclass:Pass.vi Front Panel *", true, owner: 61, enabled: false);
+        h3.AddWindow(Pid, "LVDChild", "Untitled 8 Front Panel", true, owner: 61, enabled: false);
+        var d = LabViewState.Take(h3, @"X:
+one");
+        Assert.Equal("Save changes before closing?", Assert.Single(d.Dialogs).Window.Title);
+    }
+
+    [Theory]
+    [InlineData("Untitled 7 Front Panel")]
+    [InlineData("Untitled 7 Block Diagram")]
+    [InlineData("Untitled 12")]
+    [InlineData("Untitled 3 Front Panel on Pilot.lvproj/My Computer")]
+    public void LabVIEW_s_untitled_new_vi_titles_are_vi_windows(string title) =>
+        Assert.Equal(WindowKinds.Vi, LabViewState.Classify(new MachineWindow(1, 1, "LVDChild", title, true)));
 
     [Fact]
     public void A_hidden_untitled_window_owned_by_the_frame_stays_a_hidden_system_window()

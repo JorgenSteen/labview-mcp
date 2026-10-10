@@ -98,6 +98,26 @@ internal static class LabViewRestart
         WindowKinds.Untitled,
     ];
 
+    /// <summary>
+    /// A recovery copy LabVIEW auto-saved for the project file <paramref name="ownProjectFile"/>.
+    /// Measured once (2026-10-10, LabVIEW 2026 Q3 32-bit), for an unsaved `Probe.lvproj`:
+    /// `NI32LV2631f1ASD1_Probe.lvproj` and `NI32LV2631f1ASD1_Probe.txt`, gone after the project was
+    /// saved and closed. The user's decision (2026-10-10): those do not block a close that saves
+    /// the project; any other file does.
+    /// </summary>
+    internal static bool IsOwnProjectAutoSave(string relativeFile, string ownProjectFile)
+    {
+        var match = AutoSaveName.Match(Path.GetFileName(relativeFile));
+        if (!match.Success) return false;
+        var rest = match.Groups["rest"].Value;
+        return string.Equals(rest, ownProjectFile, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(rest, Path.GetFileNameWithoutExtension(ownProjectFile) + ".txt",
+                             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex AutoSaveName =
+        new(@"^NI\w*?ASD\d+_(?<rest>.+)$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     public static Task<JsonObject> RunAsync(RestartRequest request, RestartDependencies deps,
                                             CancellationToken ct) =>
         new Run(request, deps).ExecuteAsync(ct);
@@ -167,7 +187,7 @@ internal static class LabViewRestart
             // ---------- 3. windows the user may be working in ----------
             // This session's own Project Explorer with a `*` is not the user's work: when it is the
             // active project this tool saves and closes it below. Measured 2026-10-10: a project opened
-            // by lvai_open_file showed `PB-H10.lvproj * - Project Explorer` at once, before any edit.
+            // by lvai_open_file showed `Probe.lvproj * - Project Explorer` at once, before any edit.
             // It is set aside here and judged after the active-project read (step 5).
             var ownProjectUnsaved = snapshot.Unsaved.Where(w => IsOwnProjectExplorer(w, ownProjectFile)).ToList();
             var unsaved = snapshot.Unsaved.Except(ownProjectUnsaved).ToList();
@@ -190,9 +210,16 @@ internal static class LabViewRestart
                     ["why"] = ScratchCannotBeClosed,
                 };
             NoteHidden(snapshot);
-            if (snapshot.AutoSave.Count > 0)
-                NeedGoAhead(GuardAutoSave, $"LVAutoSave holds {snapshot.AutoSave.Count} file(s): somebody " +
-                    "has unsaved work, or a crash left recovery data. Either way it is the user's.");
+            // LabVIEW's own recovery copies of THIS session's project are set aside like its `*`
+            // window and judged after the active-project read: the close saves that project.
+            var ownAutoSave = ownProjectFile is null
+                ? []
+                : snapshot.AutoSave.Sample.Where(f => IsOwnProjectAutoSave(f, ownProjectFile)).ToList();
+            var otherAutoSave = snapshot.AutoSave.Count - ownAutoSave.Count;
+            if (otherAutoSave > 0)
+                NeedGoAhead(GuardAutoSave, $"LVAutoSave holds {otherAutoSave} file(s) that are not this " +
+                    "session's project: somebody has unsaved work, or a crash left recovery data. Either way " +
+                    "it is the user's.");
 
             // ---------- 4. the service ----------
             var service = await deps.ProbeService(ct);
@@ -242,6 +269,20 @@ internal static class LabViewRestart
                         "active project (or the active project could not be read), so this tool cannot save " +
                         "and close it: the IDE close would raise LabVIEW's save prompt.");
             }
+            if (ownAutoSave.Count > 0)
+            {
+                _guards["ownProjectAutoSave"] = new JsonObject
+                {
+                    ["files"] = new JsonArray([.. ownAutoSave.Select(f => (JsonNode)JsonValue.Create(f)!)]),
+                    ["setAsideBecauseTheCloseSavesIt"] = closeOwnProject,
+                    ["basis"] = "one sample, 2026-10-10: LabVIEW's recovery copies of an unsaved project " +
+                                "are named after the project file and were gone after its clean save and close",
+                };
+                if (!closeOwnProject)
+                    NeedGoAhead(GuardAutoSave, "LVAutoSave holds recovery copies of this session's project, " +
+                        "and it is not the active project (or that could not be read), so this tool cannot " +
+                        "save it before the close.");
+            }
             var otherProjectWindows = snapshot.Of(WindowKinds.Project)
                 .Where(w => ownProjectFile is null ||
                             !w.Window.Title.StartsWith(ownProjectFile + " - ", StringComparison.OrdinalIgnoreCase))
@@ -252,7 +293,8 @@ internal static class LabViewRestart
 
             // ---------- decision A, before anything changes ----------
             var windowsEmpty = WindowsEmpty(snapshot, ownProjectFile, out var windowsNote);
-            var mayBeEmpty = windowsEmpty && snapshot.AutoSave.Count == 0 && service.Answers &&
+            var mayBeEmpty = windowsEmpty && otherAutoSave == 0 && (ownAutoSave.Count == 0 || closeOwnProject) &&
+                             service.Answers &&
                              !_needGoAhead.Contains(GuardActiveProject);
             if (!HasGoAhead && _needGoAhead.Count > 0)
                 return RefuseForGoAhead(labview, serverStarted, EmptyChecks(windowsEmpty, windowsNote, snapshot,

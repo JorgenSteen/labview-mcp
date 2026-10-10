@@ -1,10 +1,10 @@
 # Closing and restarting LabVIEW under guards
 
-`lvai_restart_labview`, `lvai_labview_state`, `lvai_vis_in_memory`, and the Nigel-chat start in
-`lvai_ensure_labview`. The route itself was measured by a LabVIEW skill on a production Actor
-Framework station in October 2026 (labview-mcp 1.8.5, LabVIEW 2026 Q3 32-bit); **the C# port in
-this repository has not yet run against LabVIEW.** Section 11 separates the two, and section 12 is
-the checklist that has to pass before the port's claims count as measured.
+`lvai_restart_labview`, `lvai_labview_state`, `lvai_vis_in_memory`, `lvai_answer_dialog`, and the
+Nigel-chat start in `lvai_ensure_labview`. The route itself was measured by a LabVIEW skill on a production Actor
+Framework station in October 2026 (labview-mcp 1.8.5, LabVIEW 2026 Q3 32-bit). The C# port in this
+repository first ran against LabVIEW on 2026-10-10, with real closes and restarts. Section 11
+separates what is measured from what is not, and section 12 is the checklist with its results.
 
 ## 1. Why tools
 
@@ -45,7 +45,7 @@ asking. A restart does not change ownership: the user's LabVIEW, restarted, is s
 | 3 | `busy`: either of two 15 s CPU samples is busy, or the clock cannot be read | `TotalProcessorTime` | **no**: a busy LabVIEW does not take the close message |
 | 4 | `unsaved`: a `*` title, including labview-mcp's own scratch VIs (section 4) | window list | yes |
 | 4a | `hiddenWindows`: a HIDDEN titled window no measurement explains (section 4) | window list, also right before the close | yes. The answer names each window it opened (`overriddenHiddenWindows`) |
-| 5 | `autoSave`: files in `LVAutoSave` | the Documents known folder, which may be redirected | yes |
+| 5 | `autoSave`: files in `LVAutoSave`, except LabVIEW's recovery copies of this session's ACTIVE project (`guards.ownProjectAutoSave`; the close saves it; the user's decision of 2026-10-10, naming from one sample) | the Documents known folder, which may be redirected | yes |
 | 6 | `service`: lvai does not answer (20 s probe) | `GetApplicationConfiguration` | yes. Project and memory are then not read |
 | 7 | `activeProject`: a project is active or open that is not `projectPath` | `lvai_active_project` helper, project windows | yes. The IDE close closes it; this tool never closes a user's project itself |
 | 8 | `memory`: a VI in memory has nonzero modification bits | `lvai_vis_modified` helper | yes |
@@ -56,7 +56,11 @@ the first one. The order follows the skill: nothing changes before guards 1–7 
 `projectPath` is this session's project and it is the ACTIVE one, the tool saves and closes it
 (`lvai_close_active_project`) before the memory check, because the memory probe would otherwise be
 adopted into it. That close is reported as a side effect. The skill notes that it can rewrite
-`.lvproj`, `.lvlps` and `.aliases`, so check the project's tree afterwards.
+`.lvproj`, `.lvlps` and `.aliases`, so check the project's tree afterwards. This session's own Project
+Explorer with a `*` title is not counted by the `unsaved` guard when its project is the active one,
+because that close saves it. Measured 2026-10-10: a project opened by `lvai_open_file` showed
+`Probe.lvproj * - Project Explorer` before any edit. When it is not the active project, nothing
+saves it, so it still needs a go-ahead (`guards.ownProjectUnsaved` says which case applied).
 
 Two helpers are never generated inside the restart: `lvai_vis_modified` and `lvai_active_project`.
 Generating a helper validates it, and validation leaves an `LVMCP Validate` VI in memory
@@ -77,10 +81,35 @@ window is a possible dialog (`possible-dialog`); a HIDDEN one is `hidden-unrecog
 - it is hidden and its CLASS is one of the measured non-LabVIEW classes found in `LabVIEW.exe`:
   `OleAutomationWnd`, `HwndWrapper[…`, `GDI+ Hook Window Class`, `LVWinSessionMonitor`,
   `OleDdeWndClass`, `IME`, `MSCTFIME UI`, `ATL:…`, `Internet Explorer_Hidden`. These come from one
-  `-All` listing of a production LabVIEW, 2026-10-07;
+  `-All` listing of a production LabVIEW, 2026-10-07. `CiceroUIWndFrame` (Windows' text services)
+  and `NI-RPC Message Thread Class` were added from a listing of 2026-10-10;
 - its title is `LabVIEW`, `Getting Started…`, `….lvproj - Project Explorer`, a VI or control title
   (`.vi`, `.vim`, `.vit`, `.ctl`, `.ctt`, with or without `Front Panel` / `Block Diagram` /
-  `on <project>/<target>`), or one of the service's own (`LV AI ….lvlibp:`).
+  `on <project>/<target>`), a never-saved new VI (`Untitled 7 Front Panel`, `Untitled 7 Block
+  Diagram`), or one of the service's own (`LV AI ….lvlibp:`). The `Untitled N` rule was added
+  after a measurement on 2026-10-10: File > New VI gave those two visible titled windows with no
+  `*`, and they were flagged as possible dialogs, a hard stop that no go-ahead opens.
+
+**The untitled modal dialog, measured 2026-10-10.** LabVIEW's "… has changed on disk" prompt
+([Revert] [Cancel]) was a VISIBLE but UNTITLED `LVDChild` window of about 281x189, owned by the
+LabVIEW frame, and the frame and the Project Explorer were disabled. By its title alone it was
+`untitled`, which counts as empty, so a close would have run into a modal dialog. Each window now
+carries its owner (`GetWindow GW_OWNER`) and `IsWindowEnabled`, and a second pass over the list
+(`LabViewState.ClassifyAll`) makes a visible window a `possible-dialog`, with a `reason`, when:
+
+- it is untitled and a LabVIEW frame window (title `LabVIEW`) owns it; or
+- it is untitled and a visible frame or Project Explorer is disabled, which is what a modal dialog
+  does to the windows it blocks; or
+- it is an ENABLED VI or start window while a visible frame or Project Explorer is disabled. A
+  dialog VI titled after its file looks like any panel.
+
+Visible windows of the known helper classes stay out (`Internet Explorer_Hidden` is visible and
+untitled on the measured station). Owner alone is not used for titled windows. On a fresh LabVIEW
+(2026-10-10) every `LVDChild` window, the Project Explorer and the hidden `Tools` and
+`Context Help` included, is owned by the visible `LVFrame`. The state answer lists `enabled`
+(when false), `ownerHandle` and `handle` for each window. `VI Hierarchy`, a hidden `LVDChild` seen
+once on a LabVIEW that had been in use for two hours, is not on a fresh LabVIEW. One sighting does
+not show that it is always harmless, so it stays `hidden-unrecognised`.
 
 **The user's decision of 2026-10-10.** A VISIBLE possible dialog is a hard stop that no go-ahead
 opens. A `hidden-unrecognised` window is a go-ahead guard (`hiddenWindows`). It may be a dialog that
@@ -93,8 +122,9 @@ while the guards run (a project close can raise one) is caught by the last windo
 close. A timed-out call's error lists both kinds. A VI panel with a custom window title is flagged
 too, as the kit already documented. Dialogs are named with their title, class, visibility and child
 windows. LabVIEW draws its own dialogs (`LVDChild`) without child controls, so their buttons cannot
-be read. A Win32 message box (`#32770`) lists its buttons and text. Nothing is pressed, fronted or
-closed.
+be read, so each visible one comes with a screenshot (section 13). A Win32 message box (`#32770`)
+lists its buttons and text. These tools press, front or close nothing; `lvai_answer_dialog` may,
+in the caller's own LabVIEW only (section 13).
 
 **labview-mcp's own scratch VIs.** The server hands LabVIEW throwaway `_name`s it never saves
 under, so that a refused validate or convert cannot burn a real name: `LVMCP Validate`
@@ -131,7 +161,14 @@ production station (2026-10-07 twice, 2026-10-08): 419 names, 341 `LV AI gRPC Se
 instance at 404, every one from the service. An open project's VIs live in the project's instance
 and are not listed, and classes and libraries never are. The tool sorts each name as `service`,
 `labview` (`GSW.lvlibp`), `helper` (a `scripts\*.xml` name, a cached helper `.vi`, or an `LVMCP`
-scratch name) or `other`, and returns only the modified, unreadable and `other` lines. The full
+scratch name) or `other`, and returns only the modified, unreadable and `other` lines.
+**Unreadable lines of NI's packed libraries do not count against "empty".** Measured 2026-10-10 on
+a fresh LabVIEW: the port's run gave 419 lines (404 service, 15 `GSW.lvlibp`, none modified), and
+20 of them, every one a `.ctl` of `LV AI gRPC Service.lvlibp` or `LV AI Core.lvlibp`, answered
+error 1035. After a project had been open and closed it was 96 lines, all in the same libraries.
+The first port required every line to be readable, so LabVIEW could never count as empty. Built
+packed-library code cannot carry unsaved edits. Any other unreadable line still blocks, and the
+answer gives `unreadableCount` and `unreadableOutsidePackedLibraries`. The full
 listing was 83 KB. Upstream's `scripts/lvai_vis_in_memory.xml`, which reads both instances, is
 unchanged and is not what this tool runs.
 
@@ -198,7 +235,13 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | `pa_vis_modified` → `lvai_vis_modified.xml`, 419 lines, none modified | measured 2026-10-07/08 (the copy itself: unmeasured) |
 | `LVNigelChat.exe --lv-version --lv-bitness` | measured by the skill |
 | the add-on folder from the exe's file version | derived from one station: **unmeasured** |
-| this repository's C# port of all of the above, the resumable job, the replay, the dialog fold in timeouts | **unmeasured** |
+| the port: window classification on a fresh LabVIEW, the empty restart (resumable, collected on the second call), the server-started close, refusals `busy`, `activeProject`, `autoSave` and `unsaved` (scratch VI), `lvai_vis_in_memory` | measured 2026-10-10 (section 12) |
+| the untitled modal dialog (owner and disabled frame) | the window list measured 2026-10-10; the classifier on it is unit-tested, not re-run against a live dialog |
+| dialog screenshots (`PrintWindow`), `lvai_answer_dialog`: Esc = Cancel and a click on the found "Don't Save" picture on a real "Save changes? (Exit)" | measured 2026-10-10 in the caller's own LabVIEW (section 13) |
+| `lvai_answer_dialog` for `Don't Save - All`, `changedOnDisk`, `nigelBox` | **unmeasured**: unit tests only (section 13) |
+| the `dialog` stop with a go-ahead, the `ownership` refusal, a close that ends in the save prompt (`closeDidNotFinish`) | measured 2026-10-10 with a person at the machine (section 12) |
+| the replay, the Nigel chat start, the dialog fold in timeouts, `hiddenWindows` overridden, the `processes`, `service` and `memory` refusals | **unmeasured** |
+| `CloseMainWindow` on a LabVIEW with a hung actor (running VIs, no dialog) | measured 2026-10-10: exits in 1.72 s, no prompt (section 12, item C) |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
 
 ## 12. Measurement checklist
@@ -248,3 +291,87 @@ plugin at the same time.
    reports `nigelChat.state: running`, the chat window appears, and the next `lvai_status` answers.
    Call it again: there is no second start.
 11. **Timeout with a dialog:** a call that times out while a dialog is up carries `possibleDialogs`.
+
+### Results, 2026-10-10 (LabVIEW 2026 Q3 32-bit, a throwaway project, the fork's own build)
+
+| item | result |
+|---|---|
+| 1 | **pass.** Fresh LabVIEW, nothing open: 20 hidden system windows, 2 frame windows, the service's; no `possibleDialogs`, no `hidden-unrecognised`. Every `LVDChild` window is owned by the visible `LVFrame`. `CiceroUIWndFrame` and `NI-RPC Message Thread Class` (seen on a LabVIEW in use) were added to the known classes; `VI Hierarchy` is not on a fresh LabVIEW and stays unrecognised. |
+| 2 | **pass**, with a person at the machine (13:3x): the user edited a class VI and closed its window. "Save changes before closing?" was listed under `possibleDialogs` (frame disabled, the VI's windows disabled, a hidden twin of the prompt as `hidden-unrecognised`). `lvai_restart_labview restart` WITH the go-ahead answered `stoppedBy: dialog` in 0.0 s. |
+| 3 | not run: no unrecognised hidden window appeared to override |
+| 4 | **pass.** A refused validate (`Error 53`) left `LVMCP Validate.vi Front Panel *` and `… Block Diagram *`, both hidden. `stoppedBy: unsaved`, `scratchVis` lists exactly those two, `closedByThisTool: false`, same pid. `Open VI Reference` by that name: 1004 in the helpers' instance and in the active project's; the probe's own name, 0 (positive control). The IDE's main instance was not probed. The go-ahead close that raises the save prompt needs the user. |
+| 5 | **pass** for `ownership`, with a person at the machine: the user opened a class VI and did not edit it; a restart without a go-ahead was refused, `whose: the user's`, `stoppedBy: unsaved` (the item 4 scratch VI was still in memory), two quiet samples. **Pass** for `busy` (3.86 CPU s in the first 15 s sample right after a project open), `activeProject` (another `projectPath` while a project is active), `autoSave` (one dummy file, removed again) and `unsaved` (item 4). LabVIEW stayed up with the same pid each time. `processes`, `service` and `memory` were not run. |
+| 6 | **pass** after a fix: 419 lines, none modified. The unreadable packed-library lines made `onlyServiceAndHelpers` false (section 6). Generating the helper left no scratch window. The modified-loose-VI half was not run. |
+| 7 | **pass** after the section 6 fix: a LabVIEW this server did not start, empty, no go-ahead: `whose: empty`, two quiet samples, memory read (419 lines, 96 unreadable, all in packed libraries). The first call answered `stillRunning` at 40 s and the second collected the answer. Close 3.2 s, start 22.1 s (a warm start), 56.2 s in all, new pid and port, the same `NI.NigelLocalService` pid, `LVAutoSave` 0 → 0. |
+| 8 | **pass** after a fix: `lvai_ensure_labview` from no LabVIEW (pid recorded), `lvai_open_file`, then `close` with `projectPath` and no go-ahead: `whose: started by this server`, the project saved and closed, close 3.98 s. Before the fix, the project opened as `Name.lvproj * - Project Explorer` before any edit, and the `unsaved` guard counted the tool's own project (section 3). After a project open, LabVIEW was busy for about 90 s (11–23 CPU s per 30 s). |
+| 9 | **pass**, with a person at the machine, and the go-ahead half of item 4: the user pressed Cancel on the item 2 prompt; `close` WITH the go-ahead answered `stillRunning` at 40.0 s, then `closeDidNotFinish`: `closeMainWindow: true`, 20.01 s waited, `dialogsNow` naming "Save changes? (Exit)", `sideEffects` none. The user saw both the edited VI and `LVMCP Validate.vi` listed, pressed "Don't Save - All", and LabVIEW exited. |
+| 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. So the chat appears to be needed when the local service is down, not after every LabVIEW start. |
+| 11 | not run: no call timed out |
+| C | **pass**, the real use case (14:27): an AF actor left hung by a lost early stop - its `Actor Core` clone and its helper loop at execState 3, the loop's front panel open, Abort not possible. `lvai_labview_state`: no dialog, CPU quiet; `lvai_vis_in_memory`: 499 lines, none modified, 95 `other` (the actor's and AF's VIs). `restart` WITH the go-ahead: `stillRunning` at 40 s, then `restarted`. `CloseMainWindow` closed the LabVIEW with the running actor in **1.72 s, with no prompt**; start 22.2 s, new pid and port, the same `NI.NigelLocalService` pid. |
+
+Found and fixed on the way: a new VI (`Untitled N`, section 4) blocked as a possible dialog. Its
+fix is unit-tested on the measured window list and has not been re-run live.
+
+LabVIEW auto-saves an unsaved project into `LVAutoSave` within minutes: two files named after the
+project file (`NI32LV2631f1ASD1_<name>.lvproj`, `…_<name>.txt`), removed at the clean close. By
+the user's decision of 2026-10-10 those files do not block a close that saves that project (it is
+`projectPath` and active); any other file still needs a go-ahead. The naming rests on one sample.
+
+## 13. Dialogs: screenshots, and the allowlist the server may answer
+
+**Screenshots.** LabVIEW draws its dialogs (`LVDChild`) without child controls, so Win32 cannot
+read their text or buttons. Each VISIBLE possible dialog in `lvai_labview_state` (parameter
+`screenshots`, on by default; a few ms, and only when a dialog is up) and in every dialog list of
+`lvai_restart_labview` carries `screenshot`: a PNG under `%TEMP%\LabVIEWMCP\dialogs`, taken with
+`PrintWindow` (`PW_RENDERFULLCONTENT`). The window renders itself into the picture whatever covers
+it, and nothing is brought to the front. A screen copy of the dialog's rectangle, tried first on
+2026-10-10, captured the terminal that lay on top of it. Each entry also has the dialog's `handle`.
+
+**Who may answer.** Until 2026-10-10 every dialog was the user's to answer. The user's decision
+of that day: "if you are operating labview on your own like starting and stopping then answering
+these by yourself is fine." `lvai_answer_dialog` implements exactly that, and nothing wider:
+
+1. The LabVIEW is the caller's own: started by THIS server process (the pid and start time that
+   `lvai_ensure_labview` recorded), or the caller passes `ownLabviewPid` equal to the running pid
+   with `ownNote` saying how its session started it. Otherwise: `notOwnLabview`.
+2. The dialog is on the allowlist, with the one answer each kind allows. Otherwise:
+   `notAllowlisted`.
+
+| `dialogKind` | the dialog | allowed `action` | extra conditions |
+|---|---|---|---|
+| `exitSaveScratchOnly` | "Save changes? (Exit)" | `Don't Save` (one VI listed), `Don't Save - All` (several), `Cancel` | for a Don't Save: every `*` window of the process is an `LVMCP …` scratch VI, and `listedVis` (every VI the dialog lists, read from its screenshot) are all `LVMCP …` |
+| `changedOnDisk` | the untitled "… has changed on disk since last saved or loaded by LabVIEW …" modal [Revert] [Cancel] | `Cancel` | untitled `LVDChild` classified as a possible dialog (section 4); `viName`, the VI this session touched |
+| `nigelBox` | a Win32 message box (`#32770`) of an `LVNigelChat` this server started | `OK` | |
+
+A refusal presses nothing and returns the screenshot, so the user can decide. Before the press,
+the window is read again (same handle, same title, still visible) and a `before` picture is
+taken. After it, the tool waits up to 10 s for the dialog to go and, for a Don't Save, up to
+20 s for LabVIEW to exit. The answer reports what was pressed, by which means, `dialogGone`,
+`processExited`, and the `asked`/`before`/`after` pictures. A press that does not take is reported
+as `dialogStillThere`, and nothing else is tried.
+
+**How it presses, measured 2026-10-10** (LabVIEW 2026 Q3 32-bit, Windows 10, 96 dpi, the
+caller's own LabVIEW, one `LVMCP Validate.vi` scratch VI in memory, the IDE closed through
+`lvai_restart_labview`):
+
+- **Cancel = Esc posted to the dialog window** (`WM_KEYDOWN`/`WM_KEYUP`, `PostMessage`). Nothing
+  was brought to the front. On the real "Save changes? (Exit)" prompt the dialog went in 0.6 s and
+  LabVIEW stayed.
+- **A named button = a left click posted where the button's PICTURE is found.** With one unsaved
+  VI the prompt reads "LVMCP Validate.vi has unsaved changes" with buttons Save / Don't Save /
+  Cancel. There is no "Don't Save - All" in that form. The "Don't Save" picture (58x15 px, the text
+  on the button face) was cut from a screenshot of that prompt and ships in `DialogButtons.cs`. It
+  was found again at 0.0 mean difference in three pictures of two prompts, and the next-best place
+  scored 21.2 (threshold 6). Before a click the tool searches a fresh picture and clicks only at a
+  single match. Another layout, DPI, theme or a hovered button finds nothing, and nothing is
+  pressed (`buttonNotFound`). Measured: the click was posted at (63,181) of the dialog, the dialog
+  went, and LabVIEW exited, 4.0 s in all. No real mouse moved.
+- **OK of a message box = `BM_CLICK` on its OK button**, the skill kit's measured route
+  (`lv_press_ok.ps1`) for a box raised by `LVNigelChat`.
+
+Not measured live, and unit-tested only: `Don't Save - All` (no picture yet, so it answers
+`buttonNotFound` until a multi-VI prompt has been measured), `changedOnDisk` and `nigelBox`.
+**`changedOnDisk` carries a warning.** On 2026-10-10 LabVIEW crashed on the next call after that
+dialog had been answered: a graft call had left a VI inconsistent in memory. Answering the dialog
+does not make the VI in memory safe, so close or restart LabVIEW next. That dialog was not raised
+on purpose to test this tool.

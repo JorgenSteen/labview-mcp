@@ -41,7 +41,9 @@ internal sealed class RestartTools(LvaiConnection connection)
         lvai_ensure_labview), the Nigel processes (NI.NigelLocalService, LVNigelChat), the
         LVAutoSave folder (resolved through the Documents known folder, which may be redirected)
         and its file count, every LabVIEW window sorted into kinds, and one CPU sample.
-        `unsaved` = titles with `*`. `possibleDialogs` = VISIBLE titled windows that are not a VI,
+        `unsaved` = titles with `*`. Each possible dialog carries `screenshot`, a PNG path to READ:
+        LabVIEW draws its dialogs, so the picture is the only way to see which one it is.
+        `possibleDialogs` = VISIBLE titled windows that are not a VI,
         project or frame window, and VISIBLE UNTITLED windows that a LabVIEW frame owns or that sit
         beside a disabled frame or Project Explorer (measured 2026-10-10: LabVIEW's "has changed on
         disk" prompt is untitled and owned by the frame, which it disables), each with a `reason`,
@@ -53,19 +55,21 @@ internal sealed class RestartTools(LvaiConnection connection)
         DDE, GDI+) and LabVIEW's measured hidden windows are not listed there. A VI panel
         with a custom window title is flagged too - look at it. CPU: quiet below 1 CPU s per 30 s,
         the threshold the skill measured with; idle is not safe - a modal dialog leaves LabVIEW
-        idle. The window classes and titles come from a measured listing; this C# port itself is
-        UNMEASURED (docs/labview-restart.md).
+        idle. The window classes and titles come from measured listings; the port ran against
+        LabVIEW 2026 Q3 on 2026-10-10 (docs/labview-restart.md section 12).
         """)]
     public static async Task<string> LabViewStateAsync(
         [Description("Seconds of CPU sampling, 0 to skip (capped at 30)")] int cpuSampleSeconds = 5,
         [Description("Also list hidden system windows (normally left out)")] bool includeHiddenWindows = false,
+        [Description(@"A PNG of each VISIBLE possible dialog (PrintWindow: nothing is brought to the front), path under `screenshot`, in %TEMP%\LabVIEWMCP\dialogs. On by default: a few ms, and only when a dialog is up.")]
+        bool screenshots = true,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
-            (await StateAsync(Win32LabViewMachine.Instance, null, cpuSampleSeconds, includeHiddenWindows, ct))
-                .ToJsonString(Indented));
+            (await StateAsync(Win32LabViewMachine.Instance, null, cpuSampleSeconds, includeHiddenWindows, ct,
+                              screenshots)).ToJsonString(Indented));
 
     internal static async Task<JsonObject> StateAsync(ILabViewMachine machine, string? autoSaveDirectory,
-        int cpuSampleSeconds, bool includeHiddenWindows, CancellationToken ct)
+        int cpuSampleSeconds, bool includeHiddenWindows, CancellationToken ct, bool screenshots = true)
     {
         var s = LabViewState.Take(machine, autoSaveDirectory);
         var now = machine.Now;
@@ -108,8 +112,8 @@ internal sealed class RestartTools(LvaiConnection connection)
             ["autoSave"] = s.AutoSave.ToJson(),
             ["windowCounts"] = counts,
             ["unsaved"] = new JsonArray([.. s.Unsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
-            ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
-            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
+            ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, screenshots))]),
+            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, false))]),
             ["windows"] = new JsonArray([.. visibleOrFlagged.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
             ["cpu"] = cpu,
             ["note"] = "No LabVIEW call was made. A modified VI with no open window does not show here, " +
@@ -134,7 +138,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         an `LVMCP Validate` VI in memory, which can itself raise the save prompt at LabVIEW's exit;
         lvai_restart_labview therefore never generates it and reports the memory check as not run
         until it exists. The helper is ported unchanged from a skill kit helper measured
-        2026-10-07/08 (419 lines, none modified); this tool around it is UNMEASURED.
+        2026-10-07/08 (419 lines, none modified). This tool measured 2026-10-10: 419 lines, none
+        modified; NI's packed-library .ctl lines answer 1035 and do not count against "empty".
         """)]
     public async Task<string> VisInMemoryAsync(
         [Description("Regenerate the helper VI even when it already exists")] bool regenerateHelper = false,
@@ -231,6 +236,51 @@ internal sealed class RestartTools(LvaiConnection connection)
             : $"could not generate the helper VI '{helperVi}': {generation.ErrorMessage}";
     }
 
+    // ------------------------------------------------------------------ dialogs
+
+    [McpServerTool(Name = "lvai_answer_dialog", Destructive = true, OpenWorld = true,
+                   Title = "Answer one allowlisted dialog in YOUR OWN LabVIEW")]
+    [Description("""
+        MUTATING: presses one button of one dialog. ONLY in the caller's own LabVIEW - started by THIS
+        server (lvai_ensure_labview recorded it), or ownLabviewPid = the running pid with ownNote
+        saying this session started it - and ONLY these kinds (the user's decision of 2026-10-10:
+        operating LabVIEW on your own, answering its dialogs is fine; anything else is the user's):
+        exitSaveScratchOnly - "Save changes? (Exit)" where every `*` window of the process is an
+        LVMCP scratch VI AND listedVis (every VI the dialog lists, read from its screenshot) are all
+        `LVMCP …`: action "Don't Save" (ONE VI listed: buttons Save / Don't Save / Cancel, measured)
+        or "Don't Save - All" (several VIs: no measured picture yet, so it presses nothing), or
+        "Cancel". LabVIEW then exits; the answer waits up to 20 s for that.
+        changedOnDisk - LabVIEW's untitled "… has changed on disk since last saved or loaded by
+        LabVIEW" modal [Revert][Cancel], on a VI this session touched (viName): action "Cancel".
+        WARNING, measured 2026-10-10: LabVIEW CRASHED on the next call after this dialog had been
+        answered. Answering it does not make the VI in memory safe; close or restart LabVIEW next.
+        Not exercised live by this tool (unit tests only).
+        nigelBox - a message box of an LVNigelChat this server started: action "OK".
+        Anything else: refused (notAllowlisted, notOwnLabview) with the screenshot; nothing pressed.
+        The window is read again right before the press (same handle, title, still visible), with
+        screenshots asked/before/after. Means, all POSTED to the dialog window, nothing brought to
+        the front: Cancel = Esc; a named button = a click where its picture, cut from a measured
+        screenshot, is found again (not found = nothing pressed); OK = BM_CLICK. The answer says
+        what was pressed, how, whether the dialog went and (Don't Save - All) whether LabVIEW exited.
+        Take the handle and screenshot from lvai_labview_state or lvai_restart_labview's dialogs.
+        """)]
+    public static async Task<string> AnswerDialogAsync(
+        [Description("The dialog window's handle, as lvai_labview_state lists it")] long handle,
+        [Description("exitSaveScratchOnly, changedOnDisk or nigelBox")] string dialogKind,
+        [Description("\"Don't Save\", \"Don't Save - All\", \"Cancel\" or \"OK\" - see the description for which kind allows which")]
+        string action,
+        [Description("The LabVIEW pid your session started, when this server process did not start it")]
+        int? ownLabviewPid = null,
+        [Description("With ownLabviewPid: how your session started it (the call, the time)")] string? ownNote = null,
+        [Description("exitSaveScratchOnly: every VI the dialog lists, as read from its screenshot, one per line")]
+        string? listedVis = null,
+        [Description("changedOnDisk: the VI this session touched that the dialog names")] string? viName = null,
+        CancellationToken ct = default) =>
+        await Rpc.GuardAsync(async () =>
+            (await DialogAnswer.RunAsync(
+                new DialogAnswerRequest(handle, dialogKind, action, ownLabviewPid, ownNote, listedVis, viName),
+                Win32LabViewMachine.Instance, NigelChat.StartedChat, ct)).ToJsonString(Indented));
+
     // ------------------------------------------------------------------ restart
 
     /// <summary>How long one call waits before answering "still running" - under the client's 60 s.</summary>
@@ -285,8 +335,10 @@ internal sealed class RestartTools(LvaiConnection connection)
         means call again with the SAME arguments to collect the answer - it never starts a second
         restart. The report has before/after pids, start times, ports, the Nigel service pid, the
         LVAutoSave count before and after, and the side effects.
-        The route is the measured one of a LabVIEW skill (labview-mcp 1.8.5); this C# port is
-        UNMEASURED - docs/labview-restart.md has the checklist.
+        The route is the measured one of a LabVIEW skill (labview-mcp 1.8.5). This port measured
+        2026-10-10: the empty restart, the server-started close and the busy, activeProject, autoSave
+        and unsaved refusals (close 3.2-4.0 s, warm start 22 s); docs/labview-restart.md section 12
+        lists what is still open.
         """)]
     public async Task<string> RestartLabViewAsync(
         [Description("'close' or 'restart'")] string mode,

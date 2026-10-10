@@ -370,7 +370,7 @@ public class LabViewRestartTests
         Assert.Contains(a["sideEffects"]!.AsArray(), s => s!.GetValue<string>().Contains("SAVED and closed"));
     }
 
-    /// <summary>Measured 2026-10-10: lvai_open_file left `PB-H10.lvproj * - Project Explorer` before any edit.</summary>
+    /// <summary>Measured 2026-10-10: lvai_open_file left `Probe.lvproj * - Project Explorer` before any edit.</summary>
     [Fact]
     public async Task This_session_s_own_unsaved_project_is_saved_by_the_project_close_not_refused()
     {
@@ -383,6 +383,45 @@ public class LabViewRestartTests
         Assert.Contains("closeProject " + MyProject, w.Log);
         Assert.Single(w.M.ClosesSent);
     }
+
+    /// <summary>Q59, one sample: LabVIEW's recovery copies of the active own project do not block.</summary>
+    [Fact]
+    public async Task Recovery_copies_of_this_session_s_active_project_do_not_need_the_go_ahead()
+    {
+        var w = new World { ServerStarted = true, Active = new ActiveProjectProbe(true, MyProject, "active") };
+        w.M.AddWindow(10, "LVDChild", "Mine.lvproj * - Project Explorer", true);
+        w.M.Folders[AutoSave] = [AutoSave + @"\NI32LV2631f1ASD1_Mine.lvproj", AutoSave + @"\NI32LV2631f1ASD1_Mine.txt"];
+        w.OnProjectClose = () => w.M.Folders[AutoSave] = [];
+        var a = await w.Run("close", project: MyProject);
+
+        Assert.True(a["ok"]!.GetValue<bool>());
+        Assert.True(a["guards"]!["ownProjectAutoSave"]!["setAsideBecauseTheCloseSavesIt"]!.GetValue<bool>());
+        Assert.Single(w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task Any_other_auto_save_file_still_needs_the_go_ahead_and_so_do_the_own_ones_when_not_active()
+    {
+        var w = new World { ServerStarted = true, Active = new ActiveProjectProbe(true, MyProject, "active") };
+        w.M.Folders[AutoSave] = [AutoSave + @"\NI32LV2631f1ASD1_Mine.lvproj", AutoSave + @"\NI32LV2631f1ASD1_Theirs.lvproj"];
+        Assert.Equal("autoSave", Str(await w.Run("close", project: MyProject), "stoppedBy"));
+
+        var x = new World { ServerStarted = true };   // no project active
+        x.M.Folders[AutoSave] = [AutoSave + @"\NI32LV2631f1ASD1_Mine.lvproj"];
+        Assert.Equal("autoSave", Str(await x.Run("close", project: MyProject), "stoppedBy"));
+        Assert.Empty(w.M.ClosesSent);
+        Assert.Empty(x.M.ClosesSent);
+    }
+
+    [Theory]
+    [InlineData("NI32LV2631f1ASD1_Mine.lvproj", true)]
+    [InlineData("NI32LV2631f1ASD1_Mine.txt", true)]
+    [InlineData(@"sub\NI64LV2631f1ASD12_mine.LVPROJ", true)]
+    [InlineData("NI32LV2631f1ASD1_Main.vi", false)]
+    [InlineData("Mine.lvproj", false)]
+    [InlineData("NI32LV2631f1ASD1_NotMine.lvproj", false)]
+    public void Only_labview_s_recovery_names_of_the_own_project_file_match(string file, bool own) =>
+        Assert.Equal(own, LabViewRestart.IsOwnProjectAutoSave(file, "Mine.lvproj"));
 
     [Fact]
     public async Task This_session_s_unsaved_project_that_is_not_active_still_needs_the_go_ahead()

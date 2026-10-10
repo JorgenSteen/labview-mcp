@@ -25,11 +25,22 @@ internal sealed record VisInMemoryReading(IReadOnlyList<VisInMemoryEntry> Entrie
     public IReadOnlyList<VisInMemoryEntry> Other => [.. Entries.Where(e => e.Origin == VisInMemory.OriginOther)];
 
     /// <summary>
+    /// Unreadable lines that still leave the answer unknown: NOT those of NI's packed libraries.
+    /// Measured 2026-10-10 on a fresh LabVIEW 2026 Q3: 20 of the 419 lines, every one a `.ctl` of
+    /// `LV AI gRPC Service.lvlibp` or `LV AI Core.lvlibp`, answered error 1035 and nothing else
+    /// did. A packed library is built, read-only code that cannot hold anybody's unsaved edits, so
+    /// requiring those lines to be readable made the empty rule fail on every LabVIEW.
+    /// </summary>
+    public IReadOnlyList<VisInMemoryEntry> UnreadableThatMatters =>
+        [.. Unreadable.Where(e => e.Origin is not (VisInMemory.OriginService or VisInMemory.OriginLabView))];
+
+    /// <summary>
     /// The user's "empty" rule applied to memory: nothing but NI's service, LabVIEW's own start
-    /// window and labview-mcp's helpers, nothing modified, and every line readable.
+    /// window and labview-mcp's helpers, nothing modified, and every line readable outside NI's
+    /// packed libraries (<see cref="UnreadableThatMatters"/>).
     /// </summary>
     public bool OnlyServiceAndHelpers =>
-        Other.Count == 0 && Modified.Count == 0 && Unreadable.Count == 0 && Unparsed.Count == 0;
+        Other.Count == 0 && Modified.Count == 0 && UnreadableThatMatters.Count == 0 && Unparsed.Count == 0;
 
     public JsonObject ToJson() => new()
     {
@@ -45,6 +56,8 @@ internal sealed record VisInMemoryReading(IReadOnlyList<VisInMemoryEntry> Entrie
         // full listing spilled the answer to a file in the skill's runs.
         ["modified"] = Lines(Modified),
         ["unreadable"] = Lines(Unreadable.Take(20)),
+        ["unreadableCount"] = Unreadable.Count,
+        ["unreadableOutsidePackedLibraries"] = UnreadableThatMatters.Count,
         ["other"] = new JsonArray([.. Other.Take(50).Select(e => (JsonNode)JsonValue.Create(e.Name)!)]),
         ["otherTruncated"] = Other.Count > 50 ? true : null,
         ["unparsedLines"] = Unparsed.Count > 0 ? Unparsed.Count : null,

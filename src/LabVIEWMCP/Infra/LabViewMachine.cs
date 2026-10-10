@@ -18,7 +18,7 @@ internal sealed record MachineWindow(long Handle, int ProcessId, string ClassNam
                                      long Owner = 0, bool Enabled = true);
 
 /// <summary>One child window of a dialog: a button or a static text, when the dialog has any.</summary>
-internal sealed record MachineChild(string ClassName, string Text);
+internal sealed record MachineChild(string ClassName, string Text, long Handle = 0);
 
 /// <summary>What <see cref="ILabViewMachine.CloseMainWindow"/> did. It never kills.</summary>
 /// <param name="Found">The process was there to close.</param>
@@ -69,6 +69,26 @@ internal interface ILabViewMachine
     CloseOutcome CloseMainWindow(int processId, TimeSpan wait);
 
     Task Delay(TimeSpan delay, CancellationToken ct);
+
+    /// <summary>
+    /// A picture of one window as it renders itself (PrintWindow), whatever covers it; nothing is
+    /// brought to the front. Null when the window is gone or cannot be captured.
+    /// </summary>
+    WindowImage? Capture(long handle);
+
+    // ---- input, for lvai_answer_dialog only: posted to ONE window, nothing brought to the front ----
+
+    /// <summary>Post a key press (WM_KEYDOWN + WM_KEYUP) to the window. False when the post failed.</summary>
+    bool PostKey(long handle, int virtualKey);
+
+    /// <summary>
+    /// Post a left click at (<paramref name="windowX"/>, <paramref name="windowY"/>), measured from the
+    /// window's top-left corner as in its <see cref="Capture"/> picture.
+    /// </summary>
+    bool PostClick(long handle, int windowX, int windowY);
+
+    /// <summary>BM_CLICK posted to a Win32 button (a message box's OK).</summary>
+    bool ClickButton(long buttonHandle);
 }
 
 /// <summary>The real machine: Win32 window enumeration and System.Diagnostics.Process.</summary>
@@ -127,7 +147,7 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
 
         EnumChildWindows(new IntPtr(handle), (child, _) =>
         {
-            rows.Add(new MachineChild(ClassOf(child), TextOf(child)));
+            rows.Add(new MachineChild(ClassOf(child), TextOf(child), child.ToInt64()));
             return rows.Count < 64;   // a dialog with more children than this is not a dialog
         }, IntPtr.Zero);
         return rows;
@@ -224,6 +244,79 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
 
     public Task Delay(TimeSpan delay, CancellationToken ct) => Task.Delay(delay, ct);
 
+    public bool PostKey(long handle, int virtualKey)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        var window = new IntPtr(handle);
+        var scan = MapVirtualKey((uint)virtualKey, 0);
+        var down = (IntPtr)(1 | (scan << 16));
+        var up = (IntPtr)unchecked((int)(1 | (scan << 16) | 0xC0000000));
+        return PostMessage(window, 0x0100, (IntPtr)virtualKey, down) &&      // WM_KEYDOWN
+               PostMessage(window, 0x0101, (IntPtr)virtualKey, up);          // WM_KEYUP
+    }
+
+    public bool PostClick(long handle, int windowX, int windowY)
+    {
+        if (!OperatingSystem.IsWindows()) return false;
+        var window = new IntPtr(handle);
+        if (!GetWindowRect(window, out var rect)) return false;
+        var origin = new Point { X = 0, Y = 0 };
+        if (!ClientToScreen(window, ref origin)) return false;
+        // Picture coordinates are from the window's corner; mouse messages want client coordinates.
+        var x = windowX - (origin.X - rect.Left);
+        var y = windowY - (origin.Y - rect.Top);
+        var at = (IntPtr)((y << 16) | (x & 0xFFFF));
+        return PostMessage(window, 0x0200, IntPtr.Zero, at) &&            // WM_MOUSEMOVE
+               PostMessage(window, 0x0201, (IntPtr)1, at) &&              // WM_LBUTTONDOWN, MK_LBUTTON
+               PostMessage(window, 0x0202, IntPtr.Zero, at);              // WM_LBUTTONUP
+    }
+
+    public bool ClickButton(long buttonHandle) =>
+        OperatingSystem.IsWindows() && PostMessage(new IntPtr(buttonHandle), 0x00F5, IntPtr.Zero, IntPtr.Zero);
+
+    public WindowImage? Capture(long handle)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var window = new IntPtr(handle);
+        if (!IsWindow(window) || !GetWindowRect(window, out var rect)) return null;
+        var width = rect.Right - rect.Left;
+        var height = rect.Bottom - rect.Top;
+        if (width <= 0 || height <= 0 || width > 8000 || height > 8000) return null;
+
+        var screen = GetDC(IntPtr.Zero);
+        var memory = CreateCompatibleDC(screen);
+        var bitmap = CreateCompatibleBitmap(screen, width, height);
+        var old = SelectObject(memory, bitmap);
+        try
+        {
+            // PW_RENDERFULLCONTENT (2): the window draws itself into our DC, covered or not.
+            if (!PrintWindow(window, memory, 2)) return null;
+            SelectObject(memory, old);
+            old = IntPtr.Zero;
+            var info = new BitmapInfo
+            {
+                Size = 40, Width = width, Height = -height, Planes = 1, BitCount = 32, Compression = 0,
+            };
+            var bgra = new byte[width * height * 4];
+            if (GetDIBits(memory, bitmap, 0, (uint)height, bgra, ref info, 0) == 0) return null;
+            var rgb = new byte[width * height * 3];
+            for (int i = 0, j = 0; i < bgra.Length; i += 4, j += 3)
+            {
+                rgb[j] = bgra[i + 2];
+                rgb[j + 1] = bgra[i + 1];
+                rgb[j + 2] = bgra[i];
+            }
+            return new WindowImage(width, height, rgb);
+        }
+        finally
+        {
+            if (old != IntPtr.Zero) SelectObject(memory, old);
+            DeleteObject(bitmap);
+            DeleteDC(memory);
+            ReleaseDC(IntPtr.Zero, screen);
+        }
+    }
+
     // ---------- Win32 ----------
 
     private delegate bool EnumProc(IntPtr window, IntPtr param);
@@ -247,6 +340,38 @@ internal sealed class Win32LabViewMachine : ILabViewMachine
     private static extern bool CloseHandle(IntPtr handle);
 
     private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Rect { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BitmapInfo
+    {
+        public uint Size; public int Width; public int Height; public ushort Planes; public ushort BitCount;
+        public uint Compression; public uint SizeImage; public int XPelsPerMeter; public int YPelsPerMeter;
+        public uint ClrUsed; public uint ClrImportant;
+        public uint Color0, Color1, Color2, Color3;   // room for masks: GetDIBits may write them
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Point { public int X, Y; }
+
+    [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr window, int message, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] private static extern uint MapVirtualKey(uint code, uint mapType);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int width, int height);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")]
+    private static extern int GetDIBits(IntPtr dc, IntPtr bitmap, uint start, uint lines, byte[] bits,
+                                        ref BitmapInfo info, uint usage);
     private const uint GwOwner = 4;
 
     private static string ClassOf(IntPtr window)

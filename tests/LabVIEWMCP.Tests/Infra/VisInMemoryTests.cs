@@ -59,6 +59,25 @@ public class VisInMemoryTests
         Assert.False(reading.OnlyServiceAndHelpers);
     }
 
+    /// <summary>Measured 2026-10-10: 20 of 419 lines on a fresh LabVIEW, all NI packed-library .ctl, answered 1035.</summary>
+    [Fact]
+    public void Unreadable_lines_of_NI_s_packed_libraries_do_not_stop_it_being_empty()
+    {
+        var reading = VisInMemory.Parse(
+        [
+            "0	0	1035	LV AI gRPC Service.lvlibp:lvai_DiscussFileType.ctl",
+            "0	0	1035	LV AI Core.lvlibp:VI Info.ctl",
+            "0	0	0	GSW.lvlibp:Main.vi",
+        ], Helpers);
+        Assert.Equal(2, reading.Unreadable.Count);
+        Assert.Empty(reading.UnreadableThatMatters);
+        Assert.True(reading.OnlyServiceAndHelpers);
+        Assert.Equal(0, reading.ToJson()["unreadableOutsidePackedLibraries"]!.GetValue<int>());
+
+        var mine = VisInMemory.Parse(["0	0	1035	My.lvlib:Type.ctl"], Helpers);
+        Assert.False(mine.OnlyServiceAndHelpers);
+    }
+
     [Fact]
     public void A_helper_name_is_bare_never_library_qualified()
     {
