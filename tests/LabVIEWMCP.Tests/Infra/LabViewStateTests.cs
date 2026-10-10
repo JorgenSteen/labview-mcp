@@ -17,13 +17,13 @@ public class LabViewWindowClassifierTests
 
     /// <summary>The kit's own self-test samples, which the port must keep answering the same way.</summary>
     [Theory]
-    [InlineData("ZM-receiver.vi", true, WindowKinds.Vi)]
-    [InlineData("ZM-launcher.vi Front Panel on Zuehlke MCP.lvproj/My Computer", true, WindowKinds.Vi)]
-    [InlineData("ZM-launcher.vi Block Diagram on Zuehlke MCP.lvproj/My Computer", true, WindowKinds.Vi)]
-    [InlineData("Zuehlke MCP.lvproj - Project Explorer", true, WindowKinds.Project)]
+    [InlineData("Receiver.vi", true, WindowKinds.Vi)]
+    [InlineData("Launcher.vi Front Panel on Pilot.lvproj/My Computer", true, WindowKinds.Vi)]
+    [InlineData("Launcher.vi Block Diagram on Pilot.lvproj/My Computer", true, WindowKinds.Vi)]
+    [InlineData("Pilot.lvproj - Project Explorer", true, WindowKinds.Project)]
     [InlineData("LabVIEW", true, WindowKinds.Frame)]
     [InlineData("Getting Started", true, WindowKinds.GettingStarted)]
-    [InlineData("*ZM-ROOT-helper_loop.vi Block Diagram", true, WindowKinds.Unsaved)]
+    [InlineData("*Root-helper_loop.vi Block Diagram", true, WindowKinds.Unsaved)]
     [InlineData("Save Changes", true, WindowKinds.PossibleDialog)]
     [InlineData("Receiver", true, WindowKinds.PossibleDialog)]
     [InlineData("Context Help", false, WindowKinds.HiddenSystem)]

@@ -395,3 +395,27 @@ public class LabViewRestartTests
         Assert.Equal("no kill, no dialog answered, no Nigel process touched", Str(a, "neverDone"));
     }
 }
+
+/// <summary>The tool refuses a bad request before it reads, samples or closes anything.</summary>
+public class RestartToolArgumentTests
+{
+    private static LabVIEWMcp.Tools.RestartTools Tool() =>
+        new(new LabVIEWMcp.Grpc.LvaiConnection(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LabVIEWMcp.Grpc.LvaiConnection>.Instance, 1));
+
+    [Theory]
+    [InlineData("reboot")]
+    [InlineData("")]
+    public async Task An_unknown_mode_is_refused(string mode)
+    {
+        var o = JsonNode.Parse(await Tool().RestartLabViewAsync(mode))!.AsObject();
+        Assert.Equal("badMode", o["errorKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task A_project_path_that_is_not_an_existing_lvproj_is_refused()
+    {
+        var o = JsonNode.Parse(await Tool().RestartLabViewAsync("close", projectPath: @"X:\nowhere\P.lvproj"))!.AsObject();
+        Assert.Equal("noSuchProject", o["errorKind"]!.GetValue<string>());
+    }
+}
