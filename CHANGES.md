@@ -40,7 +40,8 @@ and unit-tested, LabVIEW measurement not finished yet.
 - Small fixes: `methodNotPublic` refusal in `lvai_create_message_class`; the library-before-messages rule in two tool
   descriptions; CLAUDE.md routes AF overrides to the new tools (its index sent agents to `lvai_add_class_method`,
   which builds an override without Call Parent); stale descriptions corrected.
-- Status: pending (measurement running).
+- Status: **measured 2026-10-10**; two bugs found and fixed on the way (a hook named like the override matched Call
+  Parent; a `vi`-only re-run dropped the member). The unsaved-edit check sees hand edits, not scripted ones.
 
 ## 3. `feat/restart-guards`: guarded LabVIEW restart (6 commits)
 - **`lvai_labview_state`** (no LabVIEW call): LabVIEW and Nigel processes, every LabVIEW window classified, unsaved

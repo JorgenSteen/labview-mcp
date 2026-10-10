@@ -7,10 +7,11 @@ each branch's docs with their date; this file is the overview.
 | Branch | Status | Result |
 |---|---|---|
 | `feat/class-icons` | measured 2026-10-10 | 6 of 8 checks pass, 1 skipped (needs more than 100 members), 1 failed and fixed (non-Latin-1 paths). Details in the branch's `docs/class-icons.md` §6 and `pr/feat-class-icons.md`. |
-| `feat/af-overrides` | running | |
-| `docs/af-lifecycle-overrides` | to do | nine claims marked unmeasured or reasoned |
+| `feat/af-overrides` | measured 2026-10-10 | all tool routes pass; 2 bugs found and fixed; scripted edits are invisible to the unsaved-edit check (hand edits are caught). Details in `pr/feat-af-overrides.md`. |
+| `docs/af-lifecycle-overrides` | running | nine claims marked unmeasured or reasoned |
 | `feat/restart-guards` | to do (needs real LabVIEW restarts) | |
 
 ## Still open per branch
 - **class-icons:** the apply helper's list-file twin (more than 100 members); an editable text layer made in the icon
   editor.
+- **af-overrides:** restoring a member's virtual folder after a re-add.
