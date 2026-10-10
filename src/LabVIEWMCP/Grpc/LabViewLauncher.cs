@@ -143,6 +143,68 @@ internal static class LabViewLauncher
     private static IReadOnlySet<int> CurrentPids() =>
         LabViewLocator.RunningInstances().Select(p => p.Id).ToHashSet();
 
+    /// <summary>
+    /// The same survive-the-job-object launch for another program that must outlive this server - the
+    /// Nigel chat, which LabVIEW's own menu plug-in starts with arguments. Judged the same way: a
+    /// process of <paramref name="processName"/> that appeared and is still alive after the survival
+    /// window.
+    ///
+    /// TWO ROUTES, NOT THREE. The Explorer hand-off is left out on purpose: `explorer.exe "exe"`
+    /// carries no arguments, and the chat started without both `--lv-version` and `--lv-bitness`
+    /// does not exit and leaves a modal "Object reference not set to an instance of an object." box
+    /// (measured by the LabVIEW skill whose kit this ports). A route that can only start it wrongly
+    /// is worse than one fewer route.
+    /// </summary>
+    public static async Task<LaunchOutcome> StartProgramAndConfirmAsync(
+        string exePath, string arguments, Func<IReadOnlySet<int>> listPids, CancellationToken ct = default)
+    {
+        var attempts = new List<LaunchAttempt>();
+
+        (string Name, Func<(bool Started, string? Detail)> Launch)[] strategies =
+        [
+            ("breakaway", () => StartBreakaway(exePath, arguments)),
+            ("shell", () => StartProgramViaShell(exePath, arguments)),
+        ];
+
+        foreach (var (name, launch) in strategies)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var before = listPids();
+            var (started, detail) = launch();
+            if (!started)
+            {
+                attempts.Add(new LaunchAttempt(name, false, false, false, detail));
+                continue;
+            }
+
+            var (appeared, survived, pid) = await ConfirmAsync(
+                listPids, before, AppearWindow, SurviveWindow, PollInterval, ct);
+
+            attempts.Add(new LaunchAttempt(name, true, appeared, survived, detail));
+            if (survived) return new LaunchOutcome(true, name, pid, attempts);
+        }
+
+        return new LaunchOutcome(false, null, null, attempts);
+    }
+
+    private static (bool Started, string? Detail) StartProgramViaShell(string exePath, string arguments)
+    {
+        try
+        {
+            var process = Process.Start(new ProcessStartInfo(exePath, arguments)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetDirectoryName(exePath) ?? "",
+            });
+            return (true, process is null ? "ShellExecuteEx returned no process handle" : $"pid {process.Id}");
+        }
+        catch (Exception e)
+        {
+            return (false, $"{e.GetType().Name}: {e.Message}");
+        }
+    }
+
     // ---------- strategy 1: create the process outside our job ----------
 
     private const uint CreateBreakawayFromJob = 0x0100_0000;
@@ -158,26 +220,31 @@ internal static class LabViewLauncher
     /// Fails with Win32 5 (access denied) when the job does not carry JOB_OBJECT_LIMIT_BREAKAWAY_OK
     /// - which is exactly why there are further strategies rather than an exception here.
     /// </summary>
-    private static (bool Started, string? Detail) StartBreakaway(LabViewInstall install)
+    private static (bool Started, string? Detail) StartBreakaway(LabViewInstall install) =>
+        StartBreakaway(install.ExePath, arguments: null);
+
+    private static (bool Started, string? Detail) StartBreakaway(string exePath, string? arguments)
     {
         if (!OperatingSystem.IsWindows())
             return (false, "not Windows");
 
         var startupInfo = new StartupInfo { cb = Marshal.SizeOf<StartupInfo>() };
         // CreateProcessW may write into lpCommandLine, so it must be a writable buffer.
-        var commandLine = new StringBuilder($"\"{install.ExePath}\"");
+        var commandLine = new StringBuilder(string.IsNullOrEmpty(arguments)
+            ? $"\"{exePath}\""
+            : $"\"{exePath}\" {arguments}");
 
         try
         {
             var ok = CreateProcessW(
-                install.ExePath,
+                exePath,
                 commandLine,
                 IntPtr.Zero,
                 IntPtr.Zero,
                 bInheritHandles: false,
                 CreateBreakawayFromJob | DetachedProcess | CreateNewProcessGroup,
                 IntPtr.Zero,
-                Path.GetDirectoryName(install.ExePath),
+                Path.GetDirectoryName(exePath),
                 ref startupInfo,
                 out var info);
 

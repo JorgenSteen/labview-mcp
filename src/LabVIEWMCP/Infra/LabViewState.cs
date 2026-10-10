@@ -1,0 +1,317 @@
+// =============================================================================
+// LabViewState.cs - what a running LabVIEW looks like from outside, with no LabVIEW
+// call: processes, classified windows (unsaved, possible dialogs), LVAutoSave, CPU.
+// =============================================================================
+using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
+
+namespace LabVIEWMcp.Infra;
+
+/// <summary>A top-level window with the kind the guards gave it.</summary>
+internal sealed record ClassifiedWindow(MachineWindow Window, string Kind)
+{
+    /// <summary>An unsaved window of labview-mcp's own scratch VIs (`LVMCP Validate…`, `LVMCP Convert…`).</summary>
+    public bool IsLabViewMcpScratch => Kind == WindowKinds.Unsaved && LabViewState.IsScratchTitle(Window.Title);
+}
+
+/// <summary>The kinds a LabVIEW window is sorted into. Strings, because they go into the answer as they are.</summary>
+internal static class WindowKinds
+{
+    public const string Unsaved = "unsaved";
+    public const string Frame = "labview-frame";
+    public const string GettingStarted = "getting-started";
+    public const string Project = "project";
+    public const string Vi = "vi";
+    public const string Service = "service";
+    public const string HiddenSystem = "hidden-system";
+    public const string Untitled = "untitled";
+    public const string PossibleDialog = "possible-dialog";
+}
+
+/// <summary>The LVAutoSave folder as found. <see cref="Count"/> is -1 when the folder could not be read.</summary>
+internal sealed record AutoSaveState(string Directory, bool Exists, int Count, IReadOnlyList<string> Sample)
+{
+    public JsonObject ToJson() => new()
+    {
+        ["path"] = Directory,
+        ["exists"] = Exists,
+        ["count"] = Count,
+        ["files"] = new JsonArray([.. Sample.Select(f => (JsonNode)JsonValue.Create(f)!)]),
+    };
+}
+
+/// <summary>One CPU sample of one process over one window.</summary>
+internal sealed record CpuSample(DateTime At, double WindowSeconds, double? CpuSeconds, bool? Busy,
+                                 IReadOnlyList<string> VisibleTitles)
+{
+    public JsonObject ToJson() => new()
+    {
+        ["at"] = At.ToString("HH:mm:ss"),
+        ["windowSeconds"] = WindowSeconds,
+        ["cpuSeconds"] = CpuSeconds,
+        ["verdict"] = Busy switch { true => "busy", false => "quiet", null => "unreadable" },
+        ["visibleTitles"] = new JsonArray([.. VisibleTitles.Select(t => (JsonNode)JsonValue.Create(t)!)]),
+    };
+}
+
+/// <summary>Everything read in one pass, at one time.</summary>
+internal sealed record LabViewSnapshot(
+    DateTime At,
+    IReadOnlyList<MachineProcess> LabView,
+    IReadOnlyList<MachineProcess> NigelService,
+    IReadOnlyList<MachineProcess> NigelChat,
+    AutoSaveState AutoSave,
+    IReadOnlyList<ClassifiedWindow> Windows)
+{
+    public IEnumerable<ClassifiedWindow> Of(string kind) => Windows.Where(w => w.Kind == kind);
+    public IReadOnlyList<ClassifiedWindow> Dialogs => [.. Of(WindowKinds.PossibleDialog)];
+    public IReadOnlyList<ClassifiedWindow> Unsaved => [.. Of(WindowKinds.Unsaved)];
+
+    /// <summary>The one LabVIEW, or null when there is none or more than one.</summary>
+    public MachineProcess? Single => LabView.Count == 1 ? LabView[0] : null;
+}
+
+/// <summary>
+/// Reading a running LabVIEW from the outside: the port of the skill's `lv_windows.ps1` and
+/// `wait_lv_idle.ps1`, with one deliberate difference.
+///
+/// INVISIBLE IS NOT "NOT A DIALOG". The script flags only VISIBLE windows as possible dialogs. Measured
+/// 2026-10-06 (docs/scratch-vis-in-memory.md §2a): an `Error list` and an `Externally Changed Files
+/// List` dialog that the user saw on screen and could not click both reported `IsWindowVisible` FALSE.
+/// So here a titled window counts as a possible dialog whatever its visibility, unless its title is
+/// one of LabVIEW's measured hidden system windows or its CLASS is one of the measured non-LabVIEW
+/// helper classes (IME, OLE, DDE, GDI+, WPF's HwndWrapper). Both lists come from one `-All` window
+/// listing of a production LabVIEW 2026 Q3 on 2026-10-07; a hidden window of a class or title not in
+/// them is flagged, and the answer names its class, so the list can be extended from a measurement
+/// rather than from a guess.
+/// </summary>
+internal static class LabViewState
+{
+    public const string LabViewProcess = "LabVIEW";
+    public const string NigelServiceProcess = "NI.NigelLocalService";
+    public const string NigelChatProcess = "LVNigelChat";
+
+    /// <summary>Hidden LabVIEW windows that are never a dialog (the kit's ignore list, measured).</summary>
+    internal static readonly HashSet<string> HiddenSystemTitles = new(StringComparer.Ordinal)
+    {
+        "Context Help", "Tools", "Set Title", "RunService.vi", "Closed", "Window monitor",
+    };
+
+    /// <summary>
+    /// Window classes that live in LabVIEW.exe without being LabVIEW's own - input method editors,
+    /// OLE and DDE plumbing, GDI+, NI's licence manager's WPF host. Measured 2026-10-07 in one `-All`
+    /// listing; a prefix where the class carries an id.
+    /// </summary>
+    internal static readonly string[] SystemClassPrefixes =
+    [
+        "OleAutomationWnd", "HwndWrapper[", "GDI+ Hook Window Class", "LVWinSessionMonitor",
+        "OleDdeWndClass", "IME", "MSCTFIME UI", "ATL:", "Internet Explorer_Hidden",
+    ];
+
+    private static readonly Regex ViTitle = new(
+        @"\.(vi|vim|vit|ctl|ctt)( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
+
+    private static readonly Regex ProjectTitle = new(@"\.lvproj - Project Explorer$", RegexOptions.Compiled);
+
+    /// <summary>The service's own VIs: NI's AI add-on ships as packed libraries named `LV AI …`.</summary>
+    private static readonly Regex ServiceTitle = new(@"^LV AI [^:]*\.lvlibp:", RegexOptions.Compiled);
+
+    internal static bool IsScratchTitle(string title) =>
+        title.StartsWith("LVMCP Validate", StringComparison.Ordinal) ||
+        title.StartsWith("LVMCP Convert", StringComparison.Ordinal);
+
+    /// <summary>The kind of one window. Order matters: `*` first, as in the kit.</summary>
+    internal static string Classify(MachineWindow window)
+    {
+        var title = window.Title;
+        if (title.Contains('*')) return WindowKinds.Unsaved;
+        if (ServiceTitle.IsMatch(title)) return WindowKinds.Service;
+
+        if (!window.Visible)
+        {
+            if (title.Length == 0 || HiddenSystemTitles.Contains(title)) return WindowKinds.HiddenSystem;
+            if (SystemClassPrefixes.Any(p => window.ClassName.StartsWith(p, StringComparison.Ordinal)))
+                return WindowKinds.HiddenSystem;
+        }
+
+        if (title.Length == 0) return WindowKinds.Untitled;
+        if (title == "LabVIEW") return WindowKinds.Frame;
+        if (title.StartsWith("Getting Started", StringComparison.Ordinal)) return WindowKinds.GettingStarted;
+        if (ProjectTitle.IsMatch(title)) return WindowKinds.Project;
+        if (ViTitle.IsMatch(title)) return WindowKinds.Vi;
+
+        // Visible or not: see the class comment. A VI panel with a custom window title lands here
+        // too, which the kit documents - better a panel looked at by eye than a dialog closed over.
+        return WindowKinds.PossibleDialog;
+    }
+
+    /// <summary>Where LabVIEW keeps its recovery files; Documents may be redirected (OneDrive).</summary>
+    internal static string DefaultAutoSaveDirectory() => AutoSaveRecovery.DefaultDirectory();
+
+    public static LabViewSnapshot Take(ILabViewMachine machine, string? autoSaveDirectory = null)
+    {
+        var labview = machine.Processes(LabViewProcess);
+        var windows = new List<ClassifiedWindow>();
+        foreach (var process in labview)
+            windows.AddRange(machine.TopWindows(process.Id).Select(w => new ClassifiedWindow(w, Classify(w))));
+
+        return new LabViewSnapshot(
+            machine.Now, labview,
+            machine.Processes(NigelServiceProcess),
+            machine.Processes(NigelChatProcess),
+            AutoSave(machine, autoSaveDirectory ?? DefaultAutoSaveDirectory()),
+            windows);
+    }
+
+    internal static AutoSaveState AutoSave(ILabViewMachine machine, string directory)
+    {
+        var files = machine.FilesUnder(directory);
+        return files is null
+            ? new AutoSaveState(directory, false, 0, [])
+            : new AutoSaveState(directory, true, files.Count,
+                                [.. files.Take(20).Select(f => Path.GetRelativePath(directory, f))]);
+    }
+
+    /// <summary>
+    /// The kit's threshold, kept: a window is quiet when LabVIEW used less than one CPU second per
+    /// thirty seconds of wall clock. Scaled, so a shorter window keeps the same rate.
+    /// </summary>
+    internal const double IdleCpuSecondsPer30 = 1.0;
+
+    internal static bool IsBusy(double cpuSeconds, double windowSeconds) =>
+        cpuSeconds >= IdleCpuSecondsPer30 * windowSeconds / 30.0;
+
+    /// <summary>
+    /// One CPU sample of the LabVIEW process. Idle is not "safe" - a modal dialog leaves LabVIEW idle
+    /// and the service blocked - which is why the visible titles at the end of the window come along.
+    /// </summary>
+    public static async Task<CpuSample> SampleCpuAsync(ILabViewMachine machine, int processId,
+                                                       TimeSpan window, CancellationToken ct)
+    {
+        var at = machine.Now;
+        var before = machine.CpuTime(processId);
+        await machine.Delay(window, ct);
+        var after = machine.CpuTime(processId);
+        var titles = machine.TopWindows(processId)
+            .Where(w => w.Visible && w.Title.Length > 0 && w.Title != "LabVIEW")
+            .Select(w => w.Title).ToList();
+
+        if (before is null || after is null)
+            return new CpuSample(at, window.TotalSeconds, null, null, titles);
+
+        var used = Math.Round((after.Value - before.Value).TotalSeconds, 2);
+        return new CpuSample(at, window.TotalSeconds, used, IsBusy(used, window.TotalSeconds), titles);
+    }
+
+    /// <summary>
+    /// A possible dialog named for a report: title, class, visibility and whatever child windows it
+    /// has. LabVIEW draws its own dialogs (class `LVDChild`) without child controls, so for those the
+    /// buttons cannot be read; a Win32 message box (`#32770`) lists its buttons and text. Read only:
+    /// nothing is pressed, fronted or closed.
+    /// </summary>
+    public static JsonObject DescribeDialog(ILabViewMachine machine, ClassifiedWindow dialog)
+    {
+        var children = machine.Children(dialog.Window.Handle);
+        var buttons = children.Where(c => c.ClassName == "Button" && c.Text.Length > 0)
+                              .Select(c => (JsonNode)JsonValue.Create(c.Text)!).ToArray();
+        var texts = children.Where(c => c.ClassName != "Button" && c.Text.Length > 0)
+                            .Select(c => (JsonNode)JsonValue.Create(c.Text)!).ToArray();
+        return new JsonObject
+        {
+            ["title"] = dialog.Window.Title,
+            ["class"] = dialog.Window.ClassName,
+            ["visible"] = dialog.Window.Visible,
+            ["processId"] = dialog.Window.ProcessId,
+            ["buttons"] = new JsonArray(buttons),
+            ["texts"] = new JsonArray(texts),
+            ["note"] = children.Count == 0
+                ? "No child windows: LabVIEW draws its own dialogs, so the buttons cannot be read " +
+                  "from outside. A person answers it."
+                : null,
+        };
+    }
+
+    /// <summary>
+    /// The dialog finding for an error answer: the possible dialogs of every running LabVIEW, or null
+    /// when there are none or nothing could be read. Never throws - this runs on a failure path.
+    /// </summary>
+    public static JsonArray? ProbeDialogs(ILabViewMachine machine)
+    {
+        try
+        {
+            var snapshot = Take(machine);
+            if (snapshot.Dialogs.Count == 0) return null;
+            return new JsonArray([.. snapshot.Dialogs.Take(10).Select(d => (JsonNode)DescribeDialog(machine, d))]);
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    public static JsonObject ProcessJson(MachineProcess process, DateTime now) => new()
+    {
+        ["pid"] = process.Id,
+        ["startTime"] = process.StartTime?.ToString("yyyy-MM-dd HH:mm:ss"),
+        ["upSeconds"] = process.StartTime is { } start ? (int)(now - start).TotalSeconds : null,
+        ["path"] = process.Path,
+    };
+
+    public static JsonArray ProcessesJson(IEnumerable<MachineProcess> processes, DateTime now) =>
+        new([.. processes.Select(p => (JsonNode)ProcessJson(p, now))]);
+
+    public static JsonObject WindowJson(ClassifiedWindow w) => new()
+    {
+        ["kind"] = w.Kind,
+        ["visible"] = w.Window.Visible,
+        ["class"] = w.Window.ClassName,
+        ["title"] = w.Window.Title,
+        ["labviewMcpScratch"] = w.IsLabViewMcpScratch ? true : null,
+    };
+}
+
+/// <summary>
+/// Which LabVIEW THIS server process started - the one fact the ownership rule needs and nothing on
+/// the machine records. The user's rule: a LabVIEW the server started may be closed by it with no
+/// go-ahead; any other only with the user's words. Held in memory on purpose: a server that restarts
+/// forgets, and forgetting errs towards asking. The start time is kept with the pid, because a pid is
+/// reused and a reused pid is somebody else's LabVIEW.
+/// </summary>
+internal static class LabViewOwnership
+{
+    private static readonly object Gate = new();
+    private static (int Pid, DateTime? Start, DateTime RecordedAt)? _owned;
+
+    public static void Record(int pid, DateTime? startTime)
+    {
+        lock (Gate) _owned = (pid, startTime, DateTime.Now);
+    }
+
+    public static void Forget()
+    {
+        lock (Gate) _owned = null;
+    }
+
+    public static (int Pid, DateTime? Start, DateTime RecordedAt)? Current
+    {
+        get { lock (Gate) return _owned; }
+    }
+
+    /// <summary>True only when pid AND start time match what was recorded (a second's slack).</summary>
+    public static bool IsServerStarted(MachineProcess process)
+    {
+        var owned = Current;
+        if (owned is null || owned.Value.Pid != process.Id) return false;
+        if (owned.Value.Start is null || process.StartTime is null) return owned.Value.Start is null;
+        return Math.Abs((owned.Value.Start.Value - process.StartTime.Value).TotalSeconds) < 1.0;
+    }
+
+    public static JsonObject? ToJson() => Current is { } owned
+        ? new JsonObject
+        {
+            ["pid"] = owned.Pid,
+            ["startTime"] = owned.Start?.ToString("yyyy-MM-dd HH:mm:ss"),
+            ["recordedAt"] = owned.RecordedAt.ToString("yyyy-MM-dd HH:mm:ss"),
+        }
+        : null;
+}

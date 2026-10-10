@@ -19,7 +19,7 @@ internal static class Rpc
         }
         catch (RpcException e)
         {
-            return Json.Error("rpc", $"{e.StatusCode}: {e.Status.Detail}", new
+            var error = Json.Error("rpc", $"{e.StatusCode}: {e.Status.Detail}", new
             {
                 statusCode = e.StatusCode.ToString(),
                 detail = e.Status.Detail,
@@ -36,14 +36,50 @@ internal static class Rpc
                     _ => null,
                 },
             });
+            return e.StatusCode == StatusCode.DeadlineExceeded ? WithDialogs(error) : error;
         }
         catch (OperationCanceledException)
         {
-            return Json.Error("cancelled", "The call was cancelled or timed out locally.");
+            return WithDialogs(Json.Error("cancelled", "The call was cancelled or timed out locally."));
         }
         catch (Exception e)
         {
             return Json.Error(e.GetType().Name, e.Message);
+        }
+    }
+
+    /// <summary>
+    /// LabVIEW's possible dialogs right now, or null - read from the window list, no LabVIEW call.
+    /// Replaceable so tests do not read this machine's windows.
+    /// </summary>
+    internal static Func<JsonArray?> DialogProbe { get; set; } =
+        () => LabViewState.ProbeDialogs(Win32LabViewMachine.Instance);
+
+    /// <summary>
+    /// A timed-out call names the dialog that may be blocking it. A modal LabVIEW dialog stops the
+    /// whole gRPC service until a person answers it, and the timeout alone says nothing about why -
+    /// measured more than once in this repository (a "Find the VI" dialog held a bind call for
+    /// 720 s). Added only when a dialog is there, so every other answer stays as it was. Read only:
+    /// nothing is pressed.
+    /// </summary>
+    internal static string WithDialogs(string error)
+    {
+        JsonArray? dialogs;
+        try { dialogs = DialogProbe(); }
+        catch (Exception failure) when (failure is not OutOfMemoryException) { return error; }
+        if (dialogs is null || dialogs.Count == 0) return error;
+
+        try
+        {
+            if (JsonNode.Parse(error) is not JsonObject answer) return error;
+            answer["possibleDialogs"] = dialogs;
+            answer["dialogNote"] = "LabVIEW shows a possible dialog. A modal dialog blocks the service until a " +
+                                   "person answers it; nothing was pressed. lvai_labview_state names it again.";
+            return answer.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return error;
         }
     }
 

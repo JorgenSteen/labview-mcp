@@ -47,6 +47,14 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         Otherwise, when LabVIEW is still coming up, calling again is right - the second call
         finds the instance and waits. For an unattended long wait use the CLI:
         LabVIEWMCP --ensure-labview.
+        NIGEL CHAT (startNigelChat, default on): when LabVIEW has run for over 60 s, its service
+        does not answer, no LVNigelChat runs and no possible dialog is up, this starts the chat
+        ONCE per LabVIEW process the way LabVIEW's menu does - LVNigelChat.exe --lv-version
+        <add-on folder> --lv-bitness x86|x64 - through the same survive-the-job-object launch, and
+        reports it under nigelChat (a message box is named, never pressed). The command line is
+        the one a LabVIEW skill measured; this tool's port of it is UNMEASURED.
+        OWNERSHIP: a LabVIEW this call starts is recorded (pid + start time) as this server's, and
+        lvai_restart_labview may close it with no go-ahead. A LabVIEW found running is not.
         """)]
     public async Task<string> EnsureLabViewAsync(
         [Description("How long to wait for the gRPC service to answer, in seconds (capped at 45)")]
@@ -58,6 +66,12 @@ internal sealed class LifecycleTools(LvaiConnection connection)
             human dismisses it. Only ever cleared when this tool starts LabVIEW itself.
             """)]
         bool keepAutoSave = false,
+        [Description("""
+            Start the Nigel chat once when LabVIEW has run for over 60 s and its service still does
+            not answer (the service starts with Nigel). Never touches a running chat or the
+            NI.NigelLocalService process.
+            """)]
+        bool startNigelChat = true,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
         {
@@ -119,44 +133,30 @@ internal sealed class LifecycleTools(LvaiConnection connection)
 
                 startedNow = true;
                 launched = pick.Describe();
+                RecordOwnership(launch.Pid);
             }
 
             // Poll until the service answers. A cold LabVIEW start is far slower than this
             // budget, hence the explicit "call again" outcome rather than a failure.
-            Exception? last = null;
+            var (config, last, nigel) = await PollServiceAsync(token, ct, startNigelChat,
+                () => budget - stopwatch.Elapsed);
 
-            while (!token.IsCancellationRequested)
-            {
-                try
+            if (config is not null)
+                return new JsonObject
                 {
-                    connection.Invalidate();   // the port changes with every LabVIEW start
-                    var client = await connection.GetClientAsync(token);
-                    var config = await client.GetApplicationConfigurationAsync(
-                        new GetApplicationConfigurationRequest(),
-                        deadline: Rpc.Deadline(10), cancellationToken: token);
-
-                    return new JsonObject
-                    {
-                        ["ok"] = true,
-                        ["state"] = "ready",
-                        ["startedByThisCall"] = startedNow,
-                        ["launched"] = launched,
-                        ["launchMethod"] = launch?.Method,
+                    ["ok"] = true,
+                    ["state"] = "ready",
+                    ["startedByThisCall"] = startedNow,
+                    ["launched"] = launched,
+                    ["launchMethod"] = launch?.Method,
                     ["autoSaveCleared"] = autoSave?.Describe(),
-                        ["port"] = connection.Port,
-                        ["discoveredVia"] = connection.DiscoveredVia,
-                        ["applicationLanguage"] = config.Language,
-                        ["waitedMs"] = stopwatch.ElapsedMilliseconds,
-                    }.ToJsonString(Indented);
-                }
-                // The caller's own cancellation must still escape; only the budget is absorbed.
-                catch (Exception e) when (!ct.IsCancellationRequested)
-                {
-                    last = e;
-                    try { await Task.Delay(2000, token); }
-                    catch (OperationCanceledException) { /* budget spent - the loop ends below */ }
-                }
-            }
+                    ["port"] = connection.Port,
+                    ["discoveredVia"] = connection.DiscoveredVia,
+                    ["applicationLanguage"] = config.Language,
+                    ["waitedMs"] = stopwatch.ElapsedMilliseconds,
+                    ["ownedByThisServer"] = OwnedJson(),
+                    ["nigelChat"] = nigel,
+                }.ToJsonString(Indented);
 
             ct.ThrowIfCancellationRequested();
 
@@ -180,6 +180,8 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                 ["waitSecondsRequested"] = waitSeconds,
                 ["waitSecondsUsed"] = (int)budget.TotalSeconds,
                 ["lastError"] = last?.Message,
+                ["ownedByThisServer"] = OwnedJson(),
+                ["nigelChat"] = nigel,
                 // "LabVIEW is up" was asserted unconditionally here, and it was wrong exactly when
                 // it mattered: with runningProcesses 0 the advice sent the reader after the AI
                 // service while the IDE itself was gone.
@@ -198,6 +200,165 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                       "--ensure-labview for an unattended long wait.",
             }.ToJsonString(Indented);
         });
+
+    /// <summary>
+    /// Poll the service until it answers or <paramref name="token"/> (the budget) runs out. On the
+    /// way, start the Nigel chat once if <see cref="NigelChat.ReasonNotToStart"/> has no objection
+    /// and at least 15 s of budget are left - the start and its settle time take about 12 s, and a
+    /// call that overruns the client's 60 s answers nothing at all.
+    /// </summary>
+    private async Task<(GetApplicationConfigurationResponse? Config, Exception? Last, JsonObject? Nigel)>
+        PollServiceAsync(CancellationToken token, CancellationToken ct, bool startNigelChat,
+                         Func<TimeSpan> remaining)
+    {
+        Exception? last = null;
+        JsonObject? nigel = null;
+
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                connection.Invalidate();   // the port changes with every LabVIEW start
+                var client = await connection.GetClientAsync(token);
+                var config = await client.GetApplicationConfigurationAsync(
+                    new GetApplicationConfigurationRequest(),
+                    deadline: Rpc.Deadline(10), cancellationToken: token);
+                return (config, null, nigel);
+            }
+            // The caller's own cancellation must still escape; only the budget is absorbed.
+            catch (Exception e) when (!ct.IsCancellationRequested)
+            {
+                last = e;
+            }
+
+            // A report with a state is a start that was MADE; a bare reason may have gone by the
+            // next poll (LabVIEW passing 60 s, say), so that one is asked again.
+            if (startNigelChat && nigel?["state"] is null && remaining() >= TimeSpan.FromSeconds(15))
+                nigel = await MaybeStartNigelChatAsync(ct);
+
+            try { await Task.Delay(2000, token); }
+            catch (OperationCanceledException) { /* budget spent - the loop ends below */ }
+        }
+
+        return (null, last, nigel);
+    }
+
+    /// <summary>The Nigel step: a report of the start made, or of why none was.</summary>
+    private static async Task<JsonObject> MaybeStartNigelChatAsync(CancellationToken ct)
+    {
+        var machine = Win32LabViewMachine.Instance;
+        var snapshot = LabViewState.Take(machine);
+        if (snapshot.Single is { } one && NigelChat.AttemptFor(one.Id) is { } earlier)
+        {
+            earlier["note"] = "Started once already for this LabVIEW process; not started again.";
+            return earlier;
+        }
+
+        if (NigelChat.ReasonNotToStart(snapshot) is { } reason)
+            return new JsonObject { ["started"] = false, ["reason"] = reason };
+
+        var labview = snapshot.LabView[0];
+        var (target, problem) = NigelChat.Resolve(machine, labview, NigelChat.DefaultAddonRoot());
+        if (target is null)
+            return new JsonObject { ["started"] = false, ["state"] = "notResolved", ["reason"] = problem };
+
+        return await NigelChat.StartAsync(machine, labview, target,
+            (exe, arguments, token) => LabViewLauncher.StartProgramAndConfirmAsync(exe, arguments,
+                () => machine.Processes(LabViewState.NigelChatProcess).Select(p => p.Id).ToHashSet(), token),
+            ct);
+    }
+
+    /// <summary>Record the LabVIEW this server just started, with its start time (pids are reused).</summary>
+    private static void RecordOwnership(int? pid)
+    {
+        if (pid is not { } id) return;
+        var process = Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess)
+            .FirstOrDefault(p => p.Id == id);
+        if (process is not null) LabViewOwnership.Record(id, process.StartTime);
+    }
+
+    private static JsonObject? OwnedJson() => LabViewOwnership.ToJson();
+
+    /// <summary>
+    /// Can the service be reached now, with a short deadline - the restart's service guard. Through a
+    /// fresh discovery, because a stale channel would answer for the LabVIEW of before.
+    /// </summary>
+    internal async Task<ServiceProbe> ProbeServiceAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            budget.CancelAfter(TimeSpan.FromSeconds(20));
+            connection.Invalidate();
+            var client = await connection.GetClientAsync(budget.Token);
+            await client.GetApplicationConfigurationAsync(new GetApplicationConfigurationRequest(),
+                deadline: Rpc.Deadline(10), cancellationToken: budget.Token);
+            return new ServiceProbe(true, connection.Port, null);
+        }
+        catch (Exception e) when (!ct.IsCancellationRequested)
+        {
+            return new ServiceProbe(false, null, $"{e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The restart's start step: the SAME installation that was running when its exe is known (a
+    /// LabVIEW 2025 comes back as 2025), else the default pick; the same launch routes as
+    /// lvai_ensure_labview; then the service, for longer than one tool call may wait, because the
+    /// restart runs as a resumable job. Ownership is NOT recorded here - the restart decides that.
+    /// </summary>
+    internal async Task<StartResult> StartForRestartAsync(string? exePath, TimeSpan serviceWait,
+                                                          CancellationToken ct)
+    {
+        var machine = Win32LabViewMachine.Instance;
+        var detail = new JsonObject();
+        var clock = Stopwatch.StartNew();
+        int? pid = null;
+
+        if (LabViewLocator.RunningInstances().Count == 0)
+        {
+            var installs = LabViewLocator.Discover();
+            var pick = installs.FirstOrDefault(i => string.Equals(i.ExePath, exePath, StringComparison.OrdinalIgnoreCase))
+                       ?? LabViewLocator.Select(installs);
+            if (pick is null)
+            {
+                detail["error"] = "No LabVIEW installation found to start.";
+                return new StartResult(false, null, null, null, detail);
+            }
+
+            detail["exe"] = pick.ExePath;
+            detail["sameAsBefore"] = string.Equals(pick.ExePath, exePath, StringComparison.OrdinalIgnoreCase);
+            var launch = await LabViewLauncher.StartAndConfirmAsync(pick, ct);
+            detail["launchMethod"] = launch.Method;
+            if (!launch.Ok)
+            {
+                detail["error"] = "launch-did-not-survive";
+                detail["attempts"] = new JsonArray([.. launch.Attempts.Select(a => (JsonNode)JsonValue.Create(
+                    $"{a.Method}: started {a.Started}, appeared {a.Appeared}, survived {a.Survived} ({a.Detail})")!)]);
+                return new StartResult(false, null, null, null, detail);
+            }
+            pid = launch.Pid;
+        }
+        else
+        {
+            detail["note"] = "A LabVIEW process was already running after the close; it was used, not a second one started.";
+        }
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(serviceWait);
+        var (config, last, nigel) = await PollServiceAsync(budget.Token, ct, startNigelChat: true,
+            () => serviceWait - clock.Elapsed);
+        ct.ThrowIfCancellationRequested();
+
+        var now = machine.Processes(LabViewState.LabViewProcess);
+        var started = pid is { } id ? now.FirstOrDefault(p => p.Id == id) : now.Count == 1 ? now[0] : null;
+        detail["seconds"] = Math.Round(clock.Elapsed.TotalSeconds, 1);
+        detail["serviceAnswers"] = config is not null;
+        detail["lastError"] = config is null ? last?.Message : null;
+        detail["nigelChat"] = nigel;
+        return new StartResult(config is not null, started?.Id ?? pid, started?.StartTime,
+                               config is not null ? connection.Port : null, detail);
+    }
 
     [McpServerTool(Name = "lvai_list_labview_installations", ReadOnly = true,
                    Title = "List installed LabVIEW versions")]
