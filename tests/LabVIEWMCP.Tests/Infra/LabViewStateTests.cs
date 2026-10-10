@@ -34,14 +34,33 @@ public class LabViewWindowClassifierTests
     /// <summary>
     /// THE BUG THE PORT FIXES. The kit called a hidden titled window "hidden-other" and never flagged
     /// it; measured 2026-10-06, LabVIEW's Error list and Externally Changed Files List dialogs were on
-    /// screen, unclickable, and reported IsWindowVisible FALSE.
+    /// screen, unclickable, and reported IsWindowVisible FALSE. Here it is named as unrecognised -
+    /// a go-ahead guard by the user's decision of 2026-10-10, where a VISIBLE one is a hard stop.
     /// </summary>
     [Theory]
     [InlineData("Error list")]
     [InlineData("Externally Changed Files List")]
     [InlineData("Something else")]
-    public void A_titled_window_that_reports_itself_invisible_is_still_a_possible_dialog(string title) =>
-        Assert.Equal(WindowKinds.PossibleDialog, Kind(title, visible: false));
+    public void A_titled_window_that_reports_itself_invisible_is_flagged_as_unrecognised(string title)
+    {
+        Assert.Equal(WindowKinds.HiddenUnrecognised, Kind(title, visible: false));
+        Assert.Equal(WindowKinds.PossibleDialog, Kind(title, visible: true));
+    }
+
+    [Theory]
+    [InlineData("LVMCP Validate.vi Front Panel *", true)]
+    [InlineData("LVMCP Validate12.vi Block Diagram *", true)]
+    [InlineData("LVMCP Convert 1a2b3c4d5e.vi *", true)]
+    [InlineData("LVMCP DQMH 1a2b3c4d.vi *", true)]
+    [InlineData("LVMCP TD Carrier work7.vi *", true)]
+    [InlineData("LVMCP Stub 1a2b.vi *", false)]     // a saved file, not scratch
+    [InlineData("LVMCP ClsW1.vi *", false)]         // a socket under user.lib, saved
+    [InlineData("Main.vi *", false)]
+    public void Only_the_names_the_server_never_saves_are_scratch(string title, bool scratch)
+    {
+        var w = new MachineWindow(1, 1, "LVDChild", title, false);
+        Assert.Equal(scratch, new ClassifiedWindow(w, LabViewState.Classify(w)).IsLabViewMcpScratch);
+    }
 
     /// <summary>The hidden windows of the measured 2026-10-07 listing that are not LabVIEW's at all.</summary>
     [Theory]
@@ -113,7 +132,8 @@ public class LabViewSnapshotTests
         Assert.Equal(10, s.Single?.Id);
         Assert.Single(s.NigelService);
         Assert.Empty(s.NigelChat);
-        Assert.Single(s.Dialogs);
+        Assert.Empty(s.Dialogs);                 // the hidden save prompt is not a VISIBLE dialog ...
+        Assert.Single(s.HiddenUnrecognised);     // ... it is named as unrecognised
         Assert.Single(s.Unsaved);
         Assert.Equal(2, s.AutoSave.Count);
         Assert.Contains(@"archives\b.vi", s.AutoSave.Sample);
@@ -185,7 +205,7 @@ public class LabViewSnapshotTests
         Assert.Null(LabViewState.ProbeDialogs(m));
 
         m.AddWindow(10, "LVDChild", "Error list", false);
-        var found = LabViewState.ProbeDialogs(m);
+        var found = LabViewState.ProbeDialogs(m);   // a timeout names hidden ones too
         Assert.NotNull(found);
         Assert.False(found![0]!["visible"]!.GetValue<bool>());
     }
@@ -227,7 +247,8 @@ public class LabViewOwnershipTests
         var state = await RestartTools.StateAsync(m, @"X:\none", 5, includeHiddenWindows: false, default);
 
         Assert.Equal("one", state["labviewProcesses"]!.GetValue<string>());
-        Assert.Single(state["possibleDialogs"]!.AsArray());
+        Assert.Empty(state["possibleDialogs"]!.AsArray());
+        Assert.Equal("Error list", state["hiddenUnrecognised"]![0]!["title"]!.GetValue<string>());
         Assert.Single(state["unsaved"]!.AsArray());
         Assert.Equal("quiet", state["cpu"]!["verdict"]!.GetValue<string>());
         Assert.DoesNotContain(state["windows"]!.AsArray(), w => w!["kind"]!.GetValue<string>() == WindowKinds.HiddenSystem);

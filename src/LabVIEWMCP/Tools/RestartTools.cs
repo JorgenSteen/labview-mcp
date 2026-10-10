@@ -41,13 +41,13 @@ internal sealed class RestartTools(LvaiConnection connection)
         lvai_ensure_labview), the Nigel processes (NI.NigelLocalService, LVNigelChat), the
         LVAutoSave folder (resolved through the Documents known folder, which may be redirected)
         and its file count, every LabVIEW window sorted into kinds, and one CPU sample.
-        `unsaved` = titles with `*`. `possibleDialogs` = titled windows that are not a VI, project
-        or frame window, named with class, buttons and text where Windows exposes them (LabVIEW
-        draws its own dialogs, so their buttons usually cannot be read). A titled window counts as
-        a possible dialog EVEN WHEN IT REPORTS ITSELF INVISIBLE: measured 2026-10-06, LabVIEW
-        dialogs on screen did (docs/scratch-vis-in-memory.md §2a). Hidden windows of measured
-        system classes (IME, OLE, DDE, GDI+) and LabVIEW's measured hidden windows are not
-        flagged; anything else hidden is, with its class, so a false flag names itself. A VI panel
+        `unsaved` = titles with `*`. `possibleDialogs` = VISIBLE titled windows that are not a VI,
+        project or frame window, named with class, buttons and text where Windows exposes them
+        (LabVIEW draws its own dialogs, so their buttons usually cannot be read).
+        `hiddenUnrecognised` = HIDDEN titled windows nothing measured explains, named the same way:
+        measured 2026-10-06, LabVIEW dialogs on screen reported themselves invisible
+        (docs/scratch-vis-in-memory.md §2a). Hidden windows of measured system classes (IME, OLE,
+        DDE, GDI+) and LabVIEW's measured hidden windows are not listed there. A VI panel
         with a custom window title is flagged too - look at it. CPU: quiet below 1 CPU s per 30 s,
         the threshold the skill measured with; idle is not safe - a modal dialog leaves LabVIEW
         idle. The window classes and titles come from a measured listing; this C# port itself is
@@ -106,6 +106,7 @@ internal sealed class RestartTools(LvaiConnection connection)
             ["windowCounts"] = counts,
             ["unsaved"] = new JsonArray([.. s.Unsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
             ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
+            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d))]),
             ["windows"] = new JsonArray([.. visibleOrFlagged.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
             ["cpu"] = cpu,
             ["note"] = "No LabVIEW call was made. A modified VI with no open window does not show here, " +
@@ -256,9 +257,14 @@ internal sealed class RestartTools(LvaiConnection connection)
         LVAutoSave file, idle, and nothing in memory but NI's service and labview-mcp helpers.
         Anything else is refused with errorKind needsUserGoAhead unless userGoAhead carries the
         USER'S OWN WORDS from this conversation (an agent's "approved" is not the user); the
-        answer echoes them. The go-ahead never opens three guards: more than one LabVIEW, a
-        possible dialog (also one that reports itself invisible), and a busy CPU (two 15 s samples;
-        measured, a busy LabVIEW answers CloseMainWindow False and stays).
+        answer echoes them. The go-ahead never opens three guards: more than one LabVIEW, a VISIBLE
+        possible dialog, and a busy CPU (two 15 s samples; measured, a busy LabVIEW answers
+        CloseMainWindow False and stays). A HIDDEN titled window nothing measured explains (it may
+        be a dialog that reports itself invisible) is guard `hiddenWindows`: the go-ahead opens it,
+        and the answer lists each window it opened under overriddenHiddenWindows.
+        labview-mcp's own unsaved scratch VIs (LVMCP Validate/Convert/DQMH/TD Carrier) block as
+        `unsaved` too: no route closes them without a save prompt (measured), so the answer says
+        "Don't Save - All" is safe for them rather than closing them.
         THE GUARDS, in order: processes, windows, CPU, service (does lvai answer), active project
         (projectPath = this session's project: saved and closed first when it is the active one; a
         different active project is never closed by this tool), memory (lvai_vis_in_memory's helper,

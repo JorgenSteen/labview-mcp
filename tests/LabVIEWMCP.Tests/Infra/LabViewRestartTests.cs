@@ -111,14 +111,41 @@ public class LabViewRestartTests
     }
 
     [Fact]
-    public async Task A_dialog_that_reports_itself_invisible_is_refused_too()
+    public async Task An_unrecognised_hidden_window_needs_the_go_ahead_even_on_the_server_s_labview()
     {
-        var w = new World();
+        var w = new World { ServerStarted = true };
         w.M.AddWindow(10, "LVDChild", "Externally Changed Files List", false);
-        var a = await w.Run("close", goAhead: "close it (the user)");
+        var a = await w.Run("close");
 
-        Assert.Equal("dialog", Str(a, "stoppedBy"));
-        Assert.Contains("reports itself invisible", Str(a, "error"));
+        Assert.Equal("needsUserGoAhead", Str(a, "errorKind"));
+        Assert.Equal("hiddenWindows", Str(a, "stoppedBy"));
+        Assert.Contains("class LVDChild", a["needsGoAheadFor"]!["hiddenWindows"]!.GetValue<string>());
+        Assert.Empty(w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task The_go_ahead_opens_an_unrecognised_hidden_window_and_names_each_one()
+    {
+        var w = new World { ServerStarted = true };
+        w.M.AddWindow(10, "SomeNewClass", "NI Licence Notifier", false);
+        w.M.AddWindow(10, "LVDChild", "Externally Changed Files List", false);
+        var a = await w.Run("close", goAhead: "close it (the user, 2026-10-10)");
+
+        Assert.True(a["ok"]!.GetValue<bool>());
+        var named = a["overriddenHiddenWindows"]!.AsArray();
+        Assert.Equal(2, named.Count);
+        Assert.Contains(named, n => n!["class"]!.GetValue<string>() == "SomeNewClass");
+        Assert.Equal([10], w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task A_hidden_window_raised_while_the_guards_ran_stops_the_close_without_a_go_ahead()
+    {
+        var w = new World { ServerStarted = true, Active = new ActiveProjectProbe(true, MyProject, "active") };
+        w.OnProjectClose = () => w.M.AddWindow(10, "LVDChild", "Save changes before closing?", false);
+        var a = await w.Run("close", project: MyProject);
+
+        Assert.Equal("hiddenWindows", Str(a, "stoppedBy"));
         Assert.Empty(w.M.ClosesSent);
     }
 
@@ -268,6 +295,10 @@ public class LabViewRestartTests
 
         Assert.Equal("unsaved", Str(a, "stoppedBy"));
         Assert.Contains("Don't Save - All", a["needsGoAheadFor"]!["unsaved"]!.GetValue<string>());
+        // Not closed by the tool, and the answer says why: no route reaches them without a prompt.
+        Assert.False(a["guards"]!["scratchVis"]!["closedByThisTool"]!.GetValue<bool>());
+        Assert.Contains("1004", a["guards"]!["scratchVis"]!["why"]!.GetValue<string>());
+        Assert.Empty(w.M.ClosesSent);
     }
 
     [Fact]

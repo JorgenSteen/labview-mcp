@@ -69,7 +69,7 @@ public class NigelChatTests
         Assert.Contains("already runs", NigelChat.ReasonNotToStart(LabViewState.Take(chat, @"X:\n")));
 
         var dialog = Machine(104, 300);
-        dialog.AddWindow(104, "LVDChild", "Error list", false);
+        dialog.AddWindow(104, "LVDChild", "Error list", true);
         Assert.Contains("dialog", NigelChat.ReasonNotToStart(LabViewState.Take(dialog, @"X:\n")));
 
         var two = Machine(105, 300);

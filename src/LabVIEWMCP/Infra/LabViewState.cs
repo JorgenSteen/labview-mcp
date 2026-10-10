@@ -26,6 +26,8 @@ internal static class WindowKinds
     public const string HiddenSystem = "hidden-system";
     public const string Untitled = "untitled";
     public const string PossibleDialog = "possible-dialog";
+    /// <summary>A HIDDEN titled window nothing measured explains: maybe a dialog, maybe a new system class.</summary>
+    public const string HiddenUnrecognised = "hidden-unrecognised";
 }
 
 /// <summary>The LVAutoSave folder as found. <see cref="Count"/> is -1 when the folder could not be read.</summary>
@@ -64,7 +66,11 @@ internal sealed record LabViewSnapshot(
     IReadOnlyList<ClassifiedWindow> Windows)
 {
     public IEnumerable<ClassifiedWindow> Of(string kind) => Windows.Where(w => w.Kind == kind);
+    /// <summary>VISIBLE possible dialogs - the hard stop.</summary>
     public IReadOnlyList<ClassifiedWindow> Dialogs => [.. Of(WindowKinds.PossibleDialog)];
+
+    /// <summary>Hidden titled windows nothing measured explains - a go-ahead guard, named one by one.</summary>
+    public IReadOnlyList<ClassifiedWindow> HiddenUnrecognised => [.. Of(WindowKinds.HiddenUnrecognised)];
     public IReadOnlyList<ClassifiedWindow> Unsaved => [.. Of(WindowKinds.Unsaved)];
 
     /// <summary>The one LabVIEW, or null when there is none or more than one.</summary>
@@ -78,12 +84,13 @@ internal sealed record LabViewSnapshot(
 /// INVISIBLE IS NOT "NOT A DIALOG". The script flags only VISIBLE windows as possible dialogs. Measured
 /// 2026-10-06 (docs/scratch-vis-in-memory.md §2a): an `Error list` and an `Externally Changed Files
 /// List` dialog that the user saw on screen and could not click both reported `IsWindowVisible` FALSE.
-/// So here a titled window counts as a possible dialog whatever its visibility, unless its title is
-/// one of LabVIEW's measured hidden system windows or its CLASS is one of the measured non-LabVIEW
-/// helper classes (IME, OLE, DDE, GDI+, WPF's HwndWrapper). Both lists come from one `-All` window
-/// listing of a production LabVIEW 2026 Q3 on 2026-10-07; a hidden window of a class or title not in
-/// them is flagged, and the answer names its class, so the list can be extended from a measurement
-/// rather than from a guess.
+/// So a hidden titled window is not ignored: unless its title is one of LabVIEW's measured hidden
+/// system windows or its CLASS is one of the measured non-LabVIEW helper classes (IME, OLE, DDE,
+/// GDI+, WPF's HwndWrapper), it is `hidden-unrecognised` and named with its class. Both lists come
+/// from one `-All` window listing of a production LabVIEW 2026 Q3 on 2026-10-07. The user's decision
+/// of 2026-10-10: a VISIBLE possible dialog is a hard stop, an unrecognised HIDDEN window is a guard
+/// the user's go-ahead opens - and the answer names each one it opened, so its class can be added to
+/// the list from a measurement rather than from a guess.
 /// </summary>
 internal static class LabViewState
 {
@@ -116,9 +123,20 @@ internal static class LabViewState
     /// <summary>The service's own VIs: NI's AI add-on ships as packed libraries named `LV AI …`.</summary>
     private static readonly Regex ServiceTitle = new(@"^LV AI [^:]*\.lvlibp:", RegexOptions.Compiled);
 
+    /// <summary>
+    /// The throwaway VI names this server hands LabVIEW and never saves under - and only those. Each
+    /// is a `_name` substituted before a validate or convert so that a refusal cannot burn a real
+    /// name; LabVIEW keeps the VI in memory, unsaved, and numbers a repeat (`LVMCP Validate2.vi`):
+    /// `LVMCP Validate` (Infra/ValidationScratch.cs), `LVMCP Convert` (BulkTools,
+    /// EventStructureTools), `LVMCP DQMH ` (DqmhHeadless), `LVMCP TD Carrier ` (TypedefCreateTools).
+    /// The other `LVMCP …` names in the code - `Stub`, `ClsW`/`ClsR`/`Mth…` sockets, `Flat` - are
+    /// FILES on disk, saved, and deliberately not here.
+    /// </summary>
+    internal static readonly string[] ScratchPrefixes =
+        ["LVMCP Validate", "LVMCP Convert", "LVMCP DQMH ", "LVMCP TD Carrier "];
+
     internal static bool IsScratchTitle(string title) =>
-        title.StartsWith("LVMCP Validate", StringComparison.Ordinal) ||
-        title.StartsWith("LVMCP Convert", StringComparison.Ordinal);
+        ScratchPrefixes.Any(p => title.StartsWith(p, StringComparison.Ordinal));
 
     /// <summary>The kind of one window. Order matters: `*` first, as in the kit.</summary>
     internal static string Classify(MachineWindow window)
@@ -140,9 +158,10 @@ internal static class LabViewState
         if (ProjectTitle.IsMatch(title)) return WindowKinds.Project;
         if (ViTitle.IsMatch(title)) return WindowKinds.Vi;
 
-        // Visible or not: see the class comment. A VI panel with a custom window title lands here
-        // too, which the kit documents - better a panel looked at by eye than a dialog closed over.
-        return WindowKinds.PossibleDialog;
+        // Hidden and unexplained: see the class comment. A VI panel with a custom window title lands
+        // in one of these two too, which the kit documents - better a panel looked at by eye than a
+        // dialog closed over.
+        return window.Visible ? WindowKinds.PossibleDialog : WindowKinds.HiddenUnrecognised;
     }
 
     /// <summary>Where LabVIEW keeps its recovery files; Documents may be redirected (OneDrive).</summary>
@@ -240,8 +259,11 @@ internal static class LabViewState
         try
         {
             var snapshot = Take(machine);
-            if (snapshot.Dialogs.Count == 0) return null;
-            return new JsonArray([.. snapshot.Dialogs.Take(10).Select(d => (JsonNode)DescribeDialog(machine, d))]);
+            // Both kinds here: this is for a TIMED-OUT call, where a hidden dialog is exactly the
+            // finding worth having (scratch-vis-in-memory.md §2a); each entry carries `visible`.
+            var found = snapshot.Dialogs.Concat(snapshot.HiddenUnrecognised).ToList();
+            if (found.Count == 0) return null;
+            return new JsonArray([.. found.Take(10).Select(d => (JsonNode)DescribeDialog(machine, d))]);
         }
         catch (Exception failure) when (failure is not OutOfMemoryException)
         {

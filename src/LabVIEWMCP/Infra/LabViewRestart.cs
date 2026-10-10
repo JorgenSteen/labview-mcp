@@ -75,6 +75,21 @@ internal static class LabViewRestart
     public const string GuardUnsaved = "unsaved";
     public const string GuardAutoSave = "autoSave";
     public const string GuardOwnership = "ownership";
+    public const string GuardHiddenWindows = "hiddenWindows";
+
+    /// <summary>
+    /// Why the server's own unsaved scratch VIs cannot be closed for the user, measured: VI Server
+    /// finds them by name in NONE of the application instances it reaches, and closing their
+    /// windows raises LabVIEW's save prompt, which this tool never answers.
+    /// </summary>
+    internal const string ScratchCannotBeClosed =
+        "Not closed by this tool, because no route exists that does it without a prompt. Measured " +
+        "2026-09-26 (docs/scratch-vis-in-memory.md §1): Open VI Reference by name answers Error 1004 " +
+        "for them in the helpers' instance, the IDE's main instance and the active project's, and " +
+        "the converter's own 1051 check does not see them either, so lvai_close_vi and " +
+        "lvai_close_own_panel cannot reach them. Closing their windows instead raises LabVIEW's save " +
+        "prompt (§2a), and a dialog is never answered here. So they keep blocking; with the user's " +
+        "go-ahead the close raises the prompt, and \"Don't Save - All\" is safe for these.";
 
     /// <summary>Window kinds that do not stop LabVIEW being "empty".</summary>
     private static readonly HashSet<string> EmptyKinds =
@@ -94,6 +109,7 @@ internal static class LabViewRestart
         private readonly JsonArray _sideEffects = [];
         private readonly JsonArray _deviations = [];
         private readonly List<string> _needGoAhead = [];
+        private readonly List<ClassifiedWindow> _hiddenSeen = [];
         private readonly Dictionary<string, string> _goAheadReasons = [];
         private readonly DateTime _started = deps.Machine.Now;
         private string GoAhead => request.UserGoAhead?.Trim() ?? "";
@@ -153,13 +169,21 @@ internal static class LabViewRestart
             {
                 var scratchOnly = snapshot.Unsaved.All(w => w.IsLabViewMcpScratch);
                 NeedGoAhead(GuardUnsaved, scratchOnly
-                    ? "Unsaved labview-mcp scratch VIs (LVMCP Validate/Convert) are open: the IDE close " +
-                      "will raise LabVIEW's save prompt, which nothing here answers. \"Don't Save - All\" is " +
-                      "safe for these (docs/scratch-vis-in-memory.md)."
+                    ? "Unsaved labview-mcp scratch VIs are open (LVMCP Validate/Convert/DQMH/TD Carrier): " +
+                      "the IDE close will raise LabVIEW's save prompt. " + ScratchCannotBeClosed
                     : "Windows with a `*` title - unsaved edits. Closing raises LabVIEW's save prompt or, " +
                       "for a project close, discards them. Save what this session made; the rest is the " +
                       "user's.");
             }
+            var scratch = snapshot.Unsaved.Where(w => w.IsLabViewMcpScratch).ToList();
+            if (scratch.Count > 0)
+                _guards["scratchVis"] = new JsonObject
+                {
+                    ["windows"] = new JsonArray([.. scratch.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
+                    ["closedByThisTool"] = false,
+                    ["why"] = ScratchCannotBeClosed,
+                };
+            NoteHidden(snapshot);
             if (snapshot.AutoSave.Count > 0)
                 NeedGoAhead(GuardAutoSave, $"LVAutoSave holds {snapshot.AutoSave.Count} file(s): somebody " +
                     "has unsaved work, or a crash left recovery data. Either way it is the user's.");
@@ -279,6 +303,8 @@ internal static class LabViewRestart
             // A dialog may have come up while the guards ran (a project close can raise one).
             var last = LabViewState.Take(_m, deps.AutoSaveDirectory);
             if (last.Dialogs.Count > 0) return RefuseDialogs(last);
+            if (NoteHidden(last) && !HasGoAhead)
+                return RefuseForGoAhead(labview, serverStarted, emptyChecks);
 
             // ---------- 9. the close: CloseMainWindow + wait, never a kill ----------
             var close = _m.CloseMainWindow(labview.Id, deps.CloseWait);
@@ -308,7 +334,7 @@ internal static class LabViewRestart
                       "VI Server helper, or modal. The user decides; LabVIEW is never killed here.";
                 var now = LabViewState.Take(_m, deps.AutoSaveDirectory);
                 closeJson["windowsNow"] = WindowsJson(now);
-                closeJson["dialogsNow"] = new JsonArray([.. now.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(_m, d))]);
+                closeJson["dialogsNow"] = new JsonArray([.. now.Dialogs.Concat(now.HiddenUnrecognised).Select(d => (JsonNode)LabViewState.DescribeDialog(_m, d))]);
                 if (now.Single is { } still)
                     closeJson["cpuNow"] = (await LabViewState.SampleCpuAsync(_m, still.Id, TimeSpan.FromSeconds(5), ct)).ToJson();
                 answer["ok"] = false;
@@ -381,6 +407,32 @@ internal static class LabViewRestart
             _goAheadReasons[guard] = reason;
         }
 
+        /// <summary>
+        /// Record the unrecognised hidden windows of a snapshot as a go-ahead guard. True when this
+        /// snapshot shows one not seen before - a window that came up while the guards ran.
+        /// </summary>
+        private bool NoteHidden(LabViewSnapshot s)
+        {
+            var fresh = s.HiddenUnrecognised
+                .Where(w => _hiddenSeen.All(seen => seen.Window.Handle != w.Window.Handle)).ToList();
+            if (fresh.Count == 0) return false;
+            _hiddenSeen.AddRange(fresh);
+            _needGoAhead.Remove(GuardHiddenWindows);
+            NeedGoAhead(GuardHiddenWindows, $"{_hiddenSeen.Count} hidden titled window(s) that no " +
+                "measurement explains: " + string.Join("; ", _hiddenSeen.Select(w =>
+                    $"'{w.Window.Title}' (class {w.Window.ClassName})")) + ". One may be a dialog that " +
+                "reports itself invisible (measured 2026-10-06), or a system window whose class is not " +
+                "in the measured list yet. The user's go-ahead opens this guard, and the answer then " +
+                "names each window it opened, so its class can be added.");
+            return true;
+        }
+
+        private JsonArray HiddenJson() =>
+            new([.. _hiddenSeen.Select(w => (JsonNode)new JsonObject
+            {
+                ["title"] = w.Window.Title, ["class"] = w.Window.ClassName,
+            })]);
+
         private string OwnershipReason() =>
             "This LabVIEW was not started by this server process (no matching pid and start time was " +
             "recorded by lvai_ensure_labview) and it is not empty - see emptyChecks. The user's rule: " +
@@ -445,6 +497,7 @@ internal static class LabViewRestart
         {
             ["unsaved"] = new JsonArray([.. s.Unsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
             ["dialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(_m, d))]),
+            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.WindowJson(d))]),
             ["open"] = new JsonArray([.. s.Windows
                 .Where(w => w.Kind is WindowKinds.Vi or WindowKinds.Project)
                 .Select(w => (JsonNode)LabViewState.WindowJson(w))]),
@@ -477,6 +530,8 @@ internal static class LabViewRestart
             },
             ["emptyChecks"] = emptyChecks,
             ["guards"] = _guards.DeepClone(),
+            // Named so each class can be added to LabViewState.SystemClassPrefixes from a measurement.
+            ["overriddenHiddenWindows"] = HasGoAhead && _hiddenSeen.Count > 0 ? HiddenJson() : null,
         };
 
         private JsonObject? GoAheadJson(bool ownershipFree) => HasGoAhead
@@ -492,9 +547,9 @@ internal static class LabViewRestart
                 : null;
 
         private JsonObject RefuseDialogs(LabViewSnapshot s) => Refuse(GuardDialog,
-            $"{s.Dialogs.Count} possible dialog(s) in LabVIEW: " +
+            $"{s.Dialogs.Count} visible possible dialog(s) in LabVIEW: " +
             string.Join("; ", s.Dialogs.Take(5).Select(d =>
-                $"'{d.Window.Title}' ({d.Window.ClassName}{(d.Window.Visible ? "" : ", reports itself invisible")})")) +
+                $"'{d.Window.Title}' ({d.Window.ClassName})")) +
             ". A modal dialog blocks the service and the close. The user answers it - nothing here presses, " +
             "fronts or closes a dialog. A VI panel with a custom window title is flagged too: look at it. " +
             "Call again once it is gone.");
