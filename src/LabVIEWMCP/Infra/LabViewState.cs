@@ -122,6 +122,14 @@ internal static class LabViewState
     private static readonly Regex ViTitle = new(
         @"\.(vi|vim|vit|ctl|ctt)( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// A VI made with File > New VI and never saved: `Untitled 7 Front Panel`, `Untitled 7 Block
+    /// Diagram` - no `.vi`, and measured 2026-10-10 WITHOUT a `*` before any edit. Titled and visible,
+    /// it fell through to possible-dialog, a hard stop no go-ahead opens.
+    /// </summary>
+    private static readonly Regex UntitledViTitle = new(
+        @"^Untitled \d+( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
+
     private static readonly Regex ProjectTitle = new(@"\.lvproj - Project Explorer$", RegexOptions.Compiled);
 
     /// <summary>The service's own VIs: NI's AI add-on ships as packed libraries named `LV AI …`.</summary>
@@ -159,7 +167,7 @@ internal static class LabViewState
         if (title == "LabVIEW") return WindowKinds.Frame;
         if (title.StartsWith("Getting Started", StringComparison.Ordinal)) return WindowKinds.GettingStarted;
         if (ProjectTitle.IsMatch(title)) return WindowKinds.Project;
-        if (ViTitle.IsMatch(title)) return WindowKinds.Vi;
+        if (ViTitle.IsMatch(title) || UntitledViTitle.IsMatch(title)) return WindowKinds.Vi;
 
         // Hidden and unexplained: see the class comment. A VI panel with a custom window title lands
         // in one of these two too, which the kit documents - better a panel looked at by eye than a
