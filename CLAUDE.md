@@ -2725,6 +2725,7 @@ literally it argued away 600 usable palette VIs.
 | Is what is PUBLISHED actually the workflow's artefact? | `docs/release-versioning.md` §2a, §2b | `scripts/Assert-PublishedRelease.ps1` |
 | How do I generate a VI in one call? | `docs/bulk-operations.md` | `lvai_generate_vi` |
 | How do I run a whole pylabview edit in one call? | `docs/bulk-operations.md` | `pylv_apply` |
+| How do I close or RESTART LabVIEW without losing the user's work, and what is open or modal in it? | `docs/labview-restart.md` | `lvai_restart_labview` (never kills; no go-ahead only for a LabVIEW this server started or an empty one), `lvai_labview_state` (no LabVIEW call), `lvai_vis_in_memory` |
 | A pylabview-edited VI returns a WRONG result with no error, or crashes 64-bit LabVIEW | `docs/pylabview-stale-compiled-code.md` | `pylv_apply` strips the compiled code since 2026-09-29; grep the file for `VICD` |
 | When is pylabview the route, not AIXML? | `experiments/pylabview/ROUTING.md` (source tree only) | `pylv_route` |
 | How much of a codebase is outside AIXML? | `docs/aixml-gap-census.md` | — |

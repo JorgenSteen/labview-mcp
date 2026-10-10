@@ -6,12 +6,12 @@ counts on this page against the registration in the source, so they cannot drift
 
 ## What is served
 
-**104 tools over 23 RPCs.** Sixty-five map to no RPC: `lvai_status`, `lvai_dump_schema`,
+**107 tools over 23 RPCs.** Sixty-eight map to no RPC: `lvai_status`, `lvai_dump_schema`,
 `lvai_palette_index`, `lvai_example_index`, `lvai_set_vi_icon`, `lvai_render_diagrams` and `lvai_discuss_file` — which compose three RPCs
 rather than wrapping one — `lvai_check_aixml`, which reads an AIXML file, `lvai_describe_class` and `lvai_describe_ctl`, which read a `.lvclass`
 and a `.ctl` off disk and need no LabVIEW at all, the knowledge tools below, and the five `pylv_*`
-tools. 37 carry `readOnlyHint`,
-65 carry `destructiveHint`, so a client can gate the writes.
+tools. 39 carry `readOnlyHint`,
+66 carry `destructiveHint`, so a client can gate the writes.
 
 The server also exposes its five embedded documents as **MCP resources** —
 `labview://aixml-reference`, `labview://dqmh-patterns`, `labview://lvproj-structure`,
@@ -48,6 +48,8 @@ resources rather than call tools.
 | `lvai_coercion_dots` | — (composes `ValidateAIXML` + `ConvertAIXMLToVI` + VI Server reads) — every subVI call terminal with its `Coercion Dot?`. The placeholder route leaves one on each terminal whose real subVI carries a typedef, and validation, the retarget and a run all pass in that state; this is the only thing that sees it. Needs no active project |
 | `lvai_exec_state` | — (composes `ValidateAIXML` + `ConvertAIXMLToVI` + VI Server reads) — a VI's `Execution:State` and `VI Linker Errors`, so "is this executable?" is answerable WITHOUT running it. That matters because a top-level UI loop never ends on its own. `0` is eBad; `-1` means the reference never opened, which is kept apart on purpose so it cannot read as broken. Needs no active project |
 | `lvai_list_labview_installations` | — (reads the installed versions off the machine) |
+| `lvai_labview_state` | — (process list, Win32 window list, CPU clock, `LVAutoSave`; **no LabVIEW call**) — LabVIEW and Nigel pids, unsaved `*` windows and possible dialogs named, also the ones that report themselves invisible. [Restart](../labview-restart.md) |
+| `lvai_vis_in_memory` | — (composes `ValidateAIXML` + `ConvertAIXMLToVI` + `RunVIAsTopLevel`) — the VIs in memory of the default instance with their modification bits, sorted service / labview / helper / other |
 
 ### Write — mutating
 
@@ -118,7 +120,8 @@ resources rather than call tools.
 | `lvai_dqmh_create_rt_tester` | — (same) | **creates a module's Real-Time API tester** with no dialog; Delacor's two modal cases (RT tester exists, tester missing) are refused from the dry run. The RT tester starts out with `#CodeNeeded` frames |
 | `lvai_dqmh_remove_do_something` | — (same) | **removes a module's Do Something example events** with no dialog; Main.vi and the tester stay executable |
 | `lvai_dqmh_create_module_template` | — (composes `RunVIAsTopLevel` + `ConvertVIToAIXML`) | **turns a module into a DQMH module TEMPLATE** in LabVIEW Data with no dialog - Delacor's own tool ends in a modal even on success, so its two steps are repeated here with the metadata text read from the installed DQMH at run time; confirms the new type in Delacor's catalogue |
-| `lvai_ensure_labview` | — (process start + service discovery) | **starts LabVIEW** if it is not running, and clears the auto-save store first |
+| `lvai_ensure_labview` | — (process start + service discovery) | **starts LabVIEW** if it is not running, and clears the auto-save store first; records the LabVIEW it started; **starts the Nigel chat once** when the service stays down |
+| `lvai_restart_labview` | — (window and process reads, `lvai_close_active_project`, `CloseMainWindow`, the `lvai_ensure_labview` launch) | **closes or restarts LabVIEW** under the user's guards: no go-ahead only for a LabVIEW this server started or an empty one; never kills, never answers a dialog; resumable. [Restart](../labview-restart.md) |
 
 ### Without LabVIEW — the pylabview route
 
