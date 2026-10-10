@@ -1509,8 +1509,12 @@ override as `panelViPath`, the override itself as `outputViPath` with `overwrite
 2026-10-10 on a `Stop Core` override, with the project open and a scaffold carrying only
 `final error code`. The expected answer was the refusal `panelDiagramNotEmpty`, since Call Parent is
 on that diagram. Instead an untitled modal dialog came up (the LabVIEW frame and the Project Explorer
-both disabled), the call gave no answer within 300 s, and the files were unchanged. Which step raised
-the dialog is not known. By the tool's own description, `replaceDiagram` deletes every node on the
+both disabled), the call gave no answer within 300 s, and the files were unchanged. The dialog read
+"The VI <Class>.lvclass:Stop Core.vi has changed on disk since last saved or loaded by LabVIEW ..."
+[Revert] [Cancel]. The tool copies `panelViPath` over `outputViPath` before its first LabVIEW step,
+and the output was the override, loaded in the open project, so LabVIEW met a file that had changed
+under a loaded VI (a byte-identical copy with a new file time). Do not graft in place onto a loaded
+VI, which for an override means any time its project is open. By the tool's own description, `replaceDiagram` deletes every node on the
 diagram, which would include Call Parent, and a scaffold cannot carry Call Parent (AIXML cannot
 author it); so even a graft that completes could not leave Call Parent in place (reasoned, not run).
 
