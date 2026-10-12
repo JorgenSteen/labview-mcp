@@ -91,10 +91,25 @@ internal sealed class WireEventTools(LvaiConnection connection)
         performs. Afterwards it sticks, so the spec is written AGAIN here and the VI rebuilt:
         measured 2026-09-11 on two VIs, both eBad -> eIdle on exactly that step. Read
         userEventStep; `changed` says whether there was anything to do.
-        THAT STEP CLOSES THE ACTIVE PROJECT, saving it, because pylabview writes the file while
-        LabVIEW keeps serving its own copy - so without the release the verification reads the VI
-        it replaced. It is skipped entirely, project included, when the VI has no unresolved
-        user-event frame, and finishUserEvents: false turns it off.
+        IT ALSO WIRES THE RIGHT SIDE (wireRightSide, default true): the structure's SOURCE-side
+        Event Registration Refnum terminal to the event registration refnum input of Unregister
+        For Events, found at any depth by Traverse (class Function, exact, with a sink of that
+        lower-case name), Auto Wire and Auto Route TRUE, LabVIEW making the tunnels. Read
+        rightSide: no Unregister node is {skipped: "noUnregisterForEvents"}, more than one is
+        refused and named with the count, an input already wired is a no-op. It runs on its own
+        error branch, so a right-side failure does not lose the left wire.
+        A TUNNEL THAT WIRE CREATES ON AN ENCLOSING CASE STRUCTURE IS UNWIRED IN THE OTHER FRAMES
+        AND BREAKS THE VI, so "Use Default if Unwired" is set on it - in the pylabview bundle,
+        because AIXML refuses that property ("Invalid property"). ONLY tunnels this call created:
+        the VI is extracted BEFORE the helper runs and only selTun uids absent from that baseline
+        are touched; if any baseline tunnel is missing afterwards the uids are not comparable and
+        nothing is patched. useDefaultSet names the tunnels.
+        THE BUNDLE STEP CLOSES THE ACTIVE PROJECT, saving it, because pylabview writes the file
+        while LabVIEW keeps serving its own copy - so without the release the verification reads
+        the VI it replaced. It is ONE round trip for both jobs (user-event specs, use-default
+        flags), and it is skipped entirely, project included, when neither has anything to do.
+        projectClosed says whether it happened and projectClosedFor why. finishUserEvents: false
+        turns off the user-event half.
         IT REFUSES MORE THAN ONE USER-EVENT FRAME rather than guessing: dynIndex is the
         registration item's position and only the value 1 is measured, and a wrong one gives a VI
         that loads, compiles and fires the WRONG event.
@@ -124,6 +139,13 @@ internal sealed class WireEventTools(LvaiConnection connection)
             VI has no user-event frame to finish.
             """)]
         bool finishUserEvents = true,
+        [Description("""
+            Also wire the RIGHT side: the Event Structure's source-side Event Registration Refnum
+            terminal to Unregister For Events, then set Use Default if Unwired on any Case
+            Structure output tunnel that wire created. On by default. Costs one extra pylabview
+            extract up front (the baseline the new tunnels are told apart by).
+            """)]
+        bool wireRightSide = true,
         [Description("Local budget in seconds")]
         int timeoutSeconds = 300,
         CancellationToken ct = default) =>
@@ -160,8 +182,20 @@ internal sealed class WireEventTools(LvaiConnection connection)
             }
 
             var bytesBefore = new FileInfo(viPath).Length;
+
+            // THE BASELINE FOR "CREATED BY THIS CALL". Use Default if Unwired may only go onto a
+            // tunnel the right-side wire made, never onto one the user already had - and the only
+            // record of "already had" is the file before the helper saves over it. Taken while
+            // LabVIEW holds the VI, which is fine for a READ.
+            (Baseline? baseline, JsonObject baselineStep) = wireRightSide
+                ? await ExtractBaselineAsync(viPath, timeoutSeconds, ct)
+                : ((Baseline?)null, new JsonObject { ["skipped"] = "wireRightSideFalse" });
+
             var request = new RunVIAsTopLevelRequest { ViPath = helperVi };
             request.Inputs["VI Path"] = Path.GetFullPath(viPath);
+            // Text, because the runner's inputs are strings; the helper wires the right side
+            // unless this reads FALSE.
+            request.Inputs["wire right side"] = wireRightSide ? "TRUE" : "FALSE";
 
             var stopwatch = Stopwatch.StartNew();
             var response = await connection.InvokeAsync((c, t) =>
@@ -184,6 +218,15 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
             var outcome = Classify(found, chainCode, sourceFrom, wiredBefore, endsAfter, broken,
                                    chainSource, topClasses, eventStructures);
+
+            var right = ClassifyRightSide(wireRightSide,
+                unregisterNodes: Number(outputs, "unregister nodes"),
+                sourceFound: Flag(outputs, "right source found"),
+                wiredBefore: Flag(outputs, "right wired before"),
+                attempted: Flag(outputs, "right attempted"),
+                code: Number(outputs, "right code"),
+                endsAfter: Number(outputs, "right wire ends"),
+                broken: Flag(outputs, "right wire broken"));
 
             var payload = Json.Node(response).AsObject();
             payload.Remove("outputs");
@@ -217,7 +260,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
             payload["verifyBy"] = JsonValue.Create(VerifyHint);
 
             // STEP 3. The wire is in the file now, so - and only now - a user-event EventSpec
-            // will survive LabVIEW's next load. See FinishUserEventsAsync for the measurement.
+            // will survive LabVIEW's next load. See FinishInBundleAsync for the measurement.
             //
             // GATED ON EVIDENCE OF THE WIRE, NOT ON `outcome.Ok` - measured 2026-09-11, and
             // gating it on `ok` made this whole automation DEAD IN THE COMMON CASE. This helper
@@ -228,10 +271,34 @@ internal sealed class WireEventTools(LvaiConnection connection)
             // must still run. `endsAfter >= 3` IS the evidence: a source plus two sinks is the
             // branch this tool makes. Unit tests could not see this; only the end-to-end run did.
             var wired = outcome.Ok || endsAfter >= 3;
-            if (finishUserEvents && wired)
+
+            payload["rightSide"] = right.ToJson(
+                unregisterNodes: Number(outputs, "unregister nodes"),
+                wiredBefore: Flag(outputs, "right wired before"),
+                attempted: Flag(outputs, "right attempted"),
+                code: Number(outputs, "right code"),
+                errorSource: Text(outputs, "right source"),
+                endsAfter: Number(outputs, "right wire ends"),
+                broken: Flag(outputs, "right wire broken"));
+            payload["baselineStep"] = baselineStep;
+            payload["useDefaultSet"] = new JsonArray();
+            payload["projectClosed"] = JsonValue.Create(false);
+
+            // ONE ROUND TRIP FOR BOTH BUNDLE JOBS. The user-event spec needs the left wire in the
+            // file; Use Default if Unwired needs the right one. Either alone is reason enough to
+            // pay for extract, strip, project close, rebuild and execState - and paying twice
+            // would close the project twice and rebuild a file LabVIEW has not yet reloaded.
+            var doUserEvents = finishUserEvents && wired;
+            var doUseDefault = baseline is not null && wired && right.MayHaveCreatedTunnels;
+            if (doUserEvents || doUseDefault)
             {
-                var finish = await FinishUserEventsAsync(viPath, timeoutSeconds, ct);
+                var finish = await FinishInBundleAsync(viPath, doUserEvents,
+                    doUseDefault ? baseline : null, timeoutSeconds, ct);
                 payload["userEventStep"] = finish;
+                payload["useDefaultSet"] = finish["useDefaultSet"]?.DeepClone() ?? new JsonArray();
+                payload["projectClosed"] = JsonValue.Create(
+                    finish["projectClosed"]?.GetValue<bool>() is true);
+                payload["projectClosedFor"] = finish["projectClosedFor"]?.DeepClone();
                 payload["viBytesAfter"] = JsonValue.Create(
                     File.Exists(viPath) ? new FileInfo(viPath).Length : 0L);
 
@@ -240,11 +307,15 @@ internal sealed class WireEventTools(LvaiConnection connection)
                     // The wire went in, so the VI is further along than it was - and it is still
                     // not executable, and that is what `ok` has to report.
                     payload["ok"] = JsonValue.Create(false);
-                    payload["errorKind"] = JsonValue.Create("userEventsNotFinished");
+                    payload["errorKind"] = JsonValue.Create(
+                        finish["errorKind"]?.GetValue<string>() ?? "userEventsNotFinished");
                     payload["note"] = JsonValue.Create(
-                        "The wire went in, and the user-event frames were NOT finished, so the " +
-                        "VI is still not executable. Read userEventStep: it holds each sub-answer " +
-                        "whole. Nothing was rolled back.");
+                        "The wire went in, and the bundle step did NOT finish: " +
+                        $"{finish["note"]?.GetValue<string>()} Read userEventStep: it holds each " +
+                        "sub-answer whole. Nothing was rolled back." +
+                        (finish["projectClosed"]?.GetValue<bool>() is true
+                            ? " The active project WAS closed (and saved) on the way."
+                            : ""));
                 }
                 else if (finish["changed"]?.GetValue<bool>() is true)
                 {
@@ -262,13 +333,30 @@ internal sealed class WireEventTools(LvaiConnection connection)
                     }
 
                     payload["note"] = JsonValue.Create(
-                        $"{payload["note"]?.GetValue<string>()} AND the user-event frame(s) were " +
-                        "finished: the spec was written again onto the wired file and rebuilt, " +
-                        "which is the only order LabVIEW keeps" +
-                        (executable ? ", and execState reads 1 - the VI is EXECUTABLE" : "") +
-                        ". The active project was CLOSED (and saved) to release the VI - reopen " +
-                        "it if you were working in it.");
+                        $"{payload["note"]?.GetValue<string>()} " +
+                        BundleStepNote(finish["userEventsChanged"]?.GetValue<bool>() is true,
+                                       finish["useDefaultChanged"]?.GetValue<bool>() is true,
+                                       executable));
                 }
+            }
+
+            // A right side that was ATTEMPTED and did not land is a failure of this call even when
+            // the left side is fine - a skipped or refused one is not, it is reported.
+            if (right.Failed && payload["ok"]?.GetValue<bool>() is true)
+            {
+                payload["ok"] = JsonValue.Create(false);
+                payload["errorKind"] = JsonValue.Create("rightSideNotWired");
+            }
+            if (right.Reason is not "notRequested")
+                payload["note"] = JsonValue.Create(
+                    $"{payload["note"]?.GetValue<string>()} " +
+                    $"{(right.Failed ? "RIGHT SIDE" : "Right side")}: {right.Note}");
+
+            if (baseline is not null)
+            {
+                try { Directory.Delete(baseline.Directory, recursive: true); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
             }
 
             if (!outcome.Ok)
@@ -285,7 +373,8 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
     /// <summary>
     /// STEP 3 of the user-event route: write the spec again, onto the file that now carries the
-    /// wire, and rebuild.
+    /// wire, and rebuild - and, in the same round trip, Use Default if Unwired on the case
+    /// tunnels the right-side wire created.
     ///
     /// WHY IT CANNOT BE DONE ANY EARLIER. LabVIEW NORMALISES a user-event <c>EventSpec</c> when it
     /// LOADS the VI, against the dynamic-event wire present in the FILE at that moment. The wire
@@ -306,19 +395,36 @@ internal sealed class WireEventTools(LvaiConnection connection)
     /// IT DOES NOT GUESS. The script refuses more than one user-event frame, because
     /// <c>dynIndex</c> is the registration item's position and only the value 1 is measured; a
     /// wrong one gives a VI that loads, compiles and fires the wrong event.
+    ///
+    /// AND IT IS ALSO WHERE USE DEFAULT IF UNWIRED IS SET, because that is a bundle edit too and a
+    /// second round trip would close the project and rebuild twice. AIXML refuses the property on
+    /// a Property Node ("Invalid property") and {LV.Tunnel}'s generic SetProperty is unmeasured;
+    /// the heap flag 0x200000 on a <c>selTun</c> is what a run measured working. The script only
+    /// touches a Case Structure output tunnel whose uid is ABSENT from <paramref name="baseline"/>,
+    /// the extract taken before the helper ran - so a tunnel the user already had is never changed,
+    /// even one broken the same way - and it refuses outright when a baseline tunnel is gone
+    /// afterwards, because then the uids are not comparable.
     /// </summary>
-    private async Task<JsonObject> FinishUserEventsAsync(
-        string viPath, int timeoutSeconds, CancellationToken ct)
+    private async Task<JsonObject> FinishInBundleAsync(
+        string viPath, bool userEvents, Baseline? baseline, int timeoutSeconds,
+        CancellationToken ct)
     {
-        var step = new JsonObject { ["changed"] = false };
+        var step = new JsonObject
+        {
+            ["changed"] = false,
+            ["userEventsChanged"] = false,
+            ["useDefaultChanged"] = false,
+            ["useDefaultSet"] = new JsonArray(),
+            ["projectClosed"] = false,
+        };
 
         if (PyLabview.Locate() is not { } bundle)
         {
             step["ok"] = true;
             step["skipped"] = "pylabviewNotProvisioned";
-            step["note"] = "pylabview is not provisioned, so a user-event frame cannot be "
-                + "finished here. If this VI has one it is still eBad - check with "
-                + "lvai_exec_state, and see pylv_status.";
+            step["note"] = "pylabview is not provisioned, so neither a user-event frame nor a "
+                + "case tunnel's Use Default if Unwired can be finished here. If this VI needs "
+                + "either it is still eBad - check with lvai_exec_state, and see pylv_status.";
             return step;
         }
 
@@ -348,31 +454,75 @@ internal sealed class WireEventTools(LvaiConnection connection)
         if (extract?["mainXml"]?.GetValue<string>() is not { Length: > 0 } mainXml)
         {
             step["ok"] = false;
-            step["note"] = "Could not extract the wired VI, so the user-event spec was not "
-                + "written. The wire itself is in the file.";
+            step["errorKind"] = "extractFailed";
+            step["note"] = "Could not extract the wired VI, so nothing was written into it. The "
+                + "wire itself is in the file.";
             return step;
         }
 
         var baseName = Path.GetFileNameWithoutExtension(mainXml);
+        var closedFor = new JsonArray();
 
-        var finish = await EventStructureTools.RunScriptAsync(bundle, scripts,
-            "pylv-finish-user-events.py", [directory, baseName], "finishUserEvents",
-            timeoutSeconds, ct);
-        steps.Add(finish);
-        if (finish["exitCode"]?.GetValue<int>() != 0)
+        if (userEvents)
         {
-            step["ok"] = false;
-            step["note"] = "The user-event spec could not be written - read this step's stderr. "
-                + "Nothing was rebuilt, so the .vi is the wired-but-unfinished one.";
-            return step;
+            var finish = await EventStructureTools.RunScriptAsync(bundle, scripts,
+                "pylv-finish-user-events.py", [directory, baseName], "finishUserEvents",
+                timeoutSeconds, ct);
+            steps.Add(finish);
+            if (finish["exitCode"]?.GetValue<int>() != 0)
+            {
+                step["ok"] = false;
+                step["errorKind"] = "userEventsNotFinished";
+                step["note"] = "The user-event spec could not be written - read this step's "
+                    + "stderr. Nothing was rebuilt, so the .vi is the wired-but-unfinished one.";
+                return step;
+            }
+            if ((finish["stdout"]?.GetValue<string>() ?? "")
+                .Contains("RESULT: changed", StringComparison.Ordinal))
+            {
+                step["userEventsChanged"] = true;
+                closedFor.Add("userEvents");
+            }
         }
 
-        var stdout = finish["stdout"]?.GetValue<string>() ?? "";
-        if (!stdout.Contains("RESULT: changed", StringComparison.Ordinal))
+        if (baseline is not null)
+        {
+            var useDefault = await EventStructureTools.RunScriptAsync(bundle, scripts,
+                "pylv-set-use-default.py",
+                [directory, baseName, "--before", baseline.Directory, baseline.BaseName],
+                "useDefault", timeoutSeconds, ct);
+            steps.Add(useDefault);
+            if (useDefault["exitCode"]?.GetValue<int>() != 0)
+            {
+                step["ok"] = false;
+                step["errorKind"] = "useDefaultNotSet";
+                step["note"] = "Setting Use Default if Unwired failed - read this step's stderr. "
+                    + "Nothing was rebuilt, so the .vi is the wired one without the flag.";
+                return step;
+            }
+
+            var (result, uids) = ParseUseDefault(useDefault["stdout"]?.GetValue<string>());
+            step["useDefaultResult"] = result;
+            var set = new JsonArray();
+            foreach (var uid in uids) set.Add(JsonValue.Create(uid));
+            step["useDefaultSet"] = set;
+            if (result == "changed")
+            {
+                step["useDefaultChanged"] = true;
+                closedFor.Add("useDefault");
+            }
+            else if (result == "refused")
+                step["useDefaultNote"] = "REFUSED: a tunnel of the baseline is gone after the "
+                    + "edit, so 'absent from the baseline' no longer means 'created by this call' "
+                    + "and nothing was patched. If a new case tunnel is unwired in a frame the VI "
+                    + "stays broken - set Use Default if Unwired on it in the IDE.";
+        }
+
+        if (closedFor.Count == 0)
         {
             step["ok"] = true;
-            step["note"] = "Nothing to finish: this VI has no unresolved user-event frame. The "
-                + "project was left open and no rebuild was needed.";
+            step["note"] = "Nothing to finish: no unresolved user-event frame and no new case "
+                + "tunnel unwired in a frame. The project was left open and no rebuild was needed.";
             try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
             step["bundleDirectory"] = null;
             return step;
@@ -388,6 +538,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
         if (strip["exitCode"]?.GetValue<int>() != 0)
         {
             step["ok"] = false;
+            step["errorKind"] = "stripFailed";
             step["note"] = "Stripping the compiled code failed, so nothing was rebuilt.";
             return step;
         }
@@ -398,7 +549,8 @@ internal sealed class WireEventTools(LvaiConnection connection)
             ct: ct);
         var close = JsonNode.Parse(closeJson)?.AsObject();
         steps.Add(new JsonObject { ["step"] = "closeProject", ["answer"] = close?.DeepClone() });
-        step["projectClosed"] = close?["closed"]?.DeepClone();
+        step["projectClosed"] = close?["closed"]?.GetValue<bool>() is true;
+        step["projectClosedFor"] = closedFor;
 
         var rebuildJson = await new PyLabviewTools(connection)
             .RebuildAsync(mainXml, viPath, timeoutSeconds, ct);
@@ -407,12 +559,13 @@ internal sealed class WireEventTools(LvaiConnection connection)
         if (rebuild?["ok"]?.GetValue<bool>() is not true)
         {
             step["ok"] = false;
-            step["note"] = "The spec was written but the rebuild failed, so the .vi on disk is "
+            step["errorKind"] = "rebuildFailed";
+            step["note"] = "The bundle was edited but the rebuild failed, so the .vi on disk is "
                 + "the wired-but-unfinished one. The bundle is kept.";
             return step;
         }
 
-        // The only check that sees an unfinished frame.
+        // The only check that sees an unfinished frame or an unwired case tunnel.
         var stateJson = await new ExecStateTools(connection).ExecStateAsync(
             viPath, helperAixmlPath: null, helperViPath: null, regenerateHelper: false,
             timeoutSeconds, ct: ct);
@@ -423,17 +576,197 @@ internal sealed class WireEventTools(LvaiConnection connection)
         if (state?["broken"]?.GetValue<bool>() is not false)
         {
             step["ok"] = false;
-            step["note"] = "The user-event spec was written and rebuilt, and LabVIEW still says "
-                + "the VI is NOT EXECUTABLE. At this point the cause is elsewhere in the diagram: "
-                + "read linkerErrors in the verify step.";
+            step["errorKind"] = step["userEventsChanged"]?.GetValue<bool>() is true
+                ? "userEventsNotFinished" : "notExecutableAfterUseDefault";
+            step["note"] = "The bundle was edited and rebuilt, and LabVIEW still says the VI is "
+                + "NOT EXECUTABLE. At this point the cause is elsewhere in the diagram: read "
+                + "linkerErrors in the verify step.";
             return step;
         }
 
         step["ok"] = true;
-        step["note"] = "The user-event frame(s) are finished and LabVIEW can run the VI.";
+        step["note"] = "The bundle step is finished and LabVIEW can run the VI.";
         try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
         step["bundleDirectory"] = null;
         return step;
+    }
+
+    /// <summary>The extract taken BEFORE the helper runs: what "created by this call" is measured against.</summary>
+    internal sealed record Baseline(string Directory, string BaseName);
+
+    /// <summary>
+    /// Extract the VI as it is on disk before the helper saves over it. Auxiliary: a failure here
+    /// costs the Use Default step and nothing else, so it is reported and never thrown.
+    /// </summary>
+    private async Task<(Baseline?, JsonObject)> ExtractBaselineAsync(
+        string viPath, int timeoutSeconds, CancellationToken ct)
+    {
+        var step = new JsonObject();
+        if (PyLabview.Locate() is null)
+        {
+            step["skipped"] = "pylabviewNotProvisioned";
+            return (null, step);
+        }
+
+        var directory = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "wiredyn-baseline",
+            Path.GetFileNameWithoutExtension(viPath) + "-" + Environment.ProcessId + "-"
+            + Guid.NewGuid().ToString("N")[..7]);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var json = await new PyLabviewTools(connection)
+                .ExtractAsync(viPath, directory, annotate: false, timeoutSeconds, ct);
+            var answer = JsonNode.Parse(json)?.AsObject();
+            if (answer?["mainXml"]?.GetValue<string>() is { Length: > 0 } mainXml)
+            {
+                step["ok"] = true;
+                step["directory"] = directory;
+                return (new Baseline(directory, Path.GetFileNameWithoutExtension(mainXml)), step);
+            }
+            step["ok"] = false;
+            step["answer"] = answer?.DeepClone();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            step["ok"] = false;
+            step["error"] = ex.Message;
+        }
+
+        step["note"] = "The baseline extract failed, so Use Default if Unwired will NOT be set "
+            + "on any tunnel: without it a tunnel this call made cannot be told from one the "
+            + "user already had.";
+        try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        return (null, step);
+    }
+
+    /// <summary>
+    /// The RESULT and the USE_DEFAULT_SET line of <c>pylv-set-use-default.py</c>. The script
+    /// prints RESULT LAST, so the last such line wins.
+    /// </summary>
+    internal static (string? Result, IReadOnlyList<string> Uids) ParseUseDefault(string? stdout)
+    {
+        string? result = null;
+        var uids = new List<string>();
+        foreach (var raw in (stdout ?? "").Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.StartsWith("RESULT:", StringComparison.Ordinal))
+                result = line["RESULT:".Length..].Trim();
+            else if (line.StartsWith("USE_DEFAULT_SET:", StringComparison.Ordinal))
+            {
+                uids.Clear();
+                uids.AddRange(line["USE_DEFAULT_SET:".Length..]
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+            }
+        }
+        return (result, uids);
+    }
+
+    /// <summary>The sentence appended to the note when the bundle step changed the file.</summary>
+    internal static string BundleStepNote(bool userEvents, bool useDefault, bool executable)
+    {
+        var what = (userEvents, useDefault) switch
+        {
+            (true, true) => "the user-event frame(s) were finished AND Use Default if Unwired " +
+                            "was set on the case tunnel(s) the right-side wire created",
+            (true, false) => "the user-event frame(s) were finished: the spec was written again " +
+                             "onto the wired file and rebuilt, which is the only order LabVIEW keeps",
+            (false, true) => "Use Default if Unwired was set on the case tunnel(s) the " +
+                             "right-side wire created (useDefaultSet)",
+            _ => "the bundle was rebuilt",
+        };
+        return $"AND {what}" +
+               (executable ? ", and execState reads 1 - the VI is EXECUTABLE" : "") +
+               ". The active project was CLOSED (and saved) to release the VI - reopen it if " +
+               "you were working in it.";
+    }
+
+    /// <summary>The right side's verdict, classified once so the payload and the note agree.</summary>
+    internal readonly record struct RightSide(string Status, string? Reason, bool Failed,
+                                              bool MayHaveCreatedTunnels, string Note)
+    {
+        public JsonObject ToJson(int? unregisterNodes, bool? wiredBefore, bool? attempted,
+                                 int? code, string? errorSource, int? endsAfter, bool? broken)
+        {
+            var json = new JsonObject { ["status"] = Status };
+            if (Reason is not null)
+                json[Status is "refused" ? "refused" : "skipped"] = Reason;
+            json["unregisterNodes"] = unregisterNodes is null ? null : JsonValue.Create(unregisterNodes);
+            json["wiredBefore"] = wiredBefore is null ? null : JsonValue.Create(wiredBefore);
+            json["attempted"] = attempted is null ? null : JsonValue.Create(attempted);
+            json["errorCode"] = code is null ? null : JsonValue.Create(code);
+            json["errorSource"] = string.IsNullOrEmpty(errorSource) ? null : errorSource;
+            json["wireEndsAfter"] = endsAfter is null ? null : JsonValue.Create(endsAfter);
+            json["wireBroken"] = broken is null ? null : JsonValue.Create(broken);
+            json["note"] = Note;
+            return json;
+        }
+    }
+
+    /// <summary>
+    /// The right-side verdict from the helper's indicators. Pure, so it can be tested against the
+    /// shapes the helper produces. `attempted` is the helper's own Case selector: requested, exactly
+    /// one Unregister node, its input unwired, and the structure's source terminal found.
+    /// </summary>
+    internal static RightSide ClassifyRightSide(bool requested, int? unregisterNodes,
+                                                bool? sourceFound, bool? wiredBefore,
+                                                bool? attempted, int? code, int? endsAfter,
+                                                bool? broken)
+    {
+        if (!requested)
+            return new("skipped", "notRequested", false, false,
+                "wireRightSide was false, so the right side was not touched.");
+
+        if (attempted is null)
+            return new("unknown", null, false, true,
+                "The helper's right-side indicators did not come back, so whether it was wired is " +
+                "unknown. The bundle step still looks for case tunnels this call created; render " +
+                "the diagram to see the right side.");
+
+        if (attempted == true)
+        {
+            if (code is null)
+                return new("unknown", null, false, true,
+                    "Connect Wire ran for the right side and its error code did not come back.");
+            if (code != 0)
+                return new("failed", null, true, true,
+                    $"Connect Wire for the right side answered error {code} (rightSide." +
+                    "errorSource names the node). The left side was still saved - the right side " +
+                    "runs on its own error branch.");
+            if (endsAfter is null or < 2)
+                return new("didNotLand", null, true, true,
+                    "Connect Wire for the right side reported no error and the Unregister input " +
+                    "carries no wire afterwards.");
+            if (broken == true)
+                return new("broken", null, true, true,
+                    "The right-side wire landed and LabVIEW reports it as BROKEN.");
+            return new("wired", null, false, true,
+                $"wired from the structure's source Event Registration Refnum terminal to " +
+                $"Unregister For Events, a wire of {endsAfter} ends; LabVIEW made the tunnels on " +
+                "the way out.");
+        }
+
+        if (unregisterNodes == 0)
+            return new("skipped", "noUnregisterForEvents", false, false,
+                "no Unregister For Events node (no node of class Function with a sink named " +
+                "'event registration refnum') anywhere on the block diagram, so there was " +
+                "nothing to wire the right side to.");
+        if (unregisterNodes > 1)
+            return new("refused", "multipleUnregisterForEvents", false, false,
+                $"REFUSED: {unregisterNodes} nodes of class Function carry a sink named " +
+                "'event registration refnum' (Unregister For Events; Flush Event Queue is " +
+                "spelled the same way, unmeasured), and which one belongs to this structure " +
+                "is not something this tool decides. Wire the right side by hand.");
+        if (wiredBefore == true)
+            return new("alreadyWired", null, false, false,
+                "the Unregister node's input ALREADY carried a wire, so the right side was a " +
+                "no-op.");
+        if (sourceFound == false)
+            return new("skipped", "noRightSourceTerminal", false, false,
+                "the Event Structure has no SOURCE terminal named Event Registration Refnum, so " +
+                "there was nothing to wire from.");
+        return new("skipped", "notAttempted", false, false,
+            "the helper did not attempt the right side and its indicators do not say why.");
     }
 
     /// <summary>
