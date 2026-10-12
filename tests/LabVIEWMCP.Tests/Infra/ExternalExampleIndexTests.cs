@@ -231,24 +231,13 @@ public class ExternalExampleIndexTests
             var examplesFolder = Path.GetDirectoryName(Path.GetDirectoryName(file))!;
             // An exbins index registers .vi AND .lvproj - 528 and 37 across this station.
             Assert.All(examples, e =>
+            {
                 Assert.True(e.RelativePath.EndsWith(".vi", StringComparison.OrdinalIgnoreCase) ||
                             e.RelativePath.EndsWith(".lvproj", StringComparison.OrdinalIgnoreCase),
-                            $"unexpected registration: {e.RelativePath}"));
-
-            // AN ADD-ON MAY REGISTER EXAMPLES IT NEVER INSTALLED. Measured 2026-10-10: a station's
-            // CompactRIO index registers 76 examples, of which 4 sbRIO-96x8 projects are not on disk
-            // - their whole folders are missing. The old all-must-exist check failed there on
-            // untouched code, and since the pre-push gate demands a green suite, it blocked every
-            // push from that station. What the check exists to catch is a shifted name/path pairing,
-            // and that points at the WRONG FILE INSIDE A FOLDER THAT EXISTS; a missing install takes
-            // the folder with it. So an absent example fails only when its folder is on disk.
-            var misdecoded = examples
-                .Select(e => Path.Combine(examplesFolder, e.RelativePath))
-                .Where(p => !System.IO.File.Exists(p) && Directory.Exists(Path.GetDirectoryName(p)))
-                .ToList();
-            Assert.True(misdecoded.Count == 0,
-                $"{misdecoded.Count} registered example(s) absent from a folder that exists in {file}: " +
-                string.Join(", ", misdecoded.Take(5)));
+                            $"unexpected registration: {e.RelativePath}");
+                Assert.True(System.IO.File.Exists(Path.Combine(examplesFolder, e.RelativePath)),
+                            $"registered but absent: {e.RelativePath}");
+            });
         }
         Assert.True(read > 0, "no exbins index parsed on a station that has LVAddons");
     }
