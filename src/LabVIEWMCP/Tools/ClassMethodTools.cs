@@ -189,6 +189,13 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
         as `class="udClassDDO"` in the front panel heap and no `stdPath` stand-in may remain. A run
         that reported four working methods from `Execution:State = 1` was reading an in-memory copy
         that never reached disk; this check is what caught it, so `ok` is false without it.
+        EACH ADDED METHOD THEN HAS ITS BROKEN WIRES CLEARED (`removeBadWires`, default true), with
+        the project still open and active: a retype that could not re-type a wire leaves it broken
+        and the method at state 0. The removed wires are listed per method under
+        `badWireCleanup`; a sink that lost its wire from a source makes `ok` false
+        (`errorKind: badWireCleanupLostConnection`, the methods named in
+        `methodsWithLostConnections`). UNMEASURED on a class member: whether Save.Instrument alone
+        persists a Remove Bad Wires there is not established - read the method COLD afterwards.
         """)]
     public async Task<string> AddClassMethodAsync(
         [Description(@"Absolute path to the .lvclass the methods belong to")] string lvclassPath,
@@ -233,6 +240,12 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
             only when a member was non-public or in a folder.
             """)]
         bool keepPlacement = true,
+        [Description("""
+            After each method is added and verified, clear the BROKEN wires left on its diagram
+            (BD.Remove Bad Wires, in the IDE's instance, project still open) and list each under the
+            method's `badWireCleanup`. Default true. A lost connection fails `ok`.
+            """)]
+        bool removeBadWires = true,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
         {
@@ -602,6 +615,7 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
             }
 
             var added = 0;
+            var lostConnections = new List<string>();
             foreach (var method in ready)
             {
                 var viPath = Path.GetFullPath(method.Vi);
@@ -703,8 +717,17 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                     continue;
                 }
 
+                // THE PROJECT IS STILL OPEN AND ACTIVE HERE - phase two opened it for the member
+                // step and nothing closes it before the placement restore below - which is the
+                // only window in which Remove Bad Wires reaches the copy the project holds. The
+                // member and its class are already saved, so a cleanup that cannot run loses
+                // nothing that was there before it.
+                var cleanup = removeBadWires
+                    ? await new BadWireCleanup(connection).RunAsync(viPath, timeoutSeconds, ct)
+                    : BadWireCleanup.Skipped("removeBadWires was false.");
+
                 added++;
-                results.Add(new JsonObject
+                var methodResult = new JsonObject
                 {
                     ["method"] = Path.GetFileNameWithoutExtension(viPath),
                     ["vi"] = viPath,
@@ -714,7 +737,10 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                     ["verifiedOnDisk"] = verify,
                     ["memberAlreadyExisted"] = alreadyMember,
                     ["steps"] = steps,
-                });
+                };
+                BadWireCleanup.Attach(methodResult, cleanup);
+                if (BadWireCleanup.LostConnection(cleanup)) lostConnections.Add(viPath);
+                results.Add(methodResult);
             }
 
             // ---- PHASE THREE, only for a re-run that moved a non-public or foldered member: close,
@@ -738,7 +764,12 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
             {
                 // NOT GATED on the placement: the methods ARE members, and a false `ok` invites
                 // exactly the re-run this whole path exists to make safe. The flag says it instead.
-                ["ok"] = added == methods.Count,
+                // A LOST CONNECTION IS NOT OK, although the member WAS added: the method's diagram
+                // is not the one its AIXML describes, and a green answer would send the caller on.
+                ["ok"] = added == methods.Count && lostConnections.Count == 0,
+                ["errorKind"] = lostConnections.Count > 0 ? BadWireCleanup.LostConnectionKind : null,
+                ["methodsWithLostConnections"] = lostConnections.Count == 0 ? null
+                    : new JsonArray([.. lostConnections.Select(v => (JsonNode)v!)]),
                 ["placementRestored"] = placementStep?["restored"]?.DeepClone(),
                 ["lvclassPath"] = classPath,
                 ["methodsAsked"] = methods.Count,
@@ -748,7 +779,12 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                 ["prologue"] = prologue,
                 ["methods"] = results,
                 ["elapsedMs"] = total.ElapsedMilliseconds,
-                ["note"] = added == methods.Count
+                ["note"] = lostConnections.Count > 0
+                    ? "Every listed method is a member, but the broken-wire cleanup left an input " +
+                      "unwired on " + string.Join(", ", lostConnections.Select(Path.GetFileName)) +
+                      " - a connection a broken wire carried from a source is gone. Read that " +
+                      "method's badWireCleanup for which ends met, fix the AIXML, and re-run."
+                    : added == methods.Count
                     ? (verify
                         ? "Every method was confirmed class-typed in the SAVED file, not in memory."
                         : "verify was off, so nothing here proves the repair reached disk - the " +

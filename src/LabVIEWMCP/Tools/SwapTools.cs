@@ -113,6 +113,10 @@ internal sealed class SwapTools(LvaiConnection connection)
         Error 1055 - and that error would travel down the wire and stop the save. `verify` therefore
         re-exports the VI through LabVIEW afterwards and reports its call targets; that export is the
         only real proof, and `socketsLeft` above zero means a swap did not land.
+        THE LAST STEP CLEARS BROKEN WIRES (`removeBadWires`, default true, since 2026-10-11): a
+        Replace that cannot re-type a wire leaves it broken and the VI at state 0. It runs before
+        the verify export, lists every removed wire under `badWireCleanup`, and a sink that lost its
+        wire from a source makes `ok` false (`errorKind: badWireCleanupLostConnection`).
         """)]
     public async Task<string> SwapSubVisAsync(
         [Description("""
@@ -173,11 +177,19 @@ internal sealed class SwapTools(LvaiConnection connection)
             """)]
         string? editsJson = null,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 300,
+        [Description("""
+            After a saved swap, clear the BROKEN wires left on the diagram (BD.Remove Bad Wires, in
+            the IDE's instance) and report each removed wire under `badWireCleanup`. Default true -
+            the user's rule of 2026-10-11. A sink that had a wire from a source before and none
+            after is a LOST CONNECTION: it is named in `inputsLeftUnwired` and `ok` is false
+            (`errorKind: badWireCleanupLostConnection`). A VI with no broken wire is not touched.
+            """)]
+        bool removeBadWires = true,
         CancellationToken ct = default)
     {
         if (editsJson is { Length: > 0 })
             return await ManyAsync(editsJson, verify, verbose, helperViPath, helperAixmlPath,
-                                   regenerateHelper, timeoutSeconds, ct: ct);
+                                   regenerateHelper, timeoutSeconds, removeBadWires, ct: ct);
 
         // Now that `viPath` is optional in the schema, its absence has to be caught here - and
         // named, rather than arriving as a null-reference somewhere further down.
@@ -187,7 +199,7 @@ internal sealed class SwapTools(LvaiConnection connection)
                 new { viPath, editsJson });
 
         return await OneAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
-                              helperAixmlPath, regenerateHelper, timeoutSeconds, ct: ct);
+                              helperAixmlPath, regenerateHelper, timeoutSeconds, removeBadWires, ct: ct);
     }
 
     /// <summary>
@@ -201,7 +213,7 @@ internal sealed class SwapTools(LvaiConnection connection)
     private async Task<string> ManyAsync(string editsJson, bool verify, bool verbose,
                                          string? helperViPath, string? helperAixmlPath,
                                          bool regenerateHelper, int timeoutSeconds,
-                                         CancellationToken ct)
+                                         bool removeBadWires, CancellationToken ct)
     {
         JsonNode? parsed;
         try { parsed = JsonNode.Parse(editsJson); }
@@ -241,7 +253,7 @@ internal sealed class SwapTools(LvaiConnection connection)
         {
             var one = await OneAsync(edit.Vi, edit.Swaps, edit.Constants, verify, verbose,
                                      helperViPath, helperAixmlPath, regenerateHelper,
-                                     timeoutSeconds, ct: ct);
+                                     timeoutSeconds, removeBadWires, ct: ct);
             var node = Read(one);
             answers.Add(new JsonObject { ["vi"] = edit.Vi, ["answer"] = node });
 
@@ -278,7 +290,8 @@ internal sealed class SwapTools(LvaiConnection connection)
     private async Task<string> OneAsync(string viPath, string? swapsJson, string? constantsJson,
                                         bool verify, bool verbose, string? helperViPath,
                                         string? helperAixmlPath, bool regenerateHelper,
-                                        int timeoutSeconds, CancellationToken ct) =>
+                                        int timeoutSeconds, bool removeBadWires,
+                                        CancellationToken ct) =>
         await Rpc.GuardAsync(async () =>
         {
             if (!File.Exists(viPath))
@@ -434,6 +447,16 @@ internal sealed class SwapTools(LvaiConnection connection)
                 constants, Counts(values, "constant matches"), swapped,
                 int.TryParse(Scalar(values, "constants seen"), out var seen) ? seen : null);
 
+            // THE BROKEN-WIRE CLEANUP RUNS BEFORE THE VERIFY EXPORT, so `callTargets` and the
+            // wiring comparison describe the diagram as it is left - not one that still carries
+            // the wires the cleanup removed. Only after a SAVED swap: an errored helper wrote
+            // nothing, so there is nothing of this call's to clean.
+            var cleanup = !removeBadWires
+                ? BadWireCleanup.Skipped("removeBadWires was false.")
+                : !swapped
+                    ? BadWireCleanup.Skipped("The swap did not save the VI, so this call left nothing to clean.")
+                    : await new BadWireCleanup(connection).RunAsync(viPath, timeoutSeconds, ct);
+
             JsonNode? targets = null;
             // What the diagram calls AFTER the swap, with repetition, read off the verify export.
             // `present` is the helper's listing from BEFORE its Replace, and it used to be the
@@ -510,7 +533,7 @@ internal sealed class SwapTools(LvaiConnection connection)
             // export is occasionally useful, but nothing may branch on it.
             var ok = swapped && missing.Count == 0 && socketsLeft <= 0
                      && constantOutcome.Ambiguous.Count == 0 && constantOutcome.Missing.Count == 0;
-            return Json.Document(new JsonObject
+            var result = new JsonObject
             {
                 ["ok"] = ok,
                 ["viPath"] = Path.GetFullPath(viPath),
@@ -558,7 +581,9 @@ internal sealed class SwapTools(LvaiConnection connection)
                 ["totalElapsedMs"] = total.ElapsedMilliseconds,
                 ["note"] = Note(ok, swapped, missing, socketsLeft, verify, code, after ?? present,
                                 constantOutcome),
-            });
+            };
+            BadWireCleanup.Attach(result, cleanup);
+            return Json.Document(result);
         });
 
     /// <summary>
