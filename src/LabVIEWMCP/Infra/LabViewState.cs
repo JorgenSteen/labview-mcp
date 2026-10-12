@@ -97,7 +97,7 @@ internal static class LabViewState
 {
     public const string LabViewProcess = "LabVIEW";
     public const string NigelServiceProcess = "NI.NigelLocalService";
-    public const string NigelChatProcess = "LVNigelChat";
+    public const string NigelChatProcess = Tools.DiscussTools.ChatProcessName;
 
     /// <summary>Hidden LabVIEW windows that are never a dialog (the kit's ignore list, measured).</summary>
     internal static readonly HashSet<string> HiddenSystemTitles = new(StringComparer.Ordinal)
