@@ -178,6 +178,26 @@ descriptions match their example's subject. `ExternalExampleIndex` re-checks the
 rule at run time and **returns nothing at all** for a file that fails it — a mis-paired description
 is worse than a missing one. Such a file is then named in the tool's output.
 
+> **Not true on every station - measured 2026-10-12 on one with NI-XNET and the CompactRIO
+> add-on.** "Every registration resolves to a file" held for the 23 files above and fails three
+> ways elsewhere, which `ExternalExampleIndexTests.RealIndexFilesParseAndTheirPathsResolve` met
+> one after another:
+>
+> - **A registration can point INTO an `.llb`.** NI-XNET's `lvexxnet.bin4` registers 113 examples
+>   as `nixnet\examples.llb\<name>.vi`. The `.llb` is one file, so `File.Exists` is false for
+>   every member while the example is installed. The test now counts such a path as present when
+>   the `.llb` exists. **`ExampleIndex` has the same blind spot and is NOT fixed**: it skips a
+>   registration whose path is not a file, so those 113 never reach `lvai_example_index`.
+> - **An index can sit BELOW `exbins`.** CompactRIO ships `examples\exbins\english\lv985x.bin4`.
+>   Its paths are still relative to `examples`, so "the folder above `exbins`" is not "the folder
+>   above the index's folder". `ExampleIndex` already joined with the examples folder; only the
+>   test assumed the shallower layout.
+> - **An index can name files its own package does not install.** CompactRIO's
+>   `lvexcrioabw.bin4` registers four `sbRIO-96x8 …` projects; the same package, installed in the
+>   same minute, ships them as `sbRIO …` without the model number. That is NI's defect and the
+>   test still fails on it, as it should - the station in question added links under the
+>   registered names.
+
 Of the 565 registrations only 143 are new: the rest duplicate examples that already carry an in-VI
 block. Where both describe one example the block wins — it is authoritative and the only source
 carrying `RequiredSoftware`.
