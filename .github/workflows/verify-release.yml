@@ -57,6 +57,9 @@ permissions:
 
 jobs:
   verify:
+    # Forks inherit the schedule and have no releases of their own, so the daily run failed there
+    # every day. A fork can still run it by hand.
+    if: github.event_name != 'schedule' || github.repository == 'Zuehlke/labview-mcp'
     # windows-latest for parity with release.yml and with every other script in this repository;
     # the check itself is plain .NET and would run anywhere pwsh does.
     runs-on: windows-latest

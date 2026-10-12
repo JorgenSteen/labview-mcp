@@ -37,6 +37,9 @@ concurrency:
 
 jobs:
   collect:
+    # Forks inherit the schedule and have neither Pages nor releases of their own, so the daily
+    # run failed there every day. A fork can still run it by hand.
+    if: github.event_name != 'schedule' || github.repository == 'Zuehlke/labview-mcp'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (collector and page)
