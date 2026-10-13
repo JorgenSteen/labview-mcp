@@ -39,14 +39,16 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         launch routes and keeps only one whose process is still alive two seconds later. The
         winner is reported as launchMethod; if none survives you get errorKind
         'launch-did-not-survive' listing every attempt, never a hopeful 'starting'.
-        IT CANNOT FINISH THE JOB ALONE. Measured: the 'LV AI gRPC Service' starts with NIGEL,
-        the AI assistant - not with the IDE. A LabVIEW that has been up for twenty minutes can
-        hold 30 open listener ports and serve lvai.LVAI on none of them. So a persistent
-        'starting' with LabVIEW visibly running is not this tool being slow: ask whoever is at
-        the machine to open Nigel, then call lvai_status once.
-        Otherwise, when LabVIEW is still coming up, calling again is right - the second call
-        finds the instance and waits. For an unattended long wait use the CLI:
+        THE SERVICE COMES UP WITH LabVIEW - NIGEL IS NOT NEEDED. Measured 2026-10-13 on a cold
+        start with no Nigel chat running at any point: LabVIEW.exe started directly, the
+        service's features started 39-44 s later and lvai.LVAI answered at 79 s, a
+        ValidateAIXML included. So while LabVIEW is still coming up, calling again is right -
+        the second call finds the instance and waits. For an unattended long wait use the CLI:
         LabVIEWMCP --ensure-labview.
+        One earlier LabVIEW, up twenty minutes, held 30 listener ports and served lvai.LVAI on
+        none of them, and opening Nigel brought it up within seconds; the cause is not
+        established. So a 'starting' that outlasts several minutes with LabVIEW visibly
+        running is the case for the Nigel chat below - a remedy, not a requirement.
         NIGEL CHAT (startNigelChat, default on): when LabVIEW has run for over 60 s, its service
         does not answer, no LVNigelChat runs and no possible dialog is up, this starts the chat
         ONCE per LabVIEW process the way LabVIEW's menu does - LVNigelChat.exe --lv-version
@@ -68,7 +70,8 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         bool keepAutoSave = false,
         [Description("""
             Start the Nigel chat once when LabVIEW has run for over 60 s and its service still does
-            not answer (the service starts with Nigel). Never touches a running chat or the
+            not answer (a remedy for a service that does not come up with LabVIEW; normally it
+            does, and this never fires). Never touches a running chat or the
             NI.NigelLocalService process.
             """)]
         bool startNigelChat = true,
@@ -196,7 +199,8 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                       "1.2 s, 12.1 s, 27.7 s and 1.2 s. Do NOT read `lastError: \"The operation " +
                       "was canceled.\"` as a failure; it is this call's own budget expiring. Only " +
                       "if a SECOND call also comes back `starting` is something wrong - then the " +
-                      "service may be waiting on Nigel, which starts it, or use the CLI " +
+                      "service has not come up with LabVIEW - opening the Nigel chat has brought " +
+                      "one up, but the service does not need it normally - or use the CLI " +
                       "--ensure-labview for an unattended long wait.",
             }.ToJsonString(Indented);
         });

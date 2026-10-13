@@ -194,8 +194,14 @@ through `lvai_ensure_labview`'s launch routes, which survive the host's job obje
 close, the tool stops with `closedNotStarted`. A start would either clear those files or raise the
 recovery dialog, and that choice is the user's.
 
-**Nigel.** The AI service starts with Nigel, not with the IDE. When LabVIEW has been up for more than
-60 s and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
+**Nigel.** The AI service normally comes up WITH LabVIEW and needs no chat. Measured 2026-10-13:
+LabVIEW closed with this tool, the chat gone with it, then `LabVIEW.exe` started directly with no
+`LVNigelChat` at any point - `NI.NigelLocalService` logged five features `Started monitoring` 39-44 s
+after the launch, and `lvai.LVAI` answered at 79 s, `GetApplicationConfiguration` and a
+`ValidateAIXML` included. So the chat start below is a REMEDY for a service that does not come up,
+which one LabVIEW up twenty minutes showed once (30 listener ports, `lvai.LVAI` on none, up within
+seconds of opening Nigel - cause not established); with a service that answers it never fires. When
+LabVIEW has been up for more than 60 s and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
 chat ONCE per LabVIEW process, under these conditions: no `LVNigelChat` runs, no possible dialog is
 up, and at least 15 s of the call's budget remain. They start it the way LabVIEW's own menu does:
 `LVNigelChat.exe --lv-version <add-on folder> --lv-bitness x86|x64`, from
@@ -240,7 +246,8 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | dialog screenshots (`PrintWindow`), `lvai_answer_dialog`: Esc = Cancel and a click on the found "Don't Save" picture on a real "Save changes? (Exit)" | measured 2026-10-10 in the caller's own LabVIEW (section 13) |
 | `lvai_answer_dialog` for `Don't Save - All`, `changedOnDisk`, `nigelBox` | **unmeasured**: unit tests only (section 13) |
 | the `dialog` stop with a go-ahead, the `ownership` refusal, a close that ends in the save prompt (`closeDidNotFinish`) | measured 2026-10-10 with a person at the machine (section 12) |
-| the replay, the Nigel chat start, the dialog fold in timeouts, `hiddenWindows` overridden, the `processes`, `service` and `memory` refusals | **unmeasured** |
+| the service up with no Nigel chat (79 s after a direct `LabVIEW.exe` start); a close of the user's LabVIEW with a go-ahead overriding `hiddenWindows` (a hidden `VI Hierarchy`), 3.79 s, the chat exiting with LabVIEW | measured 2026-10-13 (section 8) |
+| the replay, the Nigel chat start, the dialog fold in timeouts, the `processes`, `service` and `memory` refusals | **unmeasured** |
 | `CloseMainWindow` on a LabVIEW with a hung actor (running VIs, no dialog) | measured 2026-10-10: exits in 1.72 s, no prompt (section 12, item C) |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
 

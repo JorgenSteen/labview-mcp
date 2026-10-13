@@ -16,9 +16,11 @@ internal sealed record NigelChatTarget(string Exe, string Version, string Bitnes
 /// <summary>
 /// Opening the Nigel chat without a person - the port of the skill's `lv_start_nigel_chat.ps1`.
 ///
-/// WHY. The `LV AI gRPC Service` starts with Nigel, not with the IDE (measured; `lvai_ensure_labview`'s
-/// description has the twenty-minute LabVIEW that served lvai.LVAI on none of its 30 ports). The skill
-/// measured the remedy: start `LVNigelChat.exe` the way LabVIEW's menu does, with BOTH
+/// WHY. The `LV AI gRPC Service` normally comes up WITH LabVIEW and needs no chat - measured 2026-10-13,
+/// lvai.LVAI answered 79 s after a cold start with no LVNigelChat running. But one LabVIEW, up twenty
+/// minutes, served lvai.LVAI on none of its 30 ports until Nigel was opened, cause not established, so
+/// this is the remedy for THAT case and never fires when the service is up. The skill measured it:
+/// start `LVNigelChat.exe` the way LabVIEW's menu does, with BOTH
 /// `--lv-version &lt;add-on folder&gt;` and `--lv-bitness x86|x64`. Without both it never exits and
 /// leaves a modal "Object reference not set to an instance of an object." box - so there is no
 /// fallback that starts it some other way, and a message box after the start is REPORTED, never
