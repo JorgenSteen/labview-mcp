@@ -1456,7 +1456,7 @@ internal sealed class TestTools(LvaiConnection connection)
                 string.Join(",", group.Select(c => c.Terminal)),
                 string.Join(",", group.Select(c => c.ConstantLabel)),
                 helperViPath: null, helperAixmlPath: null, regenerateHelper: false,
-                timeoutSeconds, ct);
+                timeoutSeconds, ct: ct);
             var parsed = Read(answer) as JsonObject;
             replaced += parsed?["replaced"]?.GetValue<int>() ?? 0;
             foreach (var entry in (parsed?["stillCoerced"] as JsonArray ?? []).Select(e => e?.ToString() ?? ""))
@@ -2307,7 +2307,7 @@ internal sealed class TestTools(LvaiConnection connection)
     }
 
     /// <summary>The text inside the type's outermost braces, or null when they are unbalanced.</summary>
-    private static string? Braced(string type)
+    internal static string? Braced(string type)
     {
         var open = type.IndexOf('{');
         if (open < 0) return null;
@@ -2324,7 +2324,7 @@ internal sealed class TestTools(LvaiConnection connection)
     /// Split a cluster's member list on the commas that are SEPARATORS - the ones at brace depth
     /// zero. A nested cluster carries its own commas and must not be torn apart by them.
     /// </summary>
-    private static List<string> SplitTopLevel(string inner)
+    internal static List<string> SplitTopLevel(string inner)
     {
         var parts = new List<string>();
         var depth = 0;
@@ -2350,7 +2350,7 @@ internal sealed class TestTools(LvaiConnection connection)
     /// may itself contain one (<c>double.Max. Spannung</c>) and <c>array.2{double}</c> carries a
     /// dot in the TYPE. Both spellings are attested in NI's own exports.
     /// </summary>
-    private static string FieldType(string member)
+    internal static string FieldType(string member)
     {
         var depth = 0;
         var lastClose = -1;

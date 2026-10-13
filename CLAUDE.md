@@ -336,8 +336,20 @@ there is no dot and no constant — the bare type travels into whatever consumes
 `docs/typedef-constants.md` has the measurements, including why `Create Constant` alone is not the
 fix and the two traps around `Replace`.
 
+**A CLASS INSIDE A CLUSTER IS A STAND-IN AT THE ELEMENT, and the caller's own cluster still has to
+be bound afterwards.** Since 2026-10-11 `lvai_placeholder_subvi` writes
+`cluster{ref{UDClassInst}.hardware,uint32.intervalMs}` as `cluster{path.hardware,uint32.intervalMs}`
+- it collapsed the whole terminal to a scalar `path` before, so a caller could not wire its cluster
+at all - and names each such element under `classElementsInClusters`. The swap then lands, but the
+CALLER's cluster source still carries a `path` element where the real subVI wants the class. For a
+pane CONTROL the follow-up is `lvai_bind_pane_typedef`. For a cluster CONSTANT it is
+`lvai_swap_subvis` with the typedef's **`.ctl` path as that constant's `class`** in `constantsJson`:
+`{LV.Constant}` `Replace` with a `.ctl` turns a bare cluster constant into a typedef constant. That
+route was OBSERVED in a field run and is NOT YET MEASURED here - check the result with
+`lvai_coercion_dots` and `lvai_exec_state`. `docs/typedef-constants.md` §5a.
+
 The tool clones the subject's pane, caches the stub in `user.lib\LV_MCP\` under a hash of the
-signature, and hands back the `Call` element and the matching `retarget` operation. **Do not hunt
+TARGET and its signature, and hands back the `Call` element and the matching `retarget` operation. **Do not hunt
 the palette for a stand-in and do not hand-write one**: a borrowed placeholder needs a lucky hit per
 signature and forces the SUBJECT's pane to be reshaped, which then breaks on every regeneration —
 `7101, At least one test is not in a executable state`, with nothing in the message about panes.
@@ -1972,9 +1984,15 @@ placeholders cached "by signature" would give `Minimum Value`, `Maximum Value`, 
 inherited `Sample Rate` — all class + double — one indistinguishable socket. Measured the same day:
 `PlaceholderTools.Signature` puts the terminal NAME in the hash
 (`o:Minimum Value:double:2:recommended`), so those four produced four distinct stubs, and nine
-accessors produced nine. **Field names are unique within a class by construction, so accessor sockets
-cannot collide.** The collapse is real only for panes that are identical NAME INCLUDED — two methods
-with the same terminal names, not two fields with the same type.
+accessors produced nine. **For ACCESSORS that holds: field names are unique within a class, so
+their panes differ by name.** It is not general, and this paragraph read as if it were: **methods
+with identical panes DID collide until 2026-10-11** - two Actor Framework methods carrying `ROOT in`,
+`error in`, `ROOT out`, `error out`, or methods of two different classes, since an export writes
+every class as bare `ref{UDClassInst}`, got ONE stub, and `lvai_swap_subvis`, which matches by VI
+name, could not tell their nodes apart. The signature now carries the TARGET's identity - its
+qualified name, else its full path - so every subject gets its own stub, and a second call for the
+same subject with an unchanged pane still reuses its own. Stubs cached under the old key stay in
+`user.lib\LV_MCP\` and are simply no longer chosen.
 
 So a generated method CAN read its own fields, and a real HAL is reachable: measured over four DAQmx
 methods that take only the class wire and the error cluster, `socketsLeft: 0` on all four. Choose the
@@ -2016,6 +2034,34 @@ them additionally inside Case frames — all six listed, five of five entries sw
 `Traverse Target` = 1 for the block diagram) walks the whole diagram; it hands back GObject
 references, so each needs `To More Specific Class` onto `ref{LV.SubVI}` before `VI Name` is read or
 `Replace` is invoked.
+
+**THE CONSTANTS HAD THE SAME BLIND SPOT FOR ANOTHER MONTH, and `constantsJson` reaches any depth as
+of 2026-10-11 - not measured against LabVIEW yet.** The class constants were still collected from
+the top-level diagram's `All Objects[]`, so a `path` seed nested in a Case frame inside a loop was
+never found. A second `Traverse for GObjects.vi` call collects them now; its `Class Name` is ONE
+labelled constant, `Constant Class Name` = `Constant`, because a string constant reports
+`StringConstant` and a class constant `LabVIEWClassConstant`, so whether the traversal answers
+`Constant` for every kind depends on whether it matches descendant classes - the first live probe
+settles it, and `constantsSeen: 0` in the answer is the tell that it does not. **A label that MORE
+THAN ONE constant carries is REFUSED** (the user's decision of 2026-10-11): it is not replaced,
+`constantsAmbiguous` names it with its count, `ok` is false with `errorKind:
+constantLabelAmbiguous`, and every label that matched exactly once is still replaced and saved. So
+name every seed constant `_name`-uniquely. `docs/class-method-tooling.md` "Constants at any depth".
+
+**A VI AT STATE 0 WITH A BROKEN-WIRE TEXT GETS REMOVE BAD WIRES BEFORE ANY REBUILD** - the user's
+rule of 2026-10-11. A `Replace` (subVI, constant, pane control) re-types the wires it can and leaves
+the rest BROKEN, and one broken wire is enough for `execState 0`; regenerating for that throws away
+the swaps, the binds and the icon to fix what `{LV.VI}` `BD.Remove Bad Wires` clears in one call.
+So `lvai_swap_subvis`, `lvai_bind_typedef_constants` and `lvai_add_class_method` end with it as a
+shared step, `removeBadWires` (default true), through `scripts/lvbd_remove_bad_wires.xml` in the
+IDE's instance with the project active. **It says exactly what went**: `badWireCleanup` lists every
+removed wire as `terminal @ owner -> terminal @ owner`, and every sink of a broken wire that HAD a
+source is read back - one with no wire afterwards is a lost connection (two sources on one input,
+a wrong-type source), named in `inputsLeftUnwired`, and the calling tool's `ok` turns false
+(`errorKind: badWireCleanupLostConnection`). A wire with no source is a loose fragment: cleared,
+reported, gates nothing. A VI with no broken wire is not touched or saved. NOT MEASURED against
+LabVIEW yet, and on a class member it is not established that `Save.Instrument` alone persists the
+removal - read the method cold. `docs/class-method-tooling.md` "Clearing broken wires".
 
 **THE PYLABVIEW FALLBACK IS NOT AN ANSWER FOR THIS, and it fails LOUDLY only on the second look.**
 `pylv_apply {"op":"retarget"}` reaches a nested node — it edits link records and never walks a
