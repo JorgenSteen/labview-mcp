@@ -149,7 +149,7 @@ wiring into the message rather than leaving to be re-derived:
 
 | every LabVIEW.exe listener answers | meaning | fix |
 |---|---|---|
-| `Unavailable` | IDE up, service never started | open Nigel |
+| `Unavailable` | IDE up, service not started | wait and retry (a cold start takes 1-2 min); if it lasts, open Nigel |
 | `DeadlineExceeded` | service there, **LabVIEW hung** | kill the process |
 
 Confirmed independently by `(Get-Process LabVIEW).Responding = False`, and by the title bar reading
@@ -506,8 +506,9 @@ What to take from it, pending a controlled test:
   2026-10-06) never needed such a constant.
 - **Validation passing says nothing here.** The file validated in 2.5 s and generated with
   `errorCode 0`; the death came later.
-- The restarted LabVIEW comes back **without the gRPC service** — it starts with Nigel, not the
-  IDE — so a crash mid-session costs a manual step before any `lvai_*` call works again.
+- The restarted LabVIEW came back **without the gRPC service**, and getting it back cost a manual
+  step. That is not the rule: measured 2026-10-13, the service comes up with LabVIEW alone one to
+  two minutes after a cold start, with no Nigel chat running (`docs/labview-restart.md` §8).
 
 ### The fifth signature again, 2026-09-01 — and it REFUTES the refnum half of the hypothesis above
 
@@ -1611,7 +1612,7 @@ It rotates at 2 MiB: `AIAssistant.txt` was frozen at exactly 2 097 301 bytes and
 **Whether the service started, and when** — `Initializing Nigel Local Service`, then
 `Now listening on:` twice, then one `Started monitoring for requests.` per feature. That is the
 direct answer to `lvai_status`'s `Unavailable` triage ("the IDE is up and the service has not
-started — open Nigel"), and it needs no gRPC call at all.
+started yet"), and it needs no gRPC call at all.
 
 **The ports.** Measured twice on 2026-09-16: the service logged https `52948` while `lvai_status`
 reported the lvai port as `52949`, and https `50773` against lvai `50774`. **That is a hint, not a

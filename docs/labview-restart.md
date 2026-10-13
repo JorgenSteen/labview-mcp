@@ -194,8 +194,25 @@ through `lvai_ensure_labview`'s launch routes, which survive the host's job obje
 close, the tool stops with `closedNotStarted`. A start would either clear those files or raise the
 recovery dialog, and that choice is the user's.
 
-**Nigel.** The AI service starts with Nigel, not with the IDE. When LabVIEW has been up for more than
-60 s and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
+**Nigel.** The AI service comes up with LabVIEW alone; the Nigel chat is not needed. It needs
+`NI.NigelLocalService`, a separate process that outlives LabVIEW and the chat (on 2026-10-13 one had
+run for three days) and runs as a child of NI's Discovery service (`NI.Discovery.V1.Service.exe`).
+Measured 2026-10-13, both times with LabVIEW closed by this tool and `LabVIEW.exe` then started
+directly, no `LVNigelChat` at any point:
+
+| local service before the start | local service | features `Started monitoring` | `lvai.LVAI` answered |
+|---|---|---|---|
+| running (since 2026-10-10) | the same pid | 39-44 s after the launch | at 79 s, the first time asked |
+| stopped by hand (`Stop-Process`), still gone 15 s later | started by Discovery 20 s after the launch | 57-62 s | at 136 s, the first time asked |
+
+`GetApplicationConfiguration` and a `ValidateAIXML` answered in both. Five starts on 2026-10-10
+came up the same way (section 12, item 10). Twice the service has NOT come up until Nigel was
+opened: on the morning of 2026-10-10, with the local service not running, and on an older LabVIEW,
+up twenty minutes, serving `lvai.LVAI` on none of 30 listener ports. The second run above shows a
+missing local service is not enough to cause that, so the cause is not established. The chat
+start below is the remedy for that case. When
+LabVIEW has been up for more than 90 s (60 s until 2026-10-13, raised because the service's features
+were measured starting 39-44 s after a launch, too close to 60) and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
 chat ONCE per LabVIEW process, under these conditions: no `LVNigelChat` runs, no possible dialog is
 up, and at least 15 s of the call's budget remain. They start it the way LabVIEW's own menu does:
 `LVNigelChat.exe --lv-version <add-on folder> --lv-bitness x86|x64`, from
@@ -240,7 +257,8 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | dialog screenshots (`PrintWindow`), `lvai_answer_dialog`: Esc = Cancel and a click on the found "Don't Save" picture on a real "Save changes? (Exit)" | measured 2026-10-10 in the caller's own LabVIEW (section 13) |
 | `lvai_answer_dialog` for `Don't Save - All`, `changedOnDisk`, `nigelBox` | **unmeasured**: unit tests only (section 13) |
 | the `dialog` stop with a go-ahead, the `ownership` refusal, a close that ends in the save prompt (`closeDidNotFinish`) | measured 2026-10-10 with a person at the machine (section 12) |
-| the replay, the Nigel chat start, the dialog fold in timeouts, `hiddenWindows` overridden, the `processes`, `service` and `memory` refusals | **unmeasured** |
+| the service up with no Nigel chat (79 s after a direct `LabVIEW.exe` start; 136 s with `NI.NigelLocalService` stopped first, which the start brought back); a close of the user's LabVIEW with a go-ahead overriding `hiddenWindows` (a hidden `VI Hierarchy`), 3.79 s, the chat exiting with LabVIEW | measured 2026-10-13 (section 8) |
+| the replay, the Nigel chat start, the dialog fold in timeouts, the `processes`, `service` and `memory` refusals | **unmeasured** |
 | `CloseMainWindow` on a LabVIEW with a hung actor (running VIs, no dialog) | measured 2026-10-10: exits in 1.72 s, no prompt (section 12, item C) |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
 
@@ -287,7 +305,7 @@ plugin at the same time.
 9. **A close that does not finish:** an unsaved VI the user agrees to leave, with a go-ahead:
    `closeDidNotFinish`, `closeMainWindow: true`, the save prompt named in `dialogsNow`. The user
    answers it.
-10. **Nigel:** LabVIEW up for more than 60 s with no chat and the service down. `lvai_ensure_labview`
+10. **Nigel:** LabVIEW up for more than 90 s with no chat and the service down. `lvai_ensure_labview`
    reports `nigelChat.state: running`, the chat window appears, and the next `lvai_status` answers.
    Call it again: there is no second start.
 11. **Timeout with a dialog:** a call that times out while a dialog is up carries `possibleDialogs`.
@@ -305,7 +323,7 @@ plugin at the same time.
 | 7 | **pass** after the section 6 fix: a LabVIEW this server did not start, empty, no go-ahead: `whose: empty`, two quiet samples, memory read (419 lines, 96 unreadable, all in packed libraries). The first call answered `stillRunning` at 40 s and the second collected the answer. Close 3.2 s, start 22.1 s (a warm start), 56.2 s in all, new pid and port, the same `NI.NigelLocalService` pid, `LVAutoSave` 0 → 0. |
 | 8 | **pass** after a fix: `lvai_ensure_labview` from no LabVIEW (pid recorded), `lvai_open_file`, then `close` with `projectPath` and no go-ahead: `whose: started by this server`, the project saved and closed, close 3.98 s. Before the fix, the project opened as `Name.lvproj * - Project Explorer` before any edit, and the `unsaved` guard counted the tool's own project (section 3). After a project open, LabVIEW was busy for about 90 s (11–23 CPU s per 30 s). |
 | 9 | **pass**, with a person at the machine, and the go-ahead half of item 4: the user pressed Cancel on the item 2 prompt; `close` WITH the go-ahead answered `stillRunning` at 40.0 s, then `closeDidNotFinish`: `closeMainWindow: true`, 20.01 s waited, `dialogsNow` naming "Save changes? (Exit)", `sideEffects` none. The user saw both the edited VI and `LVMCP Validate.vi` listed, pressed "Don't Save - All", and LabVIEW exited. |
-| 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. So the chat appears to be needed when the local service is down, not after every LabVIEW start. |
+| 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. So the chat appears to be needed when the local service is down, not after every LabVIEW start. **Not so, measured 2026-10-13:** with the local service stopped by hand, a LabVIEW start brought it back and the service came up with no chat (section 8). |
 | 11 | not run: no call timed out |
 | C | **pass**, the real use case (14:27): an AF actor left hung by a lost early stop - its `Actor Core` clone and its helper loop at execState 3, the loop's front panel open, Abort not possible. `lvai_labview_state`: no dialog, CPU quiet; `lvai_vis_in_memory`: 499 lines, none modified, 95 `other` (the actor's and AF's VIs). `restart` WITH the go-ahead: `stillRunning` at 40 s, then `restarted`. `CloseMainWindow` closed the LabVIEW with the running actor in **1.72 s, with no prompt**; start 22.2 s, new pid and port, the same `NI.NigelLocalService` pid. |
 
