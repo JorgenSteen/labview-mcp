@@ -149,7 +149,7 @@ wiring into the message rather than leaving to be re-derived:
 
 | every LabVIEW.exe listener answers | meaning | fix |
 |---|---|---|
-| `Unavailable` | IDE up, service not started | wait a minute and retry (a cold start); if it lasts, check `NI.NigelLocalService` runs - opening Nigel brings it up |
+| `Unavailable` | IDE up, service not started | wait and retry (a cold start takes 1-2 min); if it lasts, open Nigel |
 | `DeadlineExceeded` | service there, **LabVIEW hung** | kill the process |
 
 Confirmed independently by `(Get-Process LabVIEW).Responding = False`, and by the title bar reading
@@ -507,9 +507,8 @@ What to take from it, pending a controlled test:
 - **Validation passing says nothing here.** The file validated in 2.5 s and generated with
   `errorCode 0`; the death came later.
 - The restarted LabVIEW came back **without the gRPC service**, and getting it back cost a manual
-  step. That is not the rule while `NI.NigelLocalService` runs: measured 2026-10-13, the service
-  comes up with LabVIEW about a minute after a cold start with no Nigel chat running
-  (`docs/labview-restart.md` §8).
+  step. That is not the rule: measured 2026-10-13, the service comes up with LabVIEW alone one to
+  two minutes after a cold start, with no Nigel chat running (`docs/labview-restart.md` §8).
 
 ### The fifth signature again, 2026-09-01 — and it REFUTES the refnum half of the hypothesis above
 

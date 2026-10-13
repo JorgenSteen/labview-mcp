@@ -16,11 +16,11 @@ internal sealed record NigelChatTarget(string Exe, string Version, string Bitnes
 /// <summary>
 /// Opening the Nigel chat without a person - the port of the skill's `lv_start_nigel_chat.ps1`.
 ///
-/// WHY. The `LV AI gRPC Service` comes up WITH LabVIEW while `NI.NigelLocalService` runs - measured
-/// 2026-10-13, lvai.LVAI answered 79 s after a cold start with no LVNigelChat running. That process
-/// outlives LabVIEW and the chat, and without it the service did not come up until the chat was opened,
-/// which brought the local service up (one sample, 2026-10-10; `docs/labview-restart.md` §12 item 10).
-/// So the chat is the remedy for a local service that is not running. The skill measured it:
+/// WHY. The `LV AI gRPC Service` normally comes up WITH LabVIEW and needs no chat: measured 2026-10-13,
+/// lvai.LVAI answered 79 s after a cold start with no LVNigelChat, and 136 s after one with
+/// NI.NigelLocalService stopped first - the LabVIEW start brought that back through NI's Discovery
+/// service. Twice it has not come up until Nigel was opened (`docs/labview-restart.md` §8), cause not
+/// established, so the chat is the remedy for THAT case. The skill measured it:
 /// start `LVNigelChat.exe` the way LabVIEW's menu does, with BOTH
 /// `--lv-version &lt;add-on folder&gt;` and `--lv-bitness x86|x64`. Without both it never exits and
 /// leaves a modal "Object reference not set to an instance of an object." box - so there is no
@@ -28,7 +28,7 @@ internal sealed record NigelChatTarget(string Exe, string Version, string Bitnes
 /// pressed.
 ///
 /// WHEN. Only for a LabVIEW that has been up longer than a cold start takes (the IDE in 32-40 s, the
-/// service's features 39-44 s after a launch, so <see cref="MinimumLabViewUpSeconds"/>), whose service
+/// service's features 39-62 s after a launch, so <see cref="MinimumLabViewUpSeconds"/>), whose service
 /// does not answer, with no chat running and no possible dialog (a dialog blocks the service and a chat
 /// does not unblock it), and only once per LabVIEW process. NI.NigelLocalService and a running chat are
 /// never touched.
@@ -37,7 +37,8 @@ internal static class NigelChat
 {
     /// <summary>
     /// Past the measured cold start, with margin: the service's features started 39-44 s after a launch
-    /// on 2026-10-13, so 60 s could open a chat for a healthy LabVIEW that was merely slow. Raised to 90 s;
+    /// on 2026-10-13, and 57-62 s when NI.NigelLocalService had to be started too, so 60 s would have
+    /// opened a chat for a healthy LabVIEW that was merely slow. Raised to 90 s;
     /// the cost is only a later chat when the service really does not come up. Not a measured boundary.
     /// </summary>
     public const int MinimumLabViewUpSeconds = 90;
@@ -89,7 +90,7 @@ internal static class NigelChat
         if (labview.StartTime is not { } start) return "LabVIEW's start time could not be read";
         var up = (snapshot.At - start).TotalSeconds;
         if (up < MinimumLabViewUpSeconds)
-            return $"LabVIEW is {up:F0} s old and the service was measured coming up 39-44 s after a cold start - it may still come up by itself";
+            return $"LabVIEW is {up:F0} s old and the service was measured coming up 39-62 s after a cold start - it may still come up by itself";
         lock (Gate)
             if (Attempts.ContainsKey(labview.Id)) return "already started once for this LabVIEW process";
         return null;

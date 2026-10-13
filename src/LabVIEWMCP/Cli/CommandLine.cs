@@ -132,8 +132,8 @@ internal static class CommandLine
 
         LABVIEW_GRPC_PORT works instead of --port, LABVIEWMCP_LVVERSION instead of
         --lvversion. The self-test needs the LabVIEW this server connects to running, with its
-        lvai gRPC service up - it comes up with LabVIEW, about a minute after a cold start,
-        while NI.NigelLocalService runs; opening the Nigel chat starts that process.
+        lvai gRPC service up - it comes up with LabVIEW alone, one to two minutes after a cold
+        start.
         """;
 
     public static bool HasFlag(string[] args, string name) =>

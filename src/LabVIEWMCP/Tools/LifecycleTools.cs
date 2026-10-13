@@ -39,18 +39,19 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         launch routes and keeps only one whose process is still alive two seconds later. The
         winner is reported as launchMethod; if none survives you get errorKind
         'launch-did-not-survive' listing every attempt, never a hopeful 'starting'.
-        THE SERVICE NEEDS NI.NigelLocalService RUNNING, NOT THE NIGEL CHAT. That process
-        outlives LabVIEW and the chat (one had run for three days), and while it runs LabVIEW
-        alone brings lvai.LVAI up: measured 2026-10-13, LabVIEW.exe started directly with no
-        chat at any point, the service's features started 39-44 s later and lvai.LVAI
-        answered at 79 s, a ValidateAIXML included; the same on five starts on 2026-10-10. So
-        while LabVIEW is still coming up, calling again is right - the second call finds the
-        instance and waits. For an unattended long wait use the CLI: LabVIEWMCP --ensure-labview.
-        WITHOUT NI.NigelLocalService it does not come up: one sample on 2026-10-10, where the
-        service answered only after the chat was opened, which brought the local service up.
-        An older LabVIEW, up twenty minutes, served lvai.LVAI on none of 30 listener ports
-        until Nigel was opened; whether the local service ran then was not recorded.
-        lvai_labview_state shows whether it runs. That is the case for the Nigel chat below.
+        THE SERVICE COMES UP WITH LabVIEW ALONE - THE NIGEL CHAT IS NOT NEEDED. It needs
+        NI.NigelLocalService, and a LabVIEW start brings that up too, through NI's Discovery
+        service. Measured 2026-10-13, LabVIEW.exe started directly, no chat at any point:
+        with the local service already running, its features started 39-44 s after the launch
+        and lvai.LVAI answered at 79 s; with the local service STOPPED first, it was started
+        20 s after the launch, its features 57-62 s, and lvai.LVAI answered at 136 s (first
+        asked), a ValidateAIXML included both times. So while LabVIEW is still coming up,
+        calling again is right - the second call finds the instance and waits. For an
+        unattended long wait use the CLI: LabVIEWMCP --ensure-labview.
+        Twice the service has NOT come up until Nigel was opened - a LabVIEW up twenty
+        minutes with lvai.LVAI on none of 30 listener ports, and a start on 2026-10-10 with
+        the local service down; the cause is not established. That is the case for the Nigel
+        chat below - a remedy, not a requirement.
         NIGEL CHAT (startNigelChat, default on): when LabVIEW has run for over 90 s, its service
         does not answer, no LVNigelChat runs and no possible dialog is up, this starts the chat
         ONCE per LabVIEW process the way LabVIEW's menu does - LVNigelChat.exe --lv-version
@@ -72,8 +73,8 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         bool keepAutoSave = false,
         [Description("""
             Start the Nigel chat once when LabVIEW has run for over 90 s and its service still does
-            not answer - the remedy for NI.NigelLocalService not running, which the chat brings
-            up. While that runs, the service comes up without it. Never touches a running chat or the
+            not answer - a remedy for a service that does not come up; normally it comes up with
+            LabVIEW alone. Never touches a running chat or the
             NI.NigelLocalService process.
             """)]
         bool startNigelChat = true,
@@ -201,8 +202,8 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                       "1.2 s, 12.1 s, 27.7 s and 1.2 s. Do NOT read `lastError: \"The operation " +
                       "was canceled.\"` as a failure; it is this call's own budget expiring. Only " +
                       "if a SECOND call also comes back `starting` is something wrong - then the " +
-                      "service has not come up with LabVIEW - check that NI.NigelLocalService " +
-                      "runs (lvai_labview_state); opening the Nigel chat brings it up - or use the CLI " +
+                      "service has not come up with LabVIEW - lvai_labview_state shows whether " +
+                      "NI.NigelLocalService runs; opening the Nigel chat has helped - or use the CLI " +
                       "--ensure-labview for an unattended long wait.",
             }.ToJsonString(Indented);
         });
