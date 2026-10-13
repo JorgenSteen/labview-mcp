@@ -9,3 +9,11 @@
 # with core.autocrlf — the comparison passes either way, but a generated artefact should not
 # change size depending on who checked it out.
 *.tsv               text eol=lf
+
+# Byte copies of LabVIEW-saved project files. Their BOM and line endings ARE the data under
+# test (LvTextFileTests; ExecStateInterfaceOverrideTests also pins NI's Basic Interfaces
+# copies to the install byte for byte), so git must store and check them out unconverted -
+# core.autocrlf=true would otherwise normalise them, and an assertion would test git, not us.
+tests/LabVIEWMCP.Tests/Fixtures/**/*.lvproj   -text
+tests/LabVIEWMCP.Tests/Fixtures/**/*.lvclass  -text
+tests/LabVIEWMCP.Tests/Fixtures/**/*.lvlib    -text
