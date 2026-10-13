@@ -194,14 +194,20 @@ through `lvai_ensure_labview`'s launch routes, which survive the host's job obje
 close, the tool stops with `closedNotStarted`. A start would either clear those files or raise the
 recovery dialog, and that choice is the user's.
 
-**Nigel.** The AI service normally comes up WITH LabVIEW and needs no chat. Measured 2026-10-13:
-LabVIEW closed with this tool, the chat gone with it, then `LabVIEW.exe` started directly with no
-`LVNigelChat` at any point - `NI.NigelLocalService` logged five features `Started monitoring` 39-44 s
-after the launch, and `lvai.LVAI` answered at 79 s, `GetApplicationConfiguration` and a
-`ValidateAIXML` included. So the chat start below is a REMEDY for a service that does not come up,
-which one LabVIEW up twenty minutes showed once (30 listener ports, `lvai.LVAI` on none, up within
-seconds of opening Nigel - cause not established); with a service that answers it never fires. When
-LabVIEW has been up for more than 60 s and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
+**Nigel.** The AI service needs `NI.NigelLocalService` running, not the Nigel chat. That process
+outlives LabVIEW and the chat: on 2026-10-13 one had run for three days, as a child of NI's
+Discovery service (`NI.Discovery.V1.Service.exe`). While it runs, LabVIEW alone brings the service
+up. Measured 2026-10-13: LabVIEW closed with this tool, the chat gone with it, then `LabVIEW.exe`
+started directly with no `LVNigelChat` at any point - the local service logged five features
+`Started monitoring` 39-44 s after the launch, and `lvai.LVAI` answered at 79 s,
+`GetApplicationConfiguration` and a `ValidateAIXML` included; five starts on 2026-10-10 the same
+(section 12, item 10). Without it the service did not come up until the chat was opened, which
+brought the local service up - one sample, the morning of 2026-10-10. So the chat start below is
+the remedy for a local service that is not running. An older LabVIEW, up twenty minutes, served
+`lvai.LVAI` on none of 30 listener ports until Nigel was opened; whether the local service ran then
+was not recorded. When
+LabVIEW has been up for more than 90 s (60 s until 2026-10-13, raised because the service's features
+were measured starting 39-44 s after a launch, too close to 60) and its service does not answer, `lvai_ensure_labview` and the restart's start step start the
 chat ONCE per LabVIEW process, under these conditions: no `LVNigelChat` runs, no possible dialog is
 up, and at least 15 s of the call's budget remain. They start it the way LabVIEW's own menu does:
 `LVNigelChat.exe --lv-version <add-on folder> --lv-bitness x86|x64`, from
@@ -294,7 +300,7 @@ plugin at the same time.
 9. **A close that does not finish:** an unsaved VI the user agrees to leave, with a go-ahead:
    `closeDidNotFinish`, `closeMainWindow: true`, the save prompt named in `dialogsNow`. The user
    answers it.
-10. **Nigel:** LabVIEW up for more than 60 s with no chat and the service down. `lvai_ensure_labview`
+10. **Nigel:** LabVIEW up for more than 90 s with no chat and the service down. `lvai_ensure_labview`
    reports `nigelChat.state: running`, the chat window appears, and the next `lvai_status` answers.
    Call it again: there is no second start.
 11. **Timeout with a dialog:** a call that times out while a dialog is up carries `possibleDialogs`.

@@ -243,7 +243,9 @@ it an icon.
    generated or run. Report what was tried.
    If the probed ports are `LabVIEW.exe` listeners all answering `Unavailable`, LabVIEW is up and
    the AI service has not started yet. It comes up with LabVIEW, about a minute after a cold start,
-   with no Nigel needed (measured 2026-10-13); if it still has not after several minutes, say that.
+   while `NI.NigelLocalService` runs - the Nigel chat is not needed then (measured 2026-10-13).
+   Without that process it waits for the chat, which `lvai_ensure_labview` opens once; if the
+   service still has not come up after several minutes, say that.
 2. Resolve the project, in this order. Stop at the first that answers:
    1. a `.lvproj` in the task prompt,
    2. `lvai_describe_vi` on a VI the user named → its `owningProjectPath`,

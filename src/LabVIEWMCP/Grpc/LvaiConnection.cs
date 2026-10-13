@@ -139,13 +139,15 @@ internal sealed class LvaiConnection : IAsyncDisposable
             Environment.NewLine + string.Join(Environment.NewLine, tried.Select(t => "  - " + t)) +
             Environment.NewLine +
             "Is LabVIEW running, and is the 'LV AI gRPC Service' active? " +
-            "The service comes up WITH LabVIEW, no Nigel needed: measured 2026-10-13, lvai.LVAI " +
-            "answered 79 s after a cold start with no Nigel chat running. " +
+            "The service comes up WITH LabVIEW while NI.NigelLocalService runs - the chat is not " +
+            "needed: measured 2026-10-13, lvai.LVAI answered 79 s after a cold start with no " +
+            "Nigel chat running. " +
             "THE STATUS CODE ABOVE SAYS WHICH OF TWO VERY DIFFERENT PROBLEMS THIS IS, and reading " +
             "it saves restarting LabVIEW for nothing: LabVIEW.exe listeners answering " +
             "**Unavailable** mean the IDE is up and the service has not started - within the " +
-            "first minute or two that is a cold start, so wait and retry; if it lasts, opening " +
-            "Nigel has brought one up (lvai_ensure_labview does that once by itself). " +
+            "first minute or two that is a cold start, so wait and retry; if it lasts, check that " +
+            "NI.NigelLocalService runs - opening the Nigel chat brings it up (lvai_ensure_labview " +
+            "does that once by itself). " +
             "Listeners answering **DeadlineExceeded** mean the service is there but did not answer " +
             "in time, and that is TWO different situations - CHECK WHICH BEFORE KILLING " +
             "ANYTHING. (Get-Process LabVIEW).Responding decides it: **False** with a title " +

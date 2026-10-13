@@ -55,6 +55,7 @@ public class NigelChatTests
 
     [Theory]
     [InlineData(30, "cold start")]
+    [InlineData(75, "cold start")]   // past the old 60 s, still inside the 90 s threshold
     public void A_young_labview_gets_time_to_bring_its_service_up(double up, string expected)
     {
         var reason = NigelChat.ReasonNotToStart(LabViewState.Take(Machine(102, up), @"X:\n"));

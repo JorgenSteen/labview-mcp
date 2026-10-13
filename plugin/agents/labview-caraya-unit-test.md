@@ -179,7 +179,8 @@ one, that is the mistake — say so rather than working around it silently.
 
 1. `lvai_status`. `Unavailable` on LabVIEW.exe listeners means the IDE is up and the service is not
    yet — it comes up with LabVIEW about a minute after a cold start, so `lvai_ensure_labview` and
-   retry; Nigel is not needed (measured 2026-10-13). `DeadlineExceeded` means LabVIEW is **hung**; confirm with
+   retry. The Nigel chat is not needed while `NI.NigelLocalService` runs; when it does not,
+   `lvai_ensure_labview` opens the chat once, which brings it up. `DeadlineExceeded` means LabVIEW is **hung**; confirm with
    `(Get-Process LabVIEW).Responding` and kill it.
 2. **Read the subject before you run it.** `lvai_vi_terminals` for a VI, `lvai_describe_class` for a
    class. You are about to execute this code; know what it does to the machine first.

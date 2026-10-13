@@ -147,7 +147,8 @@ they were all measured, most of them twice.
 
 1. `lvai_status`. If it answers `Unavailable` on LabVIEW.exe listeners, the IDE is up but the
    service is not yet — it comes up with LabVIEW about a minute after a cold start, so carry on
-   with step 2; Nigel is not needed (measured 2026-10-13). If it answers `DeadlineExceeded`, LabVIEW is
+   with step 2. The Nigel chat is not needed while `NI.NigelLocalService` runs; when it does not,
+   `lvai_ensure_labview` opens the chat once, which brings it up. If it answers `DeadlineExceeded`, LabVIEW is
    **hung**: confirm with `(Get-Process LabVIEW).Responding` and kill it.
 2. `lvai_ensure_labview` until `state: ready`. The first call after a start often returns
    `starting`; calling again is normal and is not an error.

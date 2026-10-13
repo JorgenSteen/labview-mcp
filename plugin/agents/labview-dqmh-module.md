@@ -43,8 +43,9 @@ only need to know it to read an `Error 53` in a `steps` entry. `docs/dqmh-script
 ## Phase 0 — establish the ground
 
 1. `lvai_status`. If the service is unreachable, `lvai_ensure_labview` and call it again while it
-   answers `starting` — the service comes up with LabVIEW, no Nigel needed. If it never does, say
-   so plainly.
+   answers `starting` — the service comes up with LabVIEW while `NI.NigelLocalService` runs, and
+   `lvai_ensure_labview` opens the Nigel chat once when it does not. If it never does, say so
+   plainly.
 2. Every DQMH tool answers `dqmhMissing` naming the path it looked for when Delacor DQMH is not
    installed. Then return `CANNOT PROCEED` with that path; do not work around a missing framework.
 
