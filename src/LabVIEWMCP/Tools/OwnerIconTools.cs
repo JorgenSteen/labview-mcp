@@ -1105,7 +1105,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
     {
         var full = Path.GetFullPath(pngPath);
         if (!File.Exists(full)) return Json.Error("pngMissing", $"No PNG at '{full}'.", new { pngPath = full });
-        if (PngPixels.Size(full) is not { } size)
+        if (DiagramSize.PngSize(full) is not { } size)
             return Json.Error("notAPng", $"'{full}' is not a PNG. The route was measured with 32x32 PNGs only.");
         if (size != (32, 32))
             return Json.Error("pngNot32x32",

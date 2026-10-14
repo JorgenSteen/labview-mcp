@@ -210,8 +210,9 @@ public sealed class PngPixelsTests : IDisposable
     [Fact]
     public void Size_reads_the_header_and_refuses_what_is_not_a_PNG()
     {
-        Assert.Equal((32, 32), PngPixels.Size(Save("ok.png", Truecolour(Icon()))));
-        Assert.Null(PngPixels.Size(Save("no.png", "not a png at all, just text"u8.ToArray())));
+        // the icon tools' size check is DiagramSize.PngSize; pinned here on an icon-shaped file
+        Assert.Equal((32, 32), DiagramSize.PngSize(Save("ok.png", Truecolour(Icon()))));
+        Assert.Null(DiagramSize.PngSize(Save("no.png", "not a png at all, just text"u8.ToArray())));
     }
 
     // ---------------------------------------------------------------- comparing

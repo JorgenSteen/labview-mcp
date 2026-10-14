@@ -41,28 +41,6 @@ internal static class PngPixels
 
     private static readonly byte[] Signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-    /// <summary>
-    /// "WxH" from the IHDR chunk, or null for anything that is not a PNG. Reads 24 bytes, so it is
-    /// the cheap check a tool runs on a caller's file before LabVIEW is touched.
-    /// </summary>
-    internal static (int Width, int Height)? Size(string path)
-    {
-        try
-        {
-            using var stream = File.OpenRead(path);
-            var head = new byte[24];
-            if (stream.ReadAtLeast(head, head.Length, throwOnEndOfStream: false) < head.Length)
-                return null;
-            if (!head.AsSpan(0, 8).SequenceEqual(Signature)) return null;
-            return (BinaryPrimitives.ReadInt32BigEndian(head.AsSpan(16, 4)),
-                    BinaryPrimitives.ReadInt32BigEndian(head.AsSpan(20, 4)));
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
     internal static Image Decode(string path) => Decode(File.ReadAllBytes(path));
 
     internal static Image Decode(byte[] data)
