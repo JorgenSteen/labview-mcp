@@ -8,23 +8,7 @@ using System.IO.Compression;
 namespace LabVIEWMcp.Infra;
 
 /// <summary>An RGB picture, row-major, top row first, 3 bytes per pixel.</summary>
-internal sealed record WindowImage(int Width, int Height, byte[] Rgb)
-{
-    public (byte R, byte G, byte B) At(int x, int y)
-    {
-        var i = (y * Width + x) * 3;
-        return (Rgb[i], Rgb[i + 1], Rgb[i + 2]);
-    }
-
-    /// <summary>A copy of one rectangle - how a button template is cut from a measured picture.</summary>
-    public WindowImage Crop(int x, int y, int width, int height)
-    {
-        var rgb = new byte[width * height * 3];
-        for (var row = 0; row < height; row++)
-            Array.Copy(Rgb, ((y + row) * Width + x) * 3, rgb, row * width * 3, width * 3);
-        return new WindowImage(width, height, rgb);
-    }
-}
+internal sealed record WindowImage(int Width, int Height, byte[] Rgb);
 
 /// <summary>
 /// Screenshots of dialogs. WHY: LabVIEW draws its own dialogs (`LVDChild`) with no child

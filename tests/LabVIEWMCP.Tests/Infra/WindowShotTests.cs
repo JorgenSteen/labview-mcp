@@ -29,15 +29,6 @@ public class WindowShotTests
     }
 
     [Fact]
-    public void A_crop_is_the_rectangle_it_names()
-    {
-        var image = Gradient(20, 10);
-        var crop = image.Crop(3, 2, 5, 4);
-        Assert.Equal(image.At(3, 2), crop.At(0, 0));
-        Assert.Equal(image.At(7, 5), crop.At(4, 3));
-    }
-
-    [Fact]
     public void Garbage_is_not_a_png() => Assert.Null(WindowShot.DecodePng([1, 2, 3]));
 
     /// <summary>
