@@ -162,8 +162,8 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
                 ["note"] = ok
                     ? "Created and listed in the class file. Close the project and read it cold with " +
-                      "lvai_exec_state (state 1 expected); put it in the class's override folder by hand " +
-                      "if the project keeps one - no tool moves a member into a virtual folder."
+                      "lvai_exec_state (state 1 expected); put it in the class's override folder with " +
+                      "lvai_move_to_folder if the project keeps one."
                     : "The helper reported no error but the class file does not show a dynamic member at " +
                       "the new path. Treat this as a failure and read `verify`.",
             });
