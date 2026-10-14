@@ -111,9 +111,12 @@ internal sealed class WireEventTools(LvaiConnection connection)
         flags), and it is skipped entirely, project included, when neither has anything to do.
         projectClosed says whether it happened and projectClosedFor why. finishUserEvents: false
         turns off the user-event half.
-        IT REFUSES MORE THAN ONE USER-EVENT FRAME rather than guessing: dynIndex is the
-        registration item's position and only the value 1 is measured, and a wrong one gives a VI
-        that loads, compiles and fires the WRONG event.
+        SEVERAL USER-EVENT FRAMES ARE FINISHED TOO (since 2026-10-10): dynIndex is the event's
+        position among the registration's items, lvai_generate_vi_with_events writes it per frame,
+        and this tool reads it off the VI BEFORE its wiring save destroys it, then writes each
+        frame back. A VI generated before that date wrote dynIndex 1 on every frame and is refused
+        rather than guessed - a wrong dynIndex gives a VI that loads, compiles and fires the WRONG
+        event; generate it again.
         """)]
     public async Task<string> WireDynamicEventsAsync(
         [Description("Absolute path of the .vi to wire. It is SAVED in place on success.")]
@@ -184,13 +187,15 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
             var bytesBefore = new FileInfo(viPath).Length;
 
-            // THE BASELINE FOR "CREATED BY THIS CALL". Use Default if Unwired may only go onto a
-            // tunnel the right-side wire made, never onto one the user already had - and the only
-            // record of "already had" is the file before the helper saves over it. Taken while
-            // LabVIEW holds the VI, which is fine for a READ.
-            (Baseline? baseline, JsonObject baselineStep) = wireRightSide
+            // THE VI AS IT IS BEFORE THE HELPER SAVES OVER IT - one extract, two readers. It is
+            // the baseline for "created by this call": Use Default if Unwired may only go onto a
+            // tunnel the right-side wire made, never onto one the user already had. And it still
+            // carries each user-event frame's dynIndex as generated, which the wiring save destroys
+            // - several user-event frames are finished from it. Taken while LabVIEW holds the VI,
+            // which is fine for a READ.
+            (Baseline? baseline, JsonObject baselineStep) = wireRightSide || finishUserEvents
                 ? await ExtractBaselineAsync(viPath, timeoutSeconds, ct)
-                : ((Baseline?)null, new JsonObject { ["skipped"] = "wireRightSideFalse" });
+                : ((Baseline?)null, new JsonObject { ["skipped"] = "wireRightSideAndFinishUserEventsFalse" });
 
             var request = new RunVIAsTopLevelRequest { ViPath = helperVi };
             request.Inputs["VI Path"] = Path.GetFullPath(viPath);
@@ -239,6 +244,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
             payload["eventStructureFound"] = found is null ? null : JsonValue.Create(found);
             payload["eventStructuresFound"] =
                 eventStructures is null ? null : JsonValue.Create(eventStructures);
+            payload["readBeforeWiring"] = JsonValue.Create(finishUserEvents && baseline is not null);
             payload["alreadyWired"] = JsonValue.Create(outcome.AlreadyWired);
             payload["sourceFrom"] = sourceFrom is null ? null : JsonValue.Create(sourceFrom);
             payload["registrationNodesOnDiagram"] =
@@ -293,11 +299,13 @@ internal sealed class WireEventTools(LvaiConnection connection)
             // pay for extract, strip, project close, rebuild and execState - and paying twice
             // would close the project twice and rebuild a file LabVIEW has not yet reloaded.
             var doUserEvents = finishUserEvents && wired;
-            var doUseDefault = baseline is not null && wired && right.MayHaveCreatedTunnels;
+            var doUseDefault = wireRightSide && baseline is not null && wired
+                               && right.MayHaveCreatedTunnels;
             if (doUserEvents || doUseDefault)
             {
                 var finish = await FinishInBundleAsync(viPath, doUserEvents,
-                    doUseDefault ? baseline : null, timeoutSeconds, ct);
+                    doUserEvents ? baseline : null, doUseDefault ? baseline : null,
+                    timeoutSeconds, ct);
                 payload["userEventStep"] = finish;
                 payload["useDefaultSet"] = finish["useDefaultSet"]?.DeepClone() ?? new JsonArray();
                 payload["projectClosed"] = JsonValue.Create(
@@ -356,6 +364,19 @@ internal sealed class WireEventTools(LvaiConnection connection)
                     $"{payload["note"]?.GetValue<string>()} " +
                     $"{(right.Failed ? "RIGHT SIDE" : "Right side")}: {right.Note}");
 
+            // THE CLEAN-UP, LabVIEW's own, on the finished VI - the end of the route that
+            // lvai_generate_vi_with_events hands over to for user events, so the VI is cleaned up
+            // whichever tool finishes it. After every pylabview rebuild above: it is a LabVIEW save.
+            if (payload["ok"]?.GetValue<bool>() == true)
+            {
+                var cleaned = await new DiagramCleanup(connection).RunAsync(
+                    viPath, AixmlBackend.Inherited.Value?.Name ?? AixmlBackend.Grpc, timeoutSeconds, ct);
+                payload["cleanUpDiagram"] = cleaned;
+                if (cleaned["ok"]?.GetValue<bool>() != true)
+                    payload["note"] = JsonValue.Create($"{payload["note"]?.GetValue<string>()} The block " +
+                        "diagram was NOT cleaned up: " + cleaned["note"]?.GetValue<string>());
+            }
+
             if (baseline is not null)
             {
                 try { Directory.Delete(baseline.Directory, recursive: true); }
@@ -396,9 +417,11 @@ internal sealed class WireEventTools(LvaiConnection connection)
     /// when there is really something to write, which is why the cheap read comes first and the
     /// script's own <c>RESULT:</c> line decides.
     ///
-    /// IT DOES NOT GUESS. The script refuses more than one user-event frame, because
-    /// <c>dynIndex</c> is the registration item's position and only the value 1 is measured; a
-    /// wrong one gives a VI that loads, compiles and fires the wrong event.
+    /// SEVERAL USER-EVENT FRAMES are finished from <paramref name="before"/>, the VI as generated:
+    /// <c>dynIndex</c> is the event's position among the registration's items (measured
+    /// 2026-10-10), the generation step writes it per frame, and the wiring save destroys it - so
+    /// the script reads it there. Without that record it still refuses more than one, because a
+    /// wrong <c>dynIndex</c> gives a VI that loads, compiles and fires the wrong event.
     ///
     /// AND IT IS ALSO WHERE USE DEFAULT IF UNWIRED IS SET, because that is a bundle edit too and a
     /// second round trip would close the project and rebuild twice. AIXML refuses the property on
@@ -410,7 +433,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
     /// afterwards, because then the uids are not comparable.
     /// </summary>
     private async Task<JsonObject> FinishInBundleAsync(
-        string viPath, bool userEvents, Baseline? baseline, int timeoutSeconds,
+        string viPath, bool userEvents, Baseline? before, Baseline? baseline, int timeoutSeconds,
         CancellationToken ct)
     {
         var step = new JsonObject
@@ -469,8 +492,11 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
         if (userEvents)
         {
+            string[] arguments = before is not null
+                ? [directory, baseName, "--before", before.Directory, before.BaseName]
+                : [directory, baseName];
             var finish = await EventStructureTools.RunScriptAsync(bundle, scripts,
-                "pylv-finish-user-events.py", [directory, baseName], "finishUserEvents",
+                "pylv-finish-user-events.py", arguments, "finishUserEvents",
                 timeoutSeconds, ct);
             steps.Add(finish);
             if (finish["exitCode"]?.GetValue<int>() != 0)
@@ -638,7 +664,8 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
         step["note"] = "The baseline extract failed, so Use Default if Unwired will NOT be set "
             + "on any tunnel: without it a tunnel this call made cannot be told from one the "
-            + "user already had.";
+            + "user already had - and a VI with several user-event frames is refused rather than "
+            + "guessed, because their dynIndex is only readable before the wiring save.";
         try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
         return (null, step);
     }
@@ -1035,7 +1062,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
     /// <summary>Under TEMP, for the reason IconTools records: Save:Instrument fails elsewhere.</summary>
     private static string DefaultHelperViPath() =>
-        Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "helpers", "lvai_wire_dyn_events.vi");
+        Path.Combine(AixmlBackend.HelperFolder(), "lvai_wire_dyn_events.vi");
 
     /// <summary>
     /// Whether the shipped AIXML is newer than the cached helper. An upgrade must not leave a

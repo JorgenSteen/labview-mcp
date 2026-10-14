@@ -120,8 +120,11 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
             """)]
         string typedefRoute = "flag",
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 300,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null)
     {
+        if (!AixmlBackend.TryResolve(backend, "lvai_placeholder_subvi", out _, out var badBackend))
+            return AixmlBackend.Refusal(badBackend);
         if (viPaths is { Length: > 0 })
             return await ManyAsync(viPaths, refresh, flattenTypedefs, typedefRoute, timeoutSeconds, ct: ct);
 
@@ -230,11 +233,13 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
                     "its own, so there is nothing to clone. Point this at the instance you mean " +
                     "to call - the wrapper's export lists them.");
 
-            var terminals = subject.Inputs.Concat(subject.Outputs).ToList();
+            // PANE terminals: a front-panel object with no conIdx is not something a Call wires,
+            // so a VI with only those has nothing for a stub to clone either.
+            var terminals = subject.PaneInputs.Concat(subject.PaneOutputs).ToList();
             if (terminals.Count == 0)
                 return Json.Error("noTerminals",
-                    $"'{subject.ViName}' has no front-panel terminals, so a call to it carries " +
-                    "no wires and needs no placeholder.");
+                    $"'{subject.ViName}' has no terminals on its connector pane, so a call to it " +
+                    "carries no wires and needs no placeholder.");
 
             var signature = Signature(subject, viPath);
             var stubName = $"LVMCP Stub {Hash(signature)}.vi";
@@ -282,6 +287,19 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
                 // terminal name nobody expected.
                 ["terminals"] = Terminals(subject, typedefs),
             };
+
+            // THE FRONT-PANEL OBJECTS THE CALL MUST NOT NAME, so a caller checking its own names
+            // against `terminals` can say "not on the pane" rather than "no such terminal" - the
+            // subject plainly has a `Stop`, and an answer denying it reads as this tool's mistake.
+            if (OffPane(subject) is { Count: > 0 } offPane)
+            {
+                answer["notOnPane"] = offPane;
+                answer["notOnPaneNote"] =
+                    $"{offPane.Count} front-panel object(s) of '{subject.ViName}' carry no conIdx: " +
+                    "they are read by its own diagram and are NOT terminals. `terminals`, the stub " +
+                    "and `call` leave them out - a Call naming one is refused with `Error 1 ... An " +
+                    "input parameter is invalid`, measured 2026-10-12.";
+            }
 
             if (typedefs is null)
             {
@@ -512,7 +530,15 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
     }
 
     /// <summary>
-    /// The subject's own Control and Indicator elements, copied whole and unwired.
+    /// The subject's own PANE Control and Indicator elements, copied whole and unwired.
+    ///
+    /// THE PANE, WHEREVER IT SITS, AND NOTHING ELSE - since 2026-10-12. This read the direct
+    /// children of &lt;VI&gt;, which was wrong both ways at once: a front-panel object with no
+    /// conIdx at the top level was cloned (harmless on the stub, but `call` then named it and the
+    /// generator refused the caller), while a real pane terminal whose element sits inside a loop
+    /// or an event frame - `Stop` two structures deep, measured 2026-09-12 for ViTerminals - was
+    /// NOT, so the stub's pane came out a terminal short of the subject's. Every clone is put on
+    /// the root diagram, because the structure its uid_parent named is not in the stub.
     ///
     /// COPIED RATHER THAN REBUILT, and that is the whole point. Re-emitting the attributes this
     /// code happens to know about drops the ones it does not: the first version wrote name, type,
@@ -568,13 +594,16 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
         classElements = [];
         var cloned = new List<string>();
         var root = System.Xml.Linq.XElement.Parse(subjectXml);
-        foreach (var element in root.Elements()
-                     .Where(e => e.Name.LocalName is "Control" or "Indicator"))
+        foreach (var element in root.Descendants()
+                     .Where(e => e.Name.LocalName is "Control" or "Indicator"
+                                 && int.TryParse((string?)e.Attribute("conIdx"), out _)))
         {
             var clone = new System.Xml.Linq.XElement(element);
             foreach (var net in new[] { "inputs", "outputs" })
                 if (clone.Attribute(net) is not null)
                     clone.SetAttributeValue(net, "value:");
+            if (clone.Attribute("uid_parent") is not null)
+                clone.SetAttributeValue("uid_parent", "root");
 
             // A CLASS INSIDE A CLUSTER IS REPLACED AT THE ELEMENT, and the cluster stays. This
             // used to test the WHOLE type string for UDClassInst, so
@@ -692,17 +721,32 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
     private static string Join(string at, string name) =>
         at.Length == 0 ? name : name.Length == 0 ? at : $"{at}.{name}";
 
-    /// <summary>A `Call` to the placeholder, carrying the SUBJECT's terminal names.</summary>
-    private static string CallElement(string stubName, ViTerminals.Result subject)
+    /// <summary>A `Call` to the placeholder, carrying the SUBJECT's pane terminal names.</summary>
+    internal static string CallElement(string stubName, ViTerminals.Result subject)
     {
-        var inputs = string.Join(",", subject.Inputs.Select(t => t.Name + ":"));
-        var outputs = string.Join(",", subject.Outputs.Select(t => t.Name + ":"));
+        var inputs = string.Join(",", subject.PaneInputs.Select(t => t.Name + ":"));
+        var outputs = string.Join(",", subject.PaneOutputs.Select(t => t.Name + ":"));
         return $"<Call target=\"{Escape(stubName)}\" inputs=\"{inputs}\" outputs=\"{outputs}\" " +
                "uid=\"NN\" uid_parent=\"root\"/>";
     }
 
-    /// <summary>The subject's terminals as data, in the order a Call lists them.</summary>
+    /// <summary>The subject's PANE terminals as data, in the order a Call lists them.</summary>
     internal static JsonArray Terminals(ViTerminals.Result subject) => Terminals(subject, null);
+
+    /// <summary>
+    /// The subject's front-panel objects that are NOT on its pane, in the same shape as
+    /// <see cref="Terminals(ViTerminals.Result)"/> minus the conIdx they do not have. Empty for
+    /// most VIs; a UI VI's Stop button is the usual entry.
+    /// </summary>
+    internal static JsonArray OffPane(ViTerminals.Result subject)
+    {
+        var list = new JsonArray();
+        foreach (var t in subject.OffPaneInputs)
+            list.Add(new JsonObject { ["direction"] = "input", ["name"] = t.Name, ["type"] = t.Type });
+        foreach (var t in subject.OffPaneOutputs)
+            list.Add(new JsonObject { ["direction"] = "output", ["name"] = t.Name, ["type"] = t.Type });
+        return list;
+    }
 
     /// <summary>
     /// The same, annotated with which terminals are typedef INSTANCES and which `.ctl` each points
@@ -710,13 +754,19 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
     /// typedef as the bare type it wraps, so `type` here reads `bool` for a control bound to a
     /// strict typedef, and the stub is cloned with that bare type. `typedefs` null means the probe
     /// could not run, which is reported as unknown rather than as none.
+    ///
+    /// PANE TERMINALS ONLY, because lvai_generate_test authors its Call from this list - every
+    /// input with a value or an empty net, every output with a net. It listed every control and
+    /// indicator until 2026-10-12, and the direct route's Call then named a `Stop` button that sits
+    /// in an event frame on no pane slot: `Error 1 ... An input parameter is invalid`.
+    /// <see cref="OffPane"/> lists the rest.
     /// </summary>
     internal static JsonArray Terminals(
         ViTerminals.Result subject, IReadOnlyDictionary<string, string>? typedefs)
     {
         var list = new JsonArray();
-        foreach (var t in subject.Inputs) list.Add(One("input", t));
-        foreach (var t in subject.Outputs) list.Add(One("output", t));
+        foreach (var t in subject.PaneInputs) list.Add(One("input", t));
+        foreach (var t in subject.PaneOutputs) list.Add(One("output", t));
         return list;
 
         JsonObject One(string direction, ViTerminals.Terminal t)
@@ -756,12 +806,15 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
     /// bare `ref{UDClassInst}` - and lvai_swap_subvis, which matches by VI name, could not tell
     /// their nodes apart. The identity is the export's library-qualified name when it has one
     /// (`Channel.lvclass:Write Config.vi`), else the subject's full path, else its bare name.
+    ///
+    /// AND ONLY THE PANE IS IN IT - a front-panel object with no conIdx is not part of what binds,
+    /// and the stub no longer carries one (2026-10-12).
     /// </summary>
     internal static string Signature(ViTerminals.Result subject, string? subjectPath = null) =>
         string.Join("|",
             new[] { "t:" + Identity(subject, subjectPath) }
-                .Concat(subject.Inputs.Select(t => $"i:{t.Name}:{t.Type}:{t.ConIdx}:{t.Connection}"))
-                .Concat(subject.Outputs
+                .Concat(subject.PaneInputs.Select(t => $"i:{t.Name}:{t.Type}:{t.ConIdx}:{t.Connection}"))
+                .Concat(subject.PaneOutputs
                     .Select(t => $"o:{t.Name}:{t.Type}:{t.ConIdx}:{t.Connection}")));
 
     /// <summary>
