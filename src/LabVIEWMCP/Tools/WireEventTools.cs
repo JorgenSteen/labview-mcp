@@ -610,7 +610,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
                 ? "userEventsNotFinished" : "notExecutableAfterUseDefault";
             step["note"] = "The bundle was edited and rebuilt, and LabVIEW still says the VI is "
                 + "NOT EXECUTABLE. At this point the cause is elsewhere in the diagram: read "
-                + "linkerErrors in the verify step.";
+                + "errors and linkerErrors in the verify step.";
             return step;
         }
 
