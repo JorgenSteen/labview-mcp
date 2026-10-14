@@ -63,15 +63,12 @@ internal sealed class BadWireCleanup(LvaiConnection connection)
             if (!File.Exists(aixml))
                 return NotRun("helperMissing", $"No {HelperAixmlFileName} in '{scripts}'.");
 
-            var helperVi = DefaultHelperViPath();
-            Directory.CreateDirectory(Path.GetDirectoryName(helperVi)!);
-            var generated = false;
-            if (HelperCache.NeedsRebuild(aixml, helperVi))
-            {
-                if (await GenerateAsync(aixml, helperVi, timeoutSeconds, ct) is { } failure)
-                    return NotRun("helperNotGenerated", failure);
-                generated = true;
-            }
+            // the backend the calling tool resolved: NI's converter on grpc, the composer on pylabview
+            var (helperVi, failure, generated) = await BackendRoute.HelperAsync(
+                aixml, DefaultHelperViPath(), regenerate: false,
+                () => BackendRoute.ConvertAsync(connection, aixml, DefaultHelperViPath(), timeoutSeconds, ct),
+                timeoutSeconds, ct);
+            if (failure is not null) return NotRun("helperNotGenerated", failure);
 
             var full = Path.GetFullPath(viPath);
             var answer = await new RunTools(connection).RunViAndReadValuesAsync(
@@ -235,27 +232,5 @@ internal sealed class BadWireCleanup(LvaiConnection connection)
     {
         try { return JsonNode.Parse(answer); }
         catch (System.Text.Json.JsonException) { return null; }
-    }
-
-    /// <summary>Validate, then convert - the same two steps every cached helper here takes.</summary>
-    private async Task<string?> GenerateAsync(string aixml, string helperVi, int timeoutSeconds,
-                                              CancellationToken ct)
-    {
-        var validation = await connection.InvokeAsync((c, t) =>
-            c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (validation.ErrorCode != 0)
-            return $"The helper AIXML does not validate: {validation.ErrorMessage}";
-
-        var generation = await connection.InvokeAsync((c, t) =>
-            c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
-            {
-                AiXMLFilePath = aixml,
-                ViPath = helperVi,
-                OpenVI = false,
-            }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        return generation.ErrorCode == 0 && File.Exists(helperVi)
-            ? null
-            : $"Could not generate the helper VI at '{helperVi}': {generation.ErrorMessage}";
     }
 }

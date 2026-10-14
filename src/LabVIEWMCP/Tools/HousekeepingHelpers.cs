@@ -40,13 +40,26 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
         if (!HelperCache.NeedsRebuild(aixml, helperVi)) return (helperVi, false, null);
         Directory.CreateDirectory(Path.GetDirectoryName(helperVi)!);
 
+        return await GenerateAsync(aixml, helperVi, timeoutSeconds, ct) is { } failure
+            ? (null, false, failure)
+            : (helperVi, true, null);
+    }
+
+    /// <summary>
+    /// Validate a helper's AIXML, then convert it to <paramref name="helperVi"/>. Null on success,
+    /// otherwise the error answer, which names the stage (helperAixmlInvalid or
+    /// helperGenerationFailed) and LabVIEW's error code.
+    /// </summary>
+    internal async Task<string?> GenerateAsync(string aixml, string helperVi, int timeoutSeconds,
+                                               CancellationToken ct)
+    {
         var validation = await connection.InvokeAsync((c, t) =>
             c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
                 deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
         if (validation.ErrorCode != 0)
-            return (null, false, Json.Error("helperAixmlInvalid",
+            return Json.Error("helperAixmlInvalid",
                 $"The helper AIXML at '{aixml}' does not validate: {validation.ErrorMessage}",
-                new { aiXmlPath = aixml, errorCode = validation.ErrorCode }));
+                new { aiXmlPath = aixml, errorCode = validation.ErrorCode });
 
         var generation = await connection.InvokeAsync((c, t) =>
             c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
@@ -55,12 +68,20 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
                 ViPath = helperVi,
                 OpenVI = false,
             }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
+        if (generation.ErrorCode == 0 && File.Exists(helperVi)) return null;
 
-        return generation.ErrorCode == 0 && File.Exists(helperVi)
-            ? (helperVi, true, null)
-            : (null, false, Json.Error("helperGenerationFailed",
-                $"Could not generate the helper VI at '{helperVi}': {generation.ErrorMessage}",
-                new { helperViPath = helperVi, errorCode = generation.ErrorCode }));
+        return Json.Error("helperGenerationFailed",
+            $"Could not generate the helper VI at '{helperVi}': {generation.ErrorMessage}",
+            new
+            {
+                helperViPath = helperVi,
+                errorCode = generation.ErrorCode,
+                hint = generation.ErrorCode == 1051
+                    ? "Error 1051: a VI of that name is already in LabVIEW's memory, and a failed generation " +
+                      "keeps the name occupied for the session. Restart LabVIEW, or pass another " +
+                      "helperDirectory where the tool takes one."
+                    : null,
+            });
     }
 
     /// <summary>

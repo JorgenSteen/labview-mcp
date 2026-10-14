@@ -1217,34 +1217,8 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         var vi = Path.Combine(folder, name + ".vi");
         if (!force && !HelperCache.NeedsRebuild(aixml, vi)) return (vi, false, null);
 
-        var validation = await connection.InvokeAsync((c, t) =>
-            c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (validation.ErrorCode != 0)
-            return (vi, false, Json.Error("helperAixmlInvalid",
-                $"The helper AIXML at '{aixml}' does not validate: {validation.ErrorMessage}",
-                new { aiXmlPath = aixml, errorCode = validation.ErrorCode }));
-
-        var generation = await connection.InvokeAsync((c, t) =>
-            c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
-            {
-                AiXMLFilePath = aixml,
-                ViPath = vi,
-                OpenVI = false,
-            }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (generation.ErrorCode == 0 && File.Exists(vi)) return (vi, true, null);
-
-        return (vi, false, Json.Error("helperGenerationFailed",
-            $"Could not generate the helper VI at '{vi}': {generation.ErrorMessage}",
-            new
-            {
-                helperViPath = vi,
-                errorCode = generation.ErrorCode,
-                hint = generation.ErrorCode == 1051
-                    ? "Error 1051: a VI of that name is already in LabVIEW's memory, and a failed generation " +
-                      "keeps the name occupied for the session. Pass another helperDirectory, or restart LabVIEW."
-                    : null,
-            }));
+        return await new HousekeepingHelpers(connection).GenerateAsync(aixml, vi, timeoutSeconds, ct)
+            is { } failure ? (vi, false, failure) : (vi, true, null);
     }
 
     /// <summary>

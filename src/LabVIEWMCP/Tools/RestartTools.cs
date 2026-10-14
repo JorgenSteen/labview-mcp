@@ -190,7 +190,7 @@ internal sealed class RestartTools(LvaiConnection connection)
                               "here, because validating it leaves an LVMCP Validate VI in memory right " +
                               "before the close.", false, helperVi);
             Directory.CreateDirectory(helpersDir);
-            if (await GenerateHelperAsync(aixml, helperVi, timeoutSeconds, ct) is { } failure)
+            if (await BackendRoute.ConvertAsync(connection, aixml, helperVi, timeoutSeconds, ct) is { } failure)
                 return (null, failure, false, helperVi);
             generated = true;
         }
@@ -213,28 +213,6 @@ internal sealed class RestartTools(LvaiConnection connection)
     }
 
     private static string Shorten(string text) => text.Length <= 600 ? text : text[..600] + " …";
-
-    private async Task<string?> GenerateHelperAsync(string aixml, string helperVi, int timeoutSeconds,
-                                                    CancellationToken ct)
-    {
-        var validation = await connection.InvokeAsync((c, t) =>
-            c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (validation.ErrorCode != 0)
-            return $"the helper AIXML '{aixml}' does not validate: {validation.ErrorMessage}";
-
-        var generation = await connection.InvokeAsync((c, t) =>
-            c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
-            {
-                AiXMLFilePath = aixml,
-                ViPath = helperVi,
-                OpenVI = false,
-            }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-
-        return generation.ErrorCode == 0 && File.Exists(helperVi)
-            ? null
-            : $"could not generate the helper VI '{helperVi}': {generation.ErrorMessage}";
-    }
 
     // ------------------------------------------------------------------ dialogs
 
