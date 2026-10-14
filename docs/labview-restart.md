@@ -268,47 +268,25 @@ Every real close or restart in this list needs the user's go-ahead, or a LabVIEW
 that this build started. Use a throwaway project copy and the fork's own build, never the installed
 plugin at the same time.
 
-1. **State, nothing open.** `lvai_labview_state`: one LabVIEW, `possibleDialogs` empty, `windowCounts`
-   only frame and system kinds. With `includeHiddenWindows`, check that every hidden window of the
-   station is classified: each `hidden-unrecognised` entry that is not a dialog is a class for the
-   list in section 4. Until it is added, every restart there needs a go-ahead.
-2. **A dialog.** Raise a save prompt by hand. If it is visible: `lvai_labview_state` lists it under
-   `possibleDialogs`, and `lvai_restart_labview` answers `stoppedBy: dialog` even with a go-ahead.
-   If it reports itself invisible (the Error list case): it is listed under `hiddenUnrecognised`.
-3. **An unrecognised hidden window, overridden.** On a LabVIEW with a `hidden-unrecognised` window
-   (from step 1, or the invisible Error list): without a go-ahead, `stoppedBy: hiddenWindows` naming
-   title and class, and LabVIEW stays. With the user's go-ahead: the close goes ahead and
-   `overriddenHiddenWindows` lists each window with its class. Add the classes that turn out to be
-   system windows to `SystemClassPrefixes`.
-4. **An unsaved `LVMCP Validate` VI in memory.** Make one by validating a document the generator
-   refuses (`lvai_validate_aixml` with an unsupported subVI), then check that `lvai_labview_state`
-   lists `LVMCP Validate….vi … *` under `unsaved`, and that a user VI is open and unsaved beside it.
-   Expected without a go-ahead: `stoppedBy: unsaved`, `guards.scratchVis` listing only the LVMCP
-   windows with `closedByThisTool: false`, and both VIs untouched. Re-confirm §1 on this build:
-   `Open VI Reference` by that name in the helpers' and the active project's instance answers 1004.
-   If it does NOT, a close-without-save route exists, so record it and wire it in before the PR. With
-   the user's go-ahead, the close raises "Save changes? (Exit)": the user's VI must be listed beside
-   the LVMCP ones, and the user answers it.
-5. **Each refusal.** Two LabVIEW versions running → `processes`. A busy LabVIEW (a long helper run) →
-   `busy` with two samples. A `*` panel → `unsaved`. An `LVAutoSave` file → `autoSave`. The service
-   blocked → `service`. Another project active → `activeProject`. A modified VI with no window
-   (`lvai_vis_in_memory` lists it) → `memory`. A user's LabVIEW with a VI open → `ownership`. In
-   each case LabVIEW stays up with the same pid.
-6. **`lvai_vis_in_memory`** on a fresh LabVIEW: about 400 names, all `service`/`labview`, none
-   modified. Then a modified loose VI: one `modified` line.
-7. **Empty LabVIEW restart** (no go-ahead): `ok`, `whose: empty`, a new pid, start time after the
-   close, a new port, the same `NI.NigelLocalService` pid, `LVAutoSave` 0 → 0, about 4 s close and
-   32–40 s start.
-8. **Server-started LabVIEW close:** `lvai_ensure_labview` from no LabVIEW, open a project with
-   `projectPath`, then `lvai_restart_labview mode close projectPath=…`: the project is saved and
-   closed first, LabVIEW closes, and there is no go-ahead.
-9. **A close that does not finish:** an unsaved VI the user agrees to leave, with a go-ahead:
-   `closeDidNotFinish`, `closeMainWindow: true`, the save prompt named in `dialogsNow`. The user
-   answers it.
-10. **Nigel:** LabVIEW up for more than 90 s with no chat and the service down. `lvai_ensure_labview`
-   reports `nigelChat.state: running`, the chat window appears, and the next `lvai_status` answers.
-   Call it again: there is no second start.
-11. **Timeout with a dialog:** a call that times out while a dialog is up carries `possibleDialogs`.
+The checklist was run on 2026-10-10. The results table below names each item by number: 1 the state
+with nothing open, 2 a dialog, 3 an unrecognised hidden window overridden, 4 an unsaved
+`LVMCP Validate` VI, 5 each refusal, 6 `lvai_vis_in_memory`, 7 an empty restart, 8 a close of a
+LabVIEW this server started, 9 a close that does not finish, 10 the Nigel chat start, 11 a timeout
+with a dialog. What no run has covered yet, and how to run it:
+
+- **3, an unrecognised hidden window, overridden.** On a LabVIEW with a `hidden-unrecognised`
+  window: without a go-ahead, `stoppedBy: hiddenWindows` naming title and class, and LabVIEW stays.
+  With the user's go-ahead the close goes ahead and `overriddenHiddenWindows` lists each window with
+  its class. Add the classes that turn out to be system windows to `SystemClassPrefixes`.
+- **5, the `processes`, `service` and `memory` refusals.** Two LabVIEW versions running ->
+  `processes`. The service blocked -> `service`. A modified VI with no window (`lvai_vis_in_memory`
+  lists it) -> `memory`. In each case LabVIEW stays up with the same pid.
+- **6, the modified half.** A modified loose VI gives one `modified` line.
+- **10, the Nigel chat start.** LabVIEW up for more than 90 s with no chat and the service down:
+  `lvai_ensure_labview` reports `nigelChat.state: running`, the chat window appears, and the next
+  `lvai_status` answers. A second call starts nothing.
+- **11, a timeout with a dialog.** A call that times out while a dialog is up carries
+  `possibleDialogs`.
 
 ### Results, 2026-10-10 (LabVIEW 2026 Q3 32-bit, a throwaway project, the fork's own build)
 
