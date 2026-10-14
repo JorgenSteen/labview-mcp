@@ -54,8 +54,8 @@ Two more traps in the list format, both measured:
 
 - **The runner cannot set an array**, so a list crosses as one `;`-separated string, and from about
   100 paths the string and its answer pass the size limit. The read-back always goes through the
-  **list-file** helper, 100 VIs per call. The apply helper uses a list file above 100 members; that
-  twin is the one unmeasured helper.
+  **list-file** helper, 100 VIs per call. The apply helper takes its member list through a file
+  too, whatever its length (since 2026-10-14; measured that day on a class and a plain library).
 - **The apply helper splits with Spreadsheet String To Array**, so a trailing `;` is an empty last
   path and Error 7. The read-back helper loops on Match Pattern and expects one `;` per entry. The
   two joins are pinned by a unit test. A path that itself contains `;` is refused
@@ -210,5 +210,4 @@ and run through `lvai_run_and_read_typed`, project closed:
 
 Still open:
 
-1. The apply list-file twin (`lvai_icon_apply_and_save_n_file.xml`), used above 100 members.
-2. `keepOwnLayer` on an own layer of editable text made in the icon editor.
+1. `keepOwnLayer` on an own layer of editable text made in the icon editor.
