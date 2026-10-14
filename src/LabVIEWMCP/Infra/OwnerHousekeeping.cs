@@ -135,8 +135,7 @@ internal static class AnsiText
     /// CRLF back as LF anyway (XML end-of-line handling), so comparing raw strings would report a
     /// multi-line description as wrong on every read-back.
     /// </summary>
-    internal static string Comparable(string? text) =>
-        (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
+    internal static string Comparable(string? text) => Lf(text ?? "");
 }
 
 /// <summary>One item of a .lvclass or .lvlib, as the file lists it.</summary>
