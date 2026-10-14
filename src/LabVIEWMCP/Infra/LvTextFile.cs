@@ -61,9 +61,6 @@ internal static class LvTextFile
         return (text, Detect(text, hasBom));
     }
 
-    /// <summary>The text of a file, without its BOM.</summary>
-    public static string ReadText(string path) => Read(path).Text;
-
     /// <summary>
     /// The style of a text. Only CRLF and bare LF are counted - a lone CR is not a line break here.
     /// A text with no line break at all gets LabVIEW's CRLF.
@@ -108,18 +105,6 @@ internal static class LvTextFile
     /// <summary>Asynchronous <see cref="Write(string,string,Style)"/>.</summary>
     public static Task WriteAsync(string path, string text, Style style, CancellationToken ct = default) =>
         File.WriteAllBytesAsync(path, Encode(text, style), ct);
-
-    /// <summary>
-    /// Write <paramref name="text"/> keeping whatever style the file on disk has now, or LabVIEW's
-    /// style when there is no file yet. For a caller that did not read the file through
-    /// <see cref="Read"/> itself.
-    /// </summary>
-    public static void Write(string path, string text) =>
-        Write(path, text, File.Exists(path) ? Read(path).Style : Style.LabView);
-
-    /// <summary>Asynchronous <see cref="Write(string,string)"/>.</summary>
-    public static Task WriteAsync(string path, string text, CancellationToken ct = default) =>
-        WriteAsync(path, text, File.Exists(path) ? Read(path).Style : Style.LabView, ct);
 
     /// <summary>A NEW file, in LabVIEW's style: BOM and CRLF.</summary>
     public static void WriteNew(string path, string text) => Write(path, text, Style.LabView);
