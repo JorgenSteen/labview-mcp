@@ -136,12 +136,20 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
 
     /// <summary>The code of an error-cluster indicator, or null when the helper did not report it.</summary>
     internal static int? Code(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
-        Xml(values, indicator) is { } xml
+        ClusterCode(Xml(values, indicator));
+
+    internal static string? Source(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
+        ClusterSource(Xml(values, indicator));
+
+    /// <summary>The code of an error cluster as the run helper flattens it to XML.</summary>
+    internal static int? ClusterCode(string? xml) =>
+        xml is not null
         && Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>") is { Success: true } m
         && int.TryParse(m.Groups[1].Value, out var code) ? code : null;
 
-    internal static string? Source(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
-        Xml(values, indicator) is { } xml
+    /// <summary>The source of a flattened error cluster, entities decoded; null when empty.</summary>
+    internal static string? ClusterSource(string? xml) =>
+        xml is not null
         && Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline)
             is { Success: true } m && m.Groups[1].Value.Length > 0
             ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;

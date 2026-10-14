@@ -3,7 +3,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LabVIEWMcp.Grpc;
 using LabVIEWMcp.Infra;
@@ -1014,21 +1013,11 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         return null;
     }
 
-    internal static int? StageCode(IReadOnlyList<LvValuesXml.Value> values, string name)
-    {
-        var xml = values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)).Xml;
-        if (string.IsNullOrEmpty(xml)) return null;
-        var match = Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>");
-        return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
-    }
+    internal static int? StageCode(IReadOnlyList<LvValuesXml.Value> values, string name) =>
+        HousekeepingHelpers.Code(values, name);
 
-    internal static string? StageSource(IReadOnlyList<LvValuesXml.Value> values, string name)
-    {
-        var xml = values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)).Xml;
-        if (string.IsNullOrEmpty(xml)) return null;
-        var match = Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline);
-        return match.Success && match.Groups[1].Value.Length > 0 ? match.Groups[1].Value : null;
-    }
+    internal static string? StageSource(IReadOnlyList<LvValuesXml.Value> values, string name) =>
+        HousekeepingHelpers.Source(values, name);
 
     private static int? Int(string? text) => int.TryParse(text, out var n) ? n : null;
 

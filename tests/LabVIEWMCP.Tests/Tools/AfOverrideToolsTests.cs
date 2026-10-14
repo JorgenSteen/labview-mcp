@@ -233,6 +233,24 @@ public sealed class AfOverrideToolsTests
         Assert.Null(AfOverrideTools.StageCode(values, "delete error"));
     }
 
+    /// <summary>
+    /// The run helper flattens an error cluster to XML, so a source carrying &lt; or &amp; arrives
+    /// escaped. All three tool families read it through HousekeepingHelpers.ClusterSource, which
+    /// decodes it, so a source reads the same in every answer.
+    /// </summary>
+    [Fact]
+    public void An_escaped_error_source_is_decoded_in_every_answer()
+    {
+        const string xml = "<Cluster><I32><Name>code</Name><Val>7</Val></I32>" +
+                           "<String><Name>source</Name><Val>Open &lt;x&gt; &amp; y</Val></String></Cluster>";
+        LvValuesXml.Value[] values = [new("open vi error", "Cluster", null, xml)];
+
+        Assert.Equal("Open <x> & y", AfOverrideTools.StageSource(values, "open vi error"));
+        Assert.Equal("Open <x> & y", HousekeepingHelpers.Source(values, "open vi error"));
+        Assert.Equal(7, HousekeepingHelpers.ClusterCode(xml));
+        Assert.Null(HousekeepingHelpers.ClusterCode(null));
+    }
+
     private static LvValuesXml.Value Strings(string name, params string[] values) =>
         new(name, "Array", null, $"<Array><Name>{name}</Name><Dimsize>{values.Length}</Dimsize>\n" +
             string.Concat(values.Select(v => $"<String><Name></Name><Val>{v}</Val></String>\n")) + "</Array>");

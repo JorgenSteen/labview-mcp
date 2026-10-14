@@ -7,7 +7,6 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LabVIEWMcp.Grpc;
 using LabVIEWMcp.Infra;
@@ -924,19 +923,11 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         }
     }
 
-    internal static int? ErrorCode(JsonObject? values, string name)
-    {
-        if ((values?[name] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml) return null;
-        var match = Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>");
-        return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
-    }
+    internal static int? ErrorCode(JsonObject? values, string name) =>
+        HousekeepingHelpers.ClusterCode((values?[name] as JsonObject)?["xml"]?.GetValue<string>());
 
-    private static string? ErrorSource(JsonObject? values, string name)
-    {
-        if ((values?[name] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml) return null;
-        var match = Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline);
-        return match.Success && match.Groups[1].Value.Length > 0 ? match.Groups[1].Value : null;
-    }
+    private static string? ErrorSource(JsonObject? values, string name) =>
+        HousekeepingHelpers.ClusterSource((values?[name] as JsonObject)?["xml"]?.GetValue<string>());
 
     internal static string? Scalar(JsonObject? values, string name) =>
         (values?[name] as JsonObject)?["value"]?.GetValue<string>();
