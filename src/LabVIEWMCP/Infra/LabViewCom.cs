@@ -87,8 +87,20 @@ internal static class LabViewCom
                 ?? throw new ComException("activeXNotRegistered",
                     $"{ProgId} is not registered, so LabVIEW's ActiveX server cannot be reached. " +
                     "It is registered by LabVIEW's installer; a repair install restores it.");
-            var app = Activator.CreateInstance(type)
+            var before = LabViewPids();
+            var app = Create(type.GUID, ServerBitness(RunningLabViews()))
                 ?? throw new ComException("activeXNotRegistered", $"{ProgId} gave no object.");
+            // RULE 1 CHECKED, NOT ASSUMED: a LabVIEW that appeared during the activation was
+            // started BY it. Released at once - with nothing loaded it quits on its own.
+            if (LabViewPids().Except(before).ToList() is { Count: > 0 } started)
+            {
+                Release(app);
+                throw new ComException("comStartedLabView",
+                    $"Asking COM for {ProgId} STARTED a LabVIEW (pid {string.Join(", ", started)}) " +
+                    "instead of attaching to the running one, so nothing was done in it. Each " +
+                    "bitness has its own registration of the ActiveX server; the one asked for " +
+                    "points at a LabVIEW that is not running.");
+            }
             try { return body(app); }
             finally { Release(app); }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -280,6 +292,93 @@ internal static class LabViewCom
     private static object? Call(object target, string name, params object?[] args) =>
         target.GetType().InvokeMember(name, BindingFlags.InvokeMethod, null, target, args,
                                       CultureInfo.InvariantCulture);
+
+    // ------------------------------------------------------------ which LabVIEW COM reaches
+
+    // CLSCTX_LOCAL_SERVER, and the two flags that pick a 32- or 64-bit registration
+    private const uint LocalServer = 0x4;
+    private const uint Activate32BitServer = 0x40000;
+    private const uint Activate64BitServer = 0x80000;
+
+    /// <summary>
+    /// The bitness to ask COM for: the NEWEST running LabVIEW's - the one LabViewInUse names -
+    /// or null when nothing running could be read, which leaves COM's own default.
+    ///
+    /// WHY. Every LabVIEW registers the same CLSID, once per bitness, and COM activates the
+    /// registration of the CLIENT's bitness. This server is 64-bit. Measured 2026-10-14 on a station
+    /// with LabVIEW 2026 32-bit running and LabVIEW 2024 64-bit installed: a 32-bit client attached
+    /// to the running 2026, a 64-bit one STARTED LabVIEW 2024 with /Automation - and the composed
+    /// 2026 VI was then refused as "File version is later than the current LabVIEW version".
+    /// </summary>
+    internal static int? ServerBitness(IReadOnlyList<(int Release, int Bits)> running) =>
+        running.Where(r => r.Bits is 32 or 64)
+               .OrderByDescending(r => r.Release)
+               .Select(r => (int?)r.Bits)
+               .FirstOrDefault();
+
+    /// <summary>The CLSCTX for an activation that must reach a server of <paramref name="bits"/>.</summary>
+    internal static uint ActivationContext(int? bits) => bits switch
+    {
+        32 => LocalServer | Activate32BitServer,
+        64 => LocalServer | Activate64BitServer,
+        _ => LocalServer,
+    };
+
+    /// <summary>Release year and bitness of every running LabVIEW whose path names a release.</summary>
+    private static List<(int Release, int Bits)> RunningLabViews()
+    {
+        var found = new List<(int, int)>();
+        foreach (var process in Process.GetProcessesByName("LabVIEW"))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (!OperatingSystem.IsWindows()) continue;
+                    var exe = process.MainModule?.FileName;
+                    var folder = Path.GetFileName(Path.GetDirectoryName(exe ?? "") ?? "");
+                    if (!global::LabVIEWMcp.Grpc.LabViewLocator.TryParseRelease(folder, out var release)) continue;
+                    var bits = !Environment.Is64BitOperatingSystem
+                        ? 32
+                        : IsWow64Process(process.Handle, out var wow64) ? (wow64 ? 32 : 64) : 0;
+                    if (bits != 0) found.Add((release, bits));
+                }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception
+                                              or InvalidOperationException) { }
+            }
+        }
+        return found;
+    }
+
+    private static HashSet<int> LabViewPids()
+    {
+        var pids = new HashSet<int>();
+        foreach (var process in Process.GetProcessesByName("LabVIEW"))
+            using (process) pids.Add(process.Id);
+        return pids;
+    }
+
+    /// <summary>CoCreateInstance for IDispatch with an explicit server context.</summary>
+    private static object? Create(Guid clsid, int? bits)
+    {
+        // the CLR initialises a thread's apartment lazily; a raw CoCreateInstance needs it now
+        _ = CoInitializeEx(IntPtr.Zero, 0 /* COINIT_MULTITHREADED */);
+        var iid = new Guid("00020400-0000-0000-C000-000000000046");   // IDispatch
+        var hr = CoCreateInstance(ref clsid, IntPtr.Zero, ActivationContext(bits), ref iid, out var app);
+        if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+        return app;
+    }
+
+    [DllImport("ole32.dll")]
+    private static extern int CoInitializeEx(IntPtr reserved, uint coInit);
+
+    [DllImport("ole32.dll")]
+    private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint context, ref Guid iid,
+                                               [MarshalAs(UnmanagedType.IUnknown)] out object app);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWow64Process(IntPtr process, [MarshalAs(UnmanagedType.Bool)] out bool wow64);
 
     private static void Release(object comObject)
     {

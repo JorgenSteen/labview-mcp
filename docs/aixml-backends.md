@@ -917,6 +917,41 @@ compiled code (145 kB) that the strip refused, in a session that had not been re
 class creation and members as the LUnit route documents; and a second run in the same LabVIEW
 answered `Error 1051` for a `Gain.ctl` of the first run still in memory - the tool named it.
 
+## ActiveX reached the wrong LabVIEW on a mixed-bitness station - 2026-10-14
+
+**The symptom.** On a station with LabVIEW 2026 32-bit running and LabVIEW 2024 64-bit merely
+installed, `lvai_generate_vi` on `pylabview` composed a correct 26.3.1-stamped VI and the convert
+answered `openError: File version is later than the current LabVIEW version` - from a LabVIEW that
+was 26.3.1 itself. The call took 45 s, and LabVIEW 2026 was gone by its end (no crash log, no
+minidump; whether the two are connected was not settled).
+
+**The cause.** Every LabVIEW registers the same CLSID for `LabVIEW.Application`, once per bitness,
+and COM activates the registration matching the CLIENT. This server is 64-bit; the 64-bit
+registration named `LabVIEW 2024\LabVIEW.exe /Automation`. Measured with a probe: a 32-bit client
+attached to the running LabVIEW 2026 and started nothing, a 64-bit client STARTED LabVIEW 2024. So
+rule 1 of `LabViewCom` - never let COM start LabVIEW - was broken, silently, by the bitness of our
+own process; `NotReady()` had seen a running LabVIEW and passed.
+
+**The fix.** `LabViewCom.WithLabViewAsync` activates through `CoCreateInstance` with
+`CLSCTX_ACTIVATE_32_BIT_SERVER` or `_64_BIT_SERVER`, taken from the newest RUNNING LabVIEW (its
+release from the folder name, its bitness from `IsWow64Process`). And rule 1 is now checked rather
+than assumed: a LabVIEW process that appears during the activation is released at once and the call
+fails `errorKind: comStartedLabView`.
+
+**Accepted the same day over raw stdio**, the built server, `backend: pylabview`, a six-terminal VI
+(`y = x * gain + offset`, error cluster passed through), with main's build as the control arm:
+
+| LabVIEW running | build | answer |
+|---|---|---|
+| 2026 32-bit | main (control) | LabVIEW 2024 64-bit started; `openError` 1125 |
+| 2026 32-bit | fix | `execState 1`, run `y = 8.5` for 3, 2.5, 1; nothing started |
+| **2020 32-bit**, alone | fix | written as a **20.0.1** file (`labviewInUse: 2020`), `ok: true`, `execState 1`, linker errors read, run `y = 8.5`, `error out` clean |
+
+**The first measurement on a LabVIEW older than 2025**: composed, opened, checked and run in
+LabVIEW 2020 f1 with no NI service involved. One step did not work there: Clean Up Diagram answered
+**LabVIEW error 2** at `Block Diagram:Clean Up` (Clean Up Panel worked); the step is reported and
+never gating, so the VI is left as composed. Not investigated further.
+
 ## Not covered, and not measured
 
 - **ActiveX is Windows only and needs a running LabVIEW**; it never starts one, so with no LabVIEW
