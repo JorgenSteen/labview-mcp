@@ -80,6 +80,23 @@ public class NigelChatTests
         Assert.Null(NigelChat.ReasonNotToStart(LabViewState.Take(Machine(107, 300), @"X:\n")));
     }
 
+    /// <summary>
+    /// Measured 2026-10-14: LabVIEW's `_Loading` splash was reported as a possible dialog, so the
+    /// answer said "a person answers it" for a window that goes away by itself. It is its own reason.
+    /// </summary>
+    [Fact]
+    public void A_loading_splash_is_named_as_loading_not_as_a_dialog()
+    {
+        var loading = Machine(108, 300);
+        loading.AddWindow(108, "LVDChild", "_Loading", true);
+        var snapshot = LabViewState.Take(loading, @"X:\n");
+
+        Assert.Empty(snapshot.Dialogs);
+        var reason = NigelChat.ReasonNotToStart(snapshot);
+        Assert.Contains("still loading", reason);
+        Assert.DoesNotContain("dialog", reason);
+    }
+
     [Fact]
     public async Task A_start_is_made_once_and_a_message_box_is_named_not_pressed()
     {

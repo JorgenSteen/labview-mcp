@@ -27,6 +27,8 @@ internal static class WindowKinds
     public const string HiddenSystem = "hidden-system";
     public const string Untitled = "untitled";
     public const string PossibleDialog = "possible-dialog";
+    /// <summary>LabVIEW's start-up splash, `_Loading`: it goes away by itself, so it is no dialog.</summary>
+    public const string Loading = "loading";
     /// <summary>A HIDDEN titled window nothing measured explains: maybe a dialog, maybe a new system class.</summary>
     public const string HiddenUnrecognised = "hidden-unrecognised";
 }
@@ -130,7 +132,16 @@ internal static class LabViewState
     private static readonly Regex UntitledViTitle = new(
         @"^Untitled \d+( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
 
-    private static readonly Regex ProjectTitle = new(@"\.lvproj - Project Explorer$", RegexOptions.Compiled);
+    /// <summary>The title of LabVIEW's start-up splash window, in a slow start.</summary>
+    internal const string LoadingTitle = "_Loading";
+
+    /// <summary>
+    /// How long after its start an untitled window a LabVIEW frame owns is taken for the splash -
+    /// the same 90 s the Nigel chat waits, past every measured splash (21-54 s).
+    /// </summary>
+    internal const double StartupSeconds = 90;
+
+    private static readonly Regex ProjectTitle =new(@"\.lvproj - Project Explorer$", RegexOptions.Compiled);
 
     /// <summary>The service's own VIs: NI's AI add-on ships as packed libraries named `LV AI …`.</summary>
     private static readonly Regex ServiceTitle = new(@"^LV AI [^:]*\.lvlibp:", RegexOptions.Compiled);
@@ -165,6 +176,11 @@ internal static class LabViewState
 
         if (title.Length == 0) return WindowKinds.Untitled;
         if (title == "LabVIEW") return WindowKinds.Frame;
+        // Measured 2026-10-14 on a cold start of LabVIEW 2026 Q3: a visible LVDChild titled
+        // `_Loading`, owned by the frame, for about the first minute. The listings above were all
+        // taken from a LabVIEW already up, so it fell through to possible-dialog and stopped the
+        // Nigel chat start as "a person answers it".
+        if (title == LoadingTitle) return WindowKinds.Loading;
         if (title.StartsWith("Getting Started", StringComparison.Ordinal)) return WindowKinds.GettingStarted;
         if (ProjectTitle.IsMatch(title)) return WindowKinds.Project;
         if (ViTitle.IsMatch(title) || UntitledViTitle.IsMatch(title)) return WindowKinds.Vi;
@@ -189,9 +205,19 @@ internal static class LabViewState
     /// is one too: a dialog VI titled after its file looks like any panel. Known helper classes
     /// (`Internet Explorer_Hidden`, visible and untitled on the measured station) stay out.
     /// </summary>
-    internal static IReadOnlyList<ClassifiedWindow> ClassifyAll(IEnumerable<MachineWindow> windows)
+    internal static IReadOnlyList<ClassifiedWindow> ClassifyAll(IEnumerable<MachineWindow> windows,
+                                                                double? processUpSeconds = null)
     {
         var first = windows.Select(w => new ClassifiedWindow(w, Classify(w))).ToList();
+        // THE UNTITLED SPLASH. Measured 2026-10-14 on three cold starts of LabVIEW 2026 Q3: its splash
+        // ("Initializing plug-ins", about 772x444) is a visible, untitled LVDChild that the frame owns
+        // from about 10 s until the IDE is up (21 s and 32 s), titled `_Loading` instead in a slower
+        // start (still up at 54 s). Owned by the frame, it matched the "changed on disk" rule below.
+        // That prompt needs a VI loaded; the splash comes before any. So in a LabVIEW younger than
+        // StartupSeconds with no VI or project window, it is the splash - `loading`, which the
+        // restart still does not count as empty, so nothing proceeds on the strength of it.
+        var starting = processUpSeconds < StartupSeconds &&
+                       !first.Any(c => c.Kind is WindowKinds.Vi or WindowKinds.Project or WindowKinds.Unsaved);
         var frames = first.Where(c => c.Kind == WindowKinds.Frame).Select(c => c.Window.Handle).ToHashSet();
         var disabled = first.Where(c => c.Window.Visible && !c.Window.Enabled &&
                                         c.Kind is WindowKinds.Frame or WindowKinds.Project)
@@ -206,6 +232,9 @@ internal static class LabViewState
             if (!w.Visible || IsSystemClass(w.ClassName)) return c;
             if (c.Kind == WindowKinds.Untitled)
             {
+                if (w.Owner != 0 && frames.Contains(w.Owner) && starting)
+                    return c with { Kind = WindowKinds.Loading, Reason = "untitled, owned by the LabVIEW frame, " +
+                                    $"in a LabVIEW {processUpSeconds:F0} s old with no VI or project open - its start-up splash" };
                 if (w.Owner != 0 && frames.Contains(w.Owner))
                     return c with { Kind = WindowKinds.PossibleDialog, Reason = "untitled, owned by the LabVIEW frame" +
                                                                          (blocked is null ? "" : "; " + blocked) };
@@ -226,7 +255,8 @@ internal static class LabViewState
         var labview = machine.Processes(LabViewProcess);
         var windows = new List<ClassifiedWindow>();
         foreach (var process in labview)
-            windows.AddRange(ClassifyAll(machine.TopWindows(process.Id)));
+            windows.AddRange(ClassifyAll(machine.TopWindows(process.Id),
+                                         (machine.Now - process.StartTime)?.TotalSeconds));
 
         return new LabViewSnapshot(
             machine.Now, labview,

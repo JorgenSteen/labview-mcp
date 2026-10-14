@@ -28,8 +28,33 @@ public class LabViewWindowClassifierTests
     [InlineData("Receiver", true, WindowKinds.PossibleDialog)]
     [InlineData("Context Help", false, WindowKinds.HiddenSystem)]
     [InlineData("RunService.vi", false, WindowKinds.HiddenSystem)]
+    [InlineData("_Loading", true, WindowKinds.Loading)]   // the start-up splash, measured 2026-10-14
     public void The_kit_samples_keep_their_kind(string title, bool visible, string expected) =>
         Assert.Equal(expected, Kind(title, visible));
+
+    /// <summary>
+    /// The untitled splash, measured 2026-10-14: owned by the frame like the "changed on disk"
+    /// prompt, but in a LabVIEW seconds old with nothing loaded. Past 90 s, or with a VI open, the
+    /// prompt rule stands.
+    /// </summary>
+    [Theory]
+    [InlineData(15.0, false, WindowKinds.Loading)]
+    [InlineData(200.0, false, WindowKinds.PossibleDialog)]
+    [InlineData(15.0, true, WindowKinds.PossibleDialog)]
+    [InlineData(null, false, WindowKinds.PossibleDialog)]
+    public void An_untitled_frame_owned_window_is_the_splash_only_in_a_young_empty_labview(
+        double? upSeconds, bool viOpen, string expected)
+    {
+        var frame = new MachineWindow(100, 1, "LVFrame", "LabVIEW", true);
+        var splash = new MachineWindow(101, 1, "LVDChild", "", true, Owner: 100);
+        var windows = viOpen
+            ? new[] { frame, splash, new MachineWindow(102, 1, "LVDChild", "Main.vi", true) }
+            : new[] { frame, splash };
+
+        var kinds = LabViewState.ClassifyAll(windows, upSeconds);
+
+        Assert.Equal(expected, kinds.Single(c => c.Window.Handle == 101).Kind);
+    }
 
     /// <summary>
     /// THE BUG THE PORT FIXES. The kit called a hidden titled window "hidden-other" and never flagged

@@ -551,8 +551,9 @@ internal sealed class RunTools(LvaiConnection connection)
                 ? "A SNAPSHOT taken runForMs after the start, then the VI was " +
                   (run.Finished ? "already finished." : "aborted - no cleanup on its diagram ran.")
                 : run.Finished
-                    ? "Ran to the end over ActiveX. Values are AIXML literals: a cluster or array " +
-                      "is written [a,b,...], and `xml` is always null on this route."
+                    ? "Ran to the end over ActiveX. `literal` is the AIXML spelling - a cluster or " +
+                      "array is written [a,b,...] - and `xml` is LabVIEW's flattened XML built from it, " +
+                      "the shape the grpc route answers; `xml` is null only where `problem` says why."
                     : $"DID NOT FINISH within the budget and was aborted; the values are what the " +
                       "abort left. Raise timeoutSeconds, or use runForMs for a VI that never ends.",
         }.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
