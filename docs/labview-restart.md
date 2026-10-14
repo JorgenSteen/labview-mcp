@@ -133,12 +133,10 @@ under, so that a refused validate or convert cannot burn a real name: `LVMCP Val
 `LVMCP TD Carrier ` (`TypedefCreateTools`). The other `LVMCP …` names in the code (`Stub`, the
 `ClsW`/`ClsR`/`Mth…` sockets, `Flat`) are saved files and are not scratch. The user asked for the
 unsaved scratch VIs to be closed without saving before the IDE close. **There is no route that does
-it, and the tool says so instead.** Measured 2026-09-26 (`docs/scratch-vis-in-memory.md` §1):
-`Open VI Reference` by name answers `Error 1004` for them in the helpers' instance, the IDE's main
-instance and the active project's, and the converter's `1051` check does not see them either. So
-neither `lvai_close_vi` nor `scripts/lvai_close_own_panel.xml` can reach them, and generating any
-new helper would itself leave another `LVMCP Validate` VI. Closing their WINDOWS raises LabVIEW's
-save prompt (§2a), and a dialog is never answered here. So they keep blocking as `unsaved`. The
+it, and the tool says so instead:** no VI Server instance reaches them by name
+(`docs/scratch-vis-in-memory.md` §1), generating any new helper would itself leave another
+`LVMCP Validate` VI, and closing their WINDOWS raises LabVIEW's save prompt (§2a), which is never
+answered here. So they keep blocking as `unsaved`. The
 answer's `guards.scratchVis` lists them with `closedByThisTool: false` and the reason. With the
 user's go-ahead the close raises the prompt, and "Don't Save - All" is safe for these.
 
