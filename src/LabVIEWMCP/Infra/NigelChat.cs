@@ -86,6 +86,8 @@ internal static class NigelChat
         if (snapshot.NigelChat.Count > 0) return $"LVNigelChat already runs (pid {snapshot.NigelChat[0].Id})";
         if (snapshot.Dialogs.Count > 0)
             return "a possible dialog is up, and a modal dialog blocks the service whatever Nigel does - a person answers it";
+        if (snapshot.Of(WindowKinds.Loading).Any())
+            return "LabVIEW is still loading (its _Loading window is up) - the service may still come up by itself";
         var labview = snapshot.LabView[0];
         if (labview.StartTime is not { } start) return "LabVIEW's start time could not be read";
         var up = (snapshot.At - start).TotalSeconds;
