@@ -5,6 +5,7 @@
 using System.Buffers.Binary;
 using System.Text;
 using LabVIEWMcp.Infra;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 
 namespace LabVIEWMcp.Tests.Infra;
@@ -17,12 +18,10 @@ namespace LabVIEWMcp.Tests.Infra;
 /// </summary>
 public sealed class IconOwnersTests : IDisposable
 {
-    private readonly string _dir = Directory.CreateTempSubdirectory("lvai-owner-tests").FullName;
+    private readonly TempTree _tree = new("lvai-owner-tests");
+    private string _dir => _tree.Root;
 
-    public void Dispose()
-    {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
-    }
+    public void Dispose() => _tree.Dispose();
 
     internal static string ClassXml(params string[] memberUrls) => $"""
         <?xml version='1.0' encoding='UTF-8'?>
@@ -46,13 +45,7 @@ public sealed class IconOwnersTests : IDisposable
         </Library>
         """;
 
-    private string Write(string relative, string text)
-    {
-        var path = Path.Combine(_dir, relative);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, text);
-        return path;
-    }
+    private string Write(string relative, string text) => _tree.Write(relative, text);
 
     [Fact]
     public void A_class_lists_its_members_by_absolute_path_through_virtual_folders()

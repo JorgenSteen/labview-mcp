@@ -21,27 +21,15 @@ namespace LabVIEWMcp.Tests.Tools;
 /// </summary>
 public sealed class ExecStateInterfaceOverrideTests : IDisposable
 {
-    private readonly string _root = Directory.CreateTempSubdirectory("iface-overrides").FullName;
+    private readonly TempTree _tree = new("iface-overrides");
 
-    public void Dispose()
-    {
-        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
-    }
+    public void Dispose() => _tree.Dispose();
 
     private static string Fixture => RepoTree.Path("tests", "LabVIEWMCP.Tests", "Fixtures",
                                                    "basic-interfaces");
 
     /// <summary>A copy of the whole fixture tree, so the relative parent URLs still resolve.</summary>
-    private string CopyTree()
-    {
-        foreach (var file in Directory.EnumerateFiles(Fixture, "*", SearchOption.AllDirectories))
-        {
-            var target = Path.Combine(_root, Path.GetRelativePath(Fixture, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(file, target, overwrite: true);
-        }
-        return _root;
-    }
+    private string CopyTree() => _tree.CopyFolder(Fixture);
 
     /// <summary>Delete one member's item block from a copied class file - the "deleted override".</summary>
     private static void RemoveMember(string lvclass, string member)
@@ -137,7 +125,7 @@ public sealed class ExecStateInterfaceOverrideTests : IDisposable
     [Fact]
     public async Task A_VI_in_no_class_answers_null_with_a_reason()
     {
-        var loose = Path.Combine(_root, "loose", "Loose.vi");
+        var loose = Path.Combine(_tree.Root, "loose", "Loose.vi");
         Directory.CreateDirectory(Path.GetDirectoryName(loose)!);
         File.WriteAllBytes(loose, [0]);
 

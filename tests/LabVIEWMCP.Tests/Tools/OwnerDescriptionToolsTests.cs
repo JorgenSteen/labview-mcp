@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using LabVIEWMcp.Infra;
 using LabVIEWMcp.Tests.Infra;
 using LabVIEWMcp.Tools;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 
 namespace LabVIEWMcp.Tests.Tools;
@@ -34,19 +35,13 @@ public class OwnerDescriptionToolsTests
 
     private sealed class Copy : IDisposable
     {
-        public string Root { get; } = Directory.CreateTempSubdirectory("class-description").FullName;
+        private readonly TempTree _tree = new("class-description");
+        public string Root => _tree.Root;
         public string Class { get; }
 
-        public Copy()
-        {
-            Class = Path.Combine(Root, "Beverage.lvclass");
-            File.Copy(OwnerHousekeepingTests.Fixture("Beverage.lvclass"), Class);
-        }
+        public Copy() => Class = _tree.Copy(OwnerHousekeepingTests.Fixture("Beverage.lvclass"));
 
-        public void Dispose()
-        {
-            try { Directory.Delete(Root, recursive: true); } catch (IOException) { }
-        }
+        public void Dispose() => _tree.Dispose();
     }
 
     [Fact]

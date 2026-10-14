@@ -5,6 +5,7 @@ using System.Xml.Linq;
 using LabVIEWMcp.Infra;
 using LabVIEWMcp.Tests.Infra;
 using LabVIEWMcp.Tools;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 
 namespace LabVIEWMcp.Tests.Tools;
@@ -18,19 +19,14 @@ public class FolderToolsTests
 {
     private sealed class Copy : IDisposable
     {
-        public string Root { get; } = Directory.CreateTempSubdirectory("move-to-folder").FullName;
+        private readonly TempTree _tree = new("move-to-folder");
+        public string Root => _tree.Root;
         public string Owner { get; }
 
-        public Copy(string fixture = "Customer.lvclass")
-        {
-            Owner = Path.Combine(Root, fixture);
-            File.Copy(OwnerHousekeepingTests.Fixture(fixture), Owner);
-        }
+        public Copy(string fixture = "Customer.lvclass") =>
+            Owner = _tree.Copy(OwnerHousekeepingTests.Fixture(fixture));
 
-        public void Dispose()
-        {
-            try { Directory.Delete(Root, recursive: true); } catch (IOException) { }
-        }
+        public void Dispose() => _tree.Dispose();
     }
 
     private static string Json(params string[] names) => System.Text.Json.JsonSerializer.Serialize(names);

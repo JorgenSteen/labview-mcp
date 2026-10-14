@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using LabVIEWMcp.Infra;
 using LabVIEWMcp.Tests.Infra;
 using LabVIEWMcp.Tools;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 
 namespace LabVIEWMcp.Tests.Tools;
@@ -22,20 +23,12 @@ namespace LabVIEWMcp.Tests.Tools;
 /// </summary>
 public sealed class OwnerIconToolsTests : IDisposable
 {
-    private readonly string _dir = Directory.CreateTempSubdirectory("lvai-owner-icon-tests").FullName;
+    private readonly TempTree _tree = new("lvai-owner-icon-tests");
+    private string _dir => _tree.Root;
 
-    public void Dispose()
-    {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
-    }
+    public void Dispose() => _tree.Dispose();
 
-    private string Write(string relative, string text)
-    {
-        var path = Path.Combine(_dir, relative);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, text);
-        return path;
-    }
+    private string Write(string relative, string text) => _tree.Write(relative, text);
 
     private string Png(string relative, int size = 32)
     {
