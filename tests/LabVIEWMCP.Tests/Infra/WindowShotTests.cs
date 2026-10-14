@@ -40,6 +40,20 @@ public class WindowShotTests
     [Fact]
     public void Garbage_is_not_a_png() => Assert.Null(WindowShot.DecodePng([1, 2, 3]));
 
+    /// <summary>
+    /// The shipped Don't Save template, decoded. The expected hash was taken 2026-10-14 with an
+    /// independent decoder (Python zlib over the base64 in DialogButtons.cs), so a change of
+    /// decoder cannot move the pixels the button search compares against.
+    /// </summary>
+    [Fact]
+    public void The_shipped_button_template_decodes_to_its_measured_pixels()
+    {
+        var button = DialogButtons.For(DialogAnswer.ExitSaveScratchOnly, DialogAnswer.DontSave)!;
+        Assert.Equal((58, 15), (button.Width, button.Height));
+        Assert.Equal("94de7ba35f4fe0e9f634c7db6b873413e04e0bd6dad9c1f9ea49cfbf3a5c7bb7",
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(button.Rgb)).ToLowerInvariant());
+    }
+
     [Fact]
     public void A_captured_dialog_is_saved_and_a_window_that_cannot_be_captured_gives_no_path()
     {
