@@ -39,9 +39,7 @@ namespace LabVIEWMcp.Tools;
 /// and every PNG is checked for existence afterwards rather than trusting the code.
 ///
 /// THE HELPERS ARE THE MEASURED ONES, carried over from a pilot project's icon route and renamed;
-/// each <c>scripts\lvai_icon_*.xml</c> says in its description which run measured it. The one
-/// exception is <c>lvai_icon_apply_and_save_n_file.xml</c>, the list-file twin used above
-/// <see cref="ListFileThreshold"/> members, which is built offline and UNMEASURED.
+/// each <c>scripts\lvai_icon_*.xml</c> says in its description which run measured it.
 /// </summary>
 [McpServerToolType]
 internal sealed class OwnerIconTools(LvaiConnection connection)
@@ -49,18 +47,11 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
     internal const string CarrierHelper = "lvai_icon_carrier";
     internal const string SetClassIconHelper = "lvai_icon_set_class_icon";
     internal const string SetLibraryIconHelper = "lvai_icon_set_library_icon";
-    internal const string ApplyHelper = "lvai_icon_apply_and_save_n";
     internal const string ApplyFileHelper = "lvai_icon_apply_and_save_n_file";
     internal const string GetClassIconHelper = "lvai_icon_get_class_icon";
     internal const string GetLibraryIconHelper = "lvai_icon_get_library_icon";
     internal const string ReadViIconsHelper = "lvai_icon_get_vi_icons_n_file";
 
-    /// <summary>
-    /// Members above which the apply list goes through a FILE. The runner cannot set an array, so a
-    /// list crosses as one string, and from about 100 paths that string and its answer pass the
-    /// size limit - measured in a pilot project at 150 VIs.
-    /// </summary>
-    internal const int ListFileThreshold = 100;
 
     /// <summary>VIs per read-back run. The file twin was measured at 146 in one call; 100 stays under that.</summary>
     internal const int ReadBatch = 100;
@@ -179,7 +170,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
             };
             if (applyToMembers)
             {
-                needed.Add(members.Count > ListFileThreshold ? ApplyFileHelper : ApplyHelper);
+                needed.Add(ApplyFileHelper);
                 needed.Add(ReadViIconsHelper);
             }
             if (MissingHelpers(scripts, needed) is { } missingHelpers) return missingHelpers;
@@ -605,7 +596,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
 
         var needed = new List<string>
         {
-            ApplyHelper, ReadViIconsHelper, CarrierHelper,
+            ApplyFileHelper, ReadViIconsHelper, CarrierHelper,
             owner.Kind == IconOwners.Class ? GetClassIconHelper : GetLibraryIconHelper,
         };
         var scripts = StatusTools.ScriptsDirectory();
@@ -718,29 +709,21 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         var inputs = new JsonObject { ["class path"] = owner.Path };
         if (owner.Kind == IconOwners.Library) inputs["is library"] = "true";
 
-        string? listFile = null;
-        string helper;
-        if (vis.Count > ListFileThreshold)
-        {
-            listFile = WriteListFile("vi list", JoinForApply(vis));
-            inputs["vi list"] = listFile;
-            helper = helpers[ApplyFileHelper];
-        }
-        else
-        {
-            inputs["vi paths"] = JoinForApply(vis);
-            helper = helpers[ApplyHelper];
-        }
+        // THE LIST GOES THROUGH A FILE whatever its length: the runner cannot set an array, so a
+        // list would cross as one string, and from about 100 paths that string and its answer
+        // pass the size limit - measured in a pilot project at 150 VIs.
+        var listFile = WriteListFile("vi list", JoinForApply(vis));
+        inputs["vi list"] = listFile;
 
         try
         {
-            var (values, answer) = await RunAsync(helper, inputs, timeoutSeconds, ct);
+            var (values, answer) = await RunAsync(helpers[ApplyFileHelper], inputs, timeoutSeconds, ct);
             steps.Add(Step("applyIconToVIs", answer));
             return InterpretApply(values, vis.Count);
         }
         finally
         {
-            if (listFile is not null) TryDeleteFolder(Path.GetDirectoryName(listFile)!);
+            TryDeleteFolder(Path.GetDirectoryName(listFile)!);
         }
     }
 
