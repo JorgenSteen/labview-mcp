@@ -171,42 +171,12 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
               type[(head.Length + 1)..open].All(char.IsDigit)))
             return 0;
 
-        var close = MatchingBrace(type, open);
-        if (close < 0) return 0;
-        var inner = type[(open + 1)..close];
+        // the outermost braces are the ones at `open`, the first `{` in the literal
+        if (TestTools.Braced(type) is not { } inner) return 0;
 
         return head == "array"
             ? PathsInTypeLiteral(inner)
-            : TopLevelSplit(inner).Sum(PathsInTypeLiteral);
-    }
-
-    private static int MatchingBrace(string text, int open)
-    {
-        var depth = 0;
-        for (var i = open; i < text.Length; i++)
-        {
-            if (text[i] == '{') depth++;
-            else if (text[i] == '}' && --depth == 0) return i;
-        }
-        return -1;
-    }
-
-    /// <summary>A cluster's element list split at its depth-0 commas.</summary>
-    private static IEnumerable<string> TopLevelSplit(string inner)
-    {
-        var depth = 0;
-        var start = 0;
-        for (var i = 0; i < inner.Length; i++)
-        {
-            if (inner[i] == '{') depth++;
-            else if (inner[i] == '}') depth--;
-            else if (inner[i] == ',' && depth == 0)
-            {
-                yield return inner[start..i];
-                start = i + 1;
-            }
-        }
-        if (start < inner.Length) yield return inner[start..];
+            : TestTools.SplitTopLevel(inner).Sum(PathsInTypeLiteral);
     }
 
     /// <summary>The four numbers to write for a class member on this pattern, read off its own
