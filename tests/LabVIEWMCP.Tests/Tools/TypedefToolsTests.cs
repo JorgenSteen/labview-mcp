@@ -263,11 +263,6 @@ public class TypedefToolsTests
     // ---- the coercion check ----
 
     /// <summary>
-    /// A 1D array as the runner flattens it: `value` is null and the elements live in `xml`.
-    /// Reproducing that shape here is the point - a test built on `value` would pass against an
-    /// implementation that cannot read a single real answer.
-    /// </summary>
-    /// <summary>
     /// The retry test of one sweep run. Measured 2026-10-13 with a project active: a run read the
     /// caller on alternate tries and came back EMPTY in between, so an empty enumeration or a
     /// node run that found no subVI is retried, and a run that read the VI is not.
@@ -288,6 +283,11 @@ public class TypedefToolsTests
         Assert.True(TypedefTools.SweepAttempts >= 3);
     }
 
+    /// <summary>
+    /// A 1D array as the runner flattens it: `value` is null and the elements live in `xml`.
+    /// Reproducing that shape here is the point - a test built on `value` would pass against an
+    /// implementation that cannot read a single real answer.
+    /// </summary>
     private static JsonObject Array(string element, params string[] vals)
     {
         var xml = $"<Array>\r\n  <Name>a</Name>\r\n  <Dimsize>{vals.Length}</Dimsize>\r\n" +
