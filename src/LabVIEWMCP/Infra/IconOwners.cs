@@ -64,9 +64,9 @@ internal static class IconOwners
             throw new InvalidDataException(
                 $"'{full}' has root <{root.Name.LocalName}>, not <{expectedRoot}>.");
 
-        // A class's members come from LvClass.Read, the reader every class tool shares, so the two
-        // can never disagree about what a class holds. A plain library has no such reader outside
-        // LibraryTools (private there), hence the small walk below - same URL rule.
+        // A class's members come from LvClass.Read, the reader every class tool shares, and a plain
+        // library's from OwnerFile.Read, the reader the housekeeping tools verify against - so
+        // neither can disagree with the other tools about what an owner holds.
         var members = new List<Member>();
         if (extension == ".lvclass")
             foreach (var m in LvClass.Read(full).Members)
@@ -75,26 +75,15 @@ internal static class IconOwners
                     members.Add(new Member(m.Name, resolved, m.Type == "VI"));
             }
         else
-            Walk(root, full, members);
+            foreach (var item in OwnerFile.Read(full).Items)
+            {
+                if (item.Type == "VI" && item.ResolvedPath is { } path)
+                    members.Add(new Member(item.Name, path, string.Equals(
+                        System.IO.Path.GetExtension(path), ".vi", StringComparison.OrdinalIgnoreCase)));
+            }
 
         return new Owner(full, extension == ".lvclass" ? Class : Library,
             (string?)root.Attribute("LVVersion"), Property(root, "NI.Lib.Icon"), members);
-    }
-
-    /// <summary>VI items at any depth - a class or library may nest them in virtual folders.</summary>
-    private static void Walk(XElement element, string ownerPath, List<Member> members)
-    {
-        foreach (var item in element.Elements("Item"))
-        {
-            var type = (string?)item.Attribute("Type");
-            if (type == "Folder") { Walk(item, ownerPath, members); continue; }
-            if (type != "VI") continue;
-
-            var name = (string?)item.Attribute("Name") ?? "";
-            if (Resolve(ownerPath, (string?)item.Attribute("URL")) is not { } path) continue;
-            members.Add(new Member(name, path,
-                string.Equals(System.IO.Path.GetExtension(path), ".vi", StringComparison.OrdinalIgnoreCase)));
-        }
     }
 
     /// <summary>A member URL against the owner file treated as a directory; null for a symbolic URL.</summary>

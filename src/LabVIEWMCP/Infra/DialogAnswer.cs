@@ -197,8 +197,8 @@ internal static class DialogAnswer
                 if (users.Count > 0)
                     return "Unsaved windows that are not labview-mcp scratch VIs are open: " +
                            string.Join("; ", users.Take(5)) + ". Their changes are somebody's work.";
-                var listed = SplitList(r.ListedVis);
-                if (listed.Count == 0)
+                var listed = Rpc.SplitList(r.ListedVis);
+                if (listed.Length == 0)
                     return "listedVis is empty: pass every VI the dialog lists, as read from its screenshot.";
                 var foreign = listed.Where(v => !LabViewState.IsScratchTitle(v)).ToList();
                 if (foreign.Count > 0)
@@ -226,9 +226,6 @@ internal static class DialogAnswer
                 return "unknown kind";
         }
     }
-
-    internal static List<string> SplitList(string? text) =>
-        [.. (text ?? "").Split(['\n', '\r', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
 
     private static (MachineWindow Window, MachineProcess Process)? FindWindow(ILabViewMachine m, long handle)
     {

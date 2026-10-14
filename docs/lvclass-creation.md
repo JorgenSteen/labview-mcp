@@ -1815,16 +1815,17 @@ acceptance run.
 `LVClass.Open` on the ACTIVE PROJECT's application instance, write `{LV.LVClassLibrary}`
 `Description`, read it back, `{LV.LVClassLibrary}` `Save`. Measured on 15 classes. A `.lvlib` goes
 the twin route - `Library.Open`, `{LV.Library}` `Description`, `{LV.Library}` `Save` with no path -
-which is NOT measured: `lvserver.rsc`'s ActiveX type library lists `Description` on the `Library`
-interface, the open and the save are measured in other helpers, the write is not.
+measured 2026-10-13 on one library through the shipped tool.
 
 **The text is stored ANSI.** An arrow (U+2192) written through `Description` came back as `?` - no
 error from the write, the read-back or the save. The tool therefore refuses any character outside
 Windows-1252 before LabVIEW is touched (`textNotCp1252`), names each one with its position and an
 ASCII replacement where one is obvious (`->` for the arrow), and returns `suggestedText` when every
 offender has one. Control characters other than TAB, CR and LF are refused too: two of them carry a
-line break to the typed run helper. Line breaks are written CRLF, which is how NI's own files store a
-multi-line class description (`Last Ack.lvclass` in `vi.lib`, read 2026-10-12).
+line break to the typed run helper. Line breaks are SENT as LF: LabVIEW's class and library Save
+writes each LF as CRLF, and turned a CRLF sent in into CR CR LF (measured 2026-10-13 on a class and a
+library). The file therefore ends up CRLF, which is how NI's own files store a multi-line class
+description (`Last Ack.lvclass` in `vi.lib`, read 2026-10-12).
 
 **The verdict is the saved file.** The `.lvclass` is re-read as XML after the save and its
 `NI.Lib.Description` compared with the text, line breaks as LF because an XML reader normalises

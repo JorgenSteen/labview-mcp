@@ -337,16 +337,12 @@ there is no dot and no constant — the bare type travels into whatever consumes
 fix and the two traps around `Replace`.
 
 **A CLASS INSIDE A CLUSTER IS A STAND-IN AT THE ELEMENT, and the caller's own cluster still has to
-be bound afterwards.** Since 2026-10-11 `lvai_placeholder_subvi` writes
-`cluster{ref{UDClassInst}.hardware,uint32.intervalMs}` as `cluster{path.hardware,uint32.intervalMs}`
-- it collapsed the whole terminal to a scalar `path` before, so a caller could not wire its cluster
-at all - and names each such element under `classElementsInClusters`. The swap then lands, but the
-CALLER's cluster source still carries a `path` element where the real subVI wants the class. For a
-pane CONTROL the follow-up is `lvai_bind_pane_typedef`. For a cluster CONSTANT it is
-`lvai_swap_subvis` with the typedef's **`.ctl` path as that constant's `class`** in `constantsJson`:
-`{LV.Constant}` `Replace` with a `.ctl` turns a bare cluster constant into a typedef constant. That
-route was OBSERVED in a field run and is NOT YET MEASURED here - check the result with
-`lvai_coercion_dots` and `lvai_exec_state`. `docs/typedef-constants.md` §5a.
+be bound afterwards.** Since 2026-10-11 `lvai_placeholder_subvi` writes the class ELEMENT as a
+`path` element and names it under `classElementsInClusters`, so the swap lands - but the CALLER's
+cluster source still carries that `path`. A pane CONTROL is then bound with
+`lvai_bind_pane_typedef`, a cluster CONSTANT with `lvai_swap_subvis` and the typedef's **`.ctl` path
+as that constant's `class`** in `constantsJson` - OBSERVED in a field run, NOT YET MEASURED here, so
+check with `lvai_coercion_dots` and `lvai_exec_state`. `docs/typedef-constants.md` §5a.
 
 The tool clones the subject's pane, caches the stub in `user.lib\LV_MCP\` under a hash of the
 TARGET and its signature, and hands back the `Call` element and the matching `retarget` operation. **Do not hunt
@@ -1591,7 +1587,7 @@ therefore needs `projectPath`: without one the edit would be undone by LabVIEW's
 re-run is REFUSED (`memberAlreadyListedWithoutProject`), and a class file the remover declines stops
 the call (`memberEntryCouldNotBeDropped`) instead of proceeding hopefully. A member a LOADED VI
 calls (an override hook) still fails the re-add with 56003 after the drop, so a re-run first asks
-the project's instance for its callers and refuses with `memberHasLoadedCallers` (unmeasured;
+the project's instance for its callers and refuses with `memberHasLoadedCallers` (measured 2026-10-10;
 `docs/af-override-tools.md` §5). Read `privateDataBytes`
 before and after anyway — it costs no LabVIEW and nothing else in the chain reports anything.
 Repair of an already-damaged class is a rebuild: `lvai_create_accessors` with an explicit
@@ -2174,32 +2170,21 @@ references, so each needs `To More Specific Class` onto `ref{LV.SubVI}` before `
 `Replace` is invoked.
 
 **THE CONSTANTS HAD THE SAME BLIND SPOT FOR ANOTHER MONTH, and `constantsJson` reaches any depth as
-of 2026-10-11 - not measured against LabVIEW yet.** The class constants were still collected from
-the top-level diagram's `All Objects[]`, so a `path` seed nested in a Case frame inside a loop was
-never found. A second `Traverse for GObjects.vi` call collects them now; its `Class Name` is ONE
-labelled constant, `Constant Class Name` = `Constant`, because a string constant reports
-`StringConstant` and a class constant `LabVIEWClassConstant`, so whether the traversal answers
-`Constant` for every kind depends on whether it matches descendant classes - the first live probe
-settles it, and `constantsSeen: 0` in the answer is the tell that it does not. **A label that MORE
-THAN ONE constant carries is REFUSED** (the user's decision of 2026-10-11): it is not replaced,
-`constantsAmbiguous` names it with its count, `ok` is false with `errorKind:
-constantLabelAmbiguous`, and every label that matched exactly once is still replaced and saved. So
-name every seed constant `_name`-uniquely. `docs/class-method-tooling.md` "Constants at any depth".
+of 2026-10-11 - not measured against LabVIEW yet.** A second `Traverse for GObjects.vi` call
+collects them; `constantsSeen: 0` in the answer is the tell that it missed a constant kind. **A
+label that MORE THAN ONE constant carries is REFUSED** (the user's decision of 2026-10-11):
+`constantsAmbiguous` names it, `errorKind: constantLabelAmbiguous`, and every label that matched
+exactly once is still replaced and saved. So name every seed constant `_name`-uniquely.
+`docs/class-method-tooling.md` "Constants at any depth".
 
 **A VI AT STATE 0 WITH A BROKEN-WIRE TEXT GETS REMOVE BAD WIRES BEFORE ANY REBUILD** - the user's
-rule of 2026-10-11. A `Replace` (subVI, constant, pane control) re-types the wires it can and leaves
-the rest BROKEN, and one broken wire is enough for `execState 0`; regenerating for that throws away
-the swaps, the binds and the icon to fix what `{LV.VI}` `BD.Remove Bad Wires` clears in one call.
-So `lvai_swap_subvis`, `lvai_bind_typedef_constants` and `lvai_add_class_method` end with it as a
-shared step, `removeBadWires` (default true), through `scripts/lvbd_remove_bad_wires.xml` in the
-IDE's instance with the project active. **It says exactly what went**: `badWireCleanup` lists every
-removed wire as `terminal @ owner -> terminal @ owner`, and every sink of a broken wire that HAD a
-source is read back - one with no wire afterwards is a lost connection (two sources on one input,
-a wrong-type source), named in `inputsLeftUnwired`, and the calling tool's `ok` turns false
-(`errorKind: badWireCleanupLostConnection`). A wire with no source is a loose fragment: cleared,
-reported, gates nothing. A VI with no broken wire is not touched or saved. NOT MEASURED against
-LabVIEW yet, and on a class member it is not established that `Save.Instrument` alone persists the
-removal - read the method cold. `docs/class-method-tooling.md` "Clearing broken wires".
+rule of 2026-10-11. A `Replace` (subVI, constant, pane control) leaves the wires it cannot re-type
+BROKEN, and regenerating for that throws away the swaps, the binds and the icon. So
+`lvai_swap_subvis`, `lvai_bind_typedef_constants` and `lvai_add_class_method` end with `{LV.VI}`
+`BD.Remove Bad Wires` (`removeBadWires`, default true), list every removed wire under
+`badWireCleanup`, and turn `ok` false when a sink that had a source is left unwired
+(`errorKind: badWireCleanupLostConnection`). NOT MEASURED against LabVIEW yet; on a class member,
+read the method cold. `docs/class-method-tooling.md` "Clearing broken wires".
 
 **THE PYLABVIEW FALLBACK IS NOT AN ANSWER FOR THIS, and it fails LOUDLY only on the second look.**
 `pylv_apply {"op":"retarget"}` reaches a nested node — it edits link records and never walks a
@@ -2887,7 +2872,7 @@ literally it argued away 600 usable palette VIs.
 | How do I wire a USER EVENT's refnum onto the DYNAMIC EVENT terminal? | `docs/labview-vit-templates.md` §5a, `docs/vi-server-reference.md` | `lvai_wire_dynamic_events` — author the refnum into the structure as an ordinary TUNNEL first, so AIXML keeps the net |
 | How does the handler READ the user event's PAYLOAD? | `scripts/aixml-skeletons/user-event-two-loops.md`, `experiments/pylabview/event-data-fields/` (source tree only) | `lvai_set_event_data_fields` — third call of the route; author a labelled placeholder constant into a PRIM input first, and field index 4 is the first payload item |
 | How do I give a VI an icon? | `docs/vi-server-reference.md` | `lvai_set_vi_icon` |
-| How do I give a CLASS or LIBRARY an icon, push it onto the members, or check icons by read-back? | `docs/class-icons.md` | `lvai_set_owner_icon` (project closed; saves each member, codes per member), `lvai_read_icons` (pixel compare; LabVIEW writes no PNG into a missing folder or past MAX_PATH and answers 0), `lvai_set_vi_icon keepOwnLayer` (template only, no flattening; unmeasured) |
+| How do I give a CLASS or LIBRARY an icon, push it onto the members, or check icons by read-back? | `docs/class-icons.md` | `lvai_set_owner_icon` (project closed; saves each member, codes per member), `lvai_read_icons` (pixel compare; LabVIEW writes no PNG into a missing folder or past MAX_PATH and answers 0), `lvai_set_vi_icon keepOwnLayer` (template only, no flattening; measured on a pixel own layer) |
 | How do I set a CLASS's or LIBRARY's DESCRIPTION? | `docs/lvclass-creation.md` §10a | `lvai_set_class_description` - project OPEN and ACTIVE; text outside CP1252 is refused before LabVIEW (it would be stored as `?` in silence), verified from the saved `NI.Lib.Description` |
 | How do I put class or library members into a VIRTUAL FOLDER, or create one? | `docs/lvclass-creation.md` §10b | `lvai_move_to_folder` - project OPEN and ACTIVE; only the owner file changes (no file move, no relink); non-members, accessors inside a property definition and nested paths are refused from the file; verified from the saved owner |
 | How do I change VI DESCRIPTIONS without regenerating the VIs (icons kept)? | `docs/lvclass-creation.md` §10c | `lvai_set_vi_descriptions` - many VIs in one call, project CLOSED, `VI Description` + `Save.Instrument`; CP1252 refused up front, verified per VI from the saved STRG resource and an unchanged icon |

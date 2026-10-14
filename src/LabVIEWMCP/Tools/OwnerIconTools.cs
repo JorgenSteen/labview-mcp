@@ -7,7 +7,6 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LabVIEWMcp.Grpc;
 using LabVIEWMcp.Infra;
@@ -40,9 +39,7 @@ namespace LabVIEWMcp.Tools;
 /// and every PNG is checked for existence afterwards rather than trusting the code.
 ///
 /// THE HELPERS ARE THE MEASURED ONES, carried over from a pilot project's icon route and renamed;
-/// each <c>scripts\lvai_icon_*.xml</c> says in its description which run measured it. The one
-/// exception is <c>lvai_icon_apply_and_save_n_file.xml</c>, the list-file twin used above
-/// <see cref="ListFileThreshold"/> members, which is built offline and UNMEASURED.
+/// each <c>scripts\lvai_icon_*.xml</c> says in its description which run measured it.
 /// </summary>
 [McpServerToolType]
 internal sealed class OwnerIconTools(LvaiConnection connection)
@@ -50,18 +47,11 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
     internal const string CarrierHelper = "lvai_icon_carrier";
     internal const string SetClassIconHelper = "lvai_icon_set_class_icon";
     internal const string SetLibraryIconHelper = "lvai_icon_set_library_icon";
-    internal const string ApplyHelper = "lvai_icon_apply_and_save_n";
     internal const string ApplyFileHelper = "lvai_icon_apply_and_save_n_file";
     internal const string GetClassIconHelper = "lvai_icon_get_class_icon";
     internal const string GetLibraryIconHelper = "lvai_icon_get_library_icon";
     internal const string ReadViIconsHelper = "lvai_icon_get_vi_icons_n_file";
 
-    /// <summary>
-    /// Members above which the apply list goes through a FILE. The runner cannot set an array, so a
-    /// list crosses as one string, and from about 100 paths that string and its answer pass the
-    /// size limit - measured in a pilot project at 150 VIs.
-    /// </summary>
-    internal const int ListFileThreshold = 100;
 
     /// <summary>VIs per read-back run. The file twin was measured at 146 in one call; 100 stays under that.</summary>
     internal const int ReadBatch = 100;
@@ -180,7 +170,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
             };
             if (applyToMembers)
             {
-                needed.Add(members.Count > ListFileThreshold ? ApplyFileHelper : ApplyHelper);
+                needed.Add(ApplyFileHelper);
                 needed.Add(ReadViIconsHelper);
             }
             if (MissingHelpers(scripts, needed) is { } missingHelpers) return missingHelpers;
@@ -606,7 +596,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
 
         var needed = new List<string>
         {
-            ApplyHelper, ReadViIconsHelper, CarrierHelper,
+            ApplyFileHelper, ReadViIconsHelper, CarrierHelper,
             owner.Kind == IconOwners.Class ? GetClassIconHelper : GetLibraryIconHelper,
         };
         var scripts = StatusTools.ScriptsDirectory();
@@ -719,29 +709,21 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         var inputs = new JsonObject { ["class path"] = owner.Path };
         if (owner.Kind == IconOwners.Library) inputs["is library"] = "true";
 
-        string? listFile = null;
-        string helper;
-        if (vis.Count > ListFileThreshold)
-        {
-            listFile = WriteListFile("vi list", JoinForApply(vis));
-            inputs["vi list"] = listFile;
-            helper = helpers[ApplyFileHelper];
-        }
-        else
-        {
-            inputs["vi paths"] = JoinForApply(vis);
-            helper = helpers[ApplyHelper];
-        }
+        // THE LIST GOES THROUGH A FILE whatever its length: the runner cannot set an array, so a
+        // list would cross as one string, and from about 100 paths that string and its answer
+        // pass the size limit - measured in a pilot project at 150 VIs.
+        var listFile = WriteListFile("vi list", JoinForApply(vis));
+        inputs["vi list"] = listFile;
 
         try
         {
-            var (values, answer) = await RunAsync(helper, inputs, timeoutSeconds, ct);
+            var (values, answer) = await RunAsync(helpers[ApplyFileHelper], inputs, timeoutSeconds, ct);
             steps.Add(Step("applyIconToVIs", answer));
             return InterpretApply(values, vis.Count);
         }
         finally
         {
-            if (listFile is not null) TryDeleteFolder(Path.GetDirectoryName(listFile)!);
+            TryDeleteFolder(Path.GetDirectoryName(listFile)!);
         }
     }
 
@@ -924,19 +906,11 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         }
     }
 
-    internal static int? ErrorCode(JsonObject? values, string name)
-    {
-        if ((values?[name] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml) return null;
-        var match = Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>");
-        return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
-    }
+    internal static int? ErrorCode(JsonObject? values, string name) =>
+        HousekeepingHelpers.ClusterCode((values?[name] as JsonObject)?["xml"]?.GetValue<string>());
 
-    private static string? ErrorSource(JsonObject? values, string name)
-    {
-        if ((values?[name] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml) return null;
-        var match = Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline);
-        return match.Success && match.Groups[1].Value.Length > 0 ? match.Groups[1].Value : null;
-    }
+    private static string? ErrorSource(JsonObject? values, string name) =>
+        HousekeepingHelpers.ClusterSource((values?[name] as JsonObject)?["xml"]?.GetValue<string>());
 
     internal static string? Scalar(JsonObject? values, string name) =>
         (values?[name] as JsonObject)?["value"]?.GetValue<string>();
@@ -1105,7 +1079,7 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
     {
         var full = Path.GetFullPath(pngPath);
         if (!File.Exists(full)) return Json.Error("pngMissing", $"No PNG at '{full}'.", new { pngPath = full });
-        if (PngPixels.Size(full) is not { } size)
+        if (DiagramSize.PngSize(full) is not { } size)
             return Json.Error("notAPng", $"'{full}' is not a PNG. The route was measured with 32x32 PNGs only.");
         if (size != (32, 32))
             return Json.Error("pngNot32x32",
@@ -1226,34 +1200,8 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         var vi = Path.Combine(folder, name + ".vi");
         if (!force && !HelperCache.NeedsRebuild(aixml, vi)) return (vi, false, null);
 
-        var validation = await connection.InvokeAsync((c, t) =>
-            c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (validation.ErrorCode != 0)
-            return (vi, false, Json.Error("helperAixmlInvalid",
-                $"The helper AIXML at '{aixml}' does not validate: {validation.ErrorMessage}",
-                new { aiXmlPath = aixml, errorCode = validation.ErrorCode }));
-
-        var generation = await connection.InvokeAsync((c, t) =>
-            c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
-            {
-                AiXMLFilePath = aixml,
-                ViPath = vi,
-                OpenVI = false,
-            }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        if (generation.ErrorCode == 0 && File.Exists(vi)) return (vi, true, null);
-
-        return (vi, false, Json.Error("helperGenerationFailed",
-            $"Could not generate the helper VI at '{vi}': {generation.ErrorMessage}",
-            new
-            {
-                helperViPath = vi,
-                errorCode = generation.ErrorCode,
-                hint = generation.ErrorCode == 1051
-                    ? "Error 1051: a VI of that name is already in LabVIEW's memory, and a failed generation " +
-                      "keeps the name occupied for the session. Pass another helperDirectory, or restart LabVIEW."
-                    : null,
-            }));
+        return await new HousekeepingHelpers(connection).GenerateAsync(aixml, vi, timeoutSeconds, ct)
+            is { } failure ? (vi, false, failure) : (vi, true, null);
     }
 
     /// <summary>

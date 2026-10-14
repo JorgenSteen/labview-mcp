@@ -324,39 +324,28 @@ internal static class LabViewCom
         _ => LocalServer,
     };
 
-    /// <summary>Release year and bitness of every running LabVIEW whose path names a release.</summary>
+    /// <summary>
+    /// Release year and bitness of every running LabVIEW whose path names a release - the bitness
+    /// off the exe's PE header, the path through the machine's process list, which falls back to
+    /// QueryFullProcessImageName where a process refuses its main module.
+    /// </summary>
     private static List<(int Release, int Bits)> RunningLabViews()
     {
         var found = new List<(int, int)>();
-        foreach (var process in Process.GetProcessesByName("LabVIEW"))
+        foreach (var process in Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess))
         {
-            using (process)
-            {
-                try
-                {
-                    if (!OperatingSystem.IsWindows()) continue;
-                    var exe = process.MainModule?.FileName;
-                    var folder = Path.GetFileName(Path.GetDirectoryName(exe ?? "") ?? "");
-                    if (!global::LabVIEWMcp.Grpc.LabViewLocator.TryParseRelease(folder, out var release)) continue;
-                    var bits = !Environment.Is64BitOperatingSystem
-                        ? 32
-                        : IsWow64Process(process.Handle, out var wow64) ? (wow64 ? 32 : 64) : 0;
-                    if (bits != 0) found.Add((release, bits));
-                }
-                catch (Exception e) when (e is System.ComponentModel.Win32Exception
-                                              or InvalidOperationException) { }
-            }
+            if (process.Path is not { } exe
+                || !global::LabVIEWMcp.Grpc.LabViewLocator.TryParseRelease(
+                    Path.GetFileName(Path.GetDirectoryName(exe) ?? ""), out var release))
+                continue;
+            if (global::LabVIEWMcp.Grpc.LabViewLocator.ReadIs32Bit(exe) is { } is32)
+                found.Add((release, is32 ? 32 : 64));
         }
         return found;
     }
 
-    private static HashSet<int> LabViewPids()
-    {
-        var pids = new HashSet<int>();
-        foreach (var process in Process.GetProcessesByName("LabVIEW"))
-            using (process) pids.Add(process.Id);
-        return pids;
-    }
+    private static HashSet<int> LabViewPids() =>
+        [.. Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess).Select(p => p.Id)];
 
     /// <summary>CoCreateInstance for IDispatch with an explicit server context.</summary>
     private static object? Create(Guid clsid, int? bits)
@@ -375,10 +364,6 @@ internal static class LabViewCom
     [DllImport("ole32.dll")]
     private static extern int CoCreateInstance(ref Guid clsid, IntPtr outer, uint context, ref Guid iid,
                                                [MarshalAs(UnmanagedType.IUnknown)] out object app);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool IsWow64Process(IntPtr process, [MarshalAs(UnmanagedType.Bool)] out bool wow64);
 
     private static void Release(object comObject)
     {

@@ -48,25 +48,18 @@ public sealed class BadWireCleanupTests
 
     // ------------------------------------------------------------------ the helper's line format
 
-    [Fact]
-    public void ATwoEndedWireReadsSourceArrowSink() =>
-        Assert.Equal("x+y @ Add -> x @ Multiply",
-                     BadWireCleanup.FormatWireLine("x+y @ Add; -> x @ Multiply; "));
-
-    [Fact]
-    public void ABranchedWireListsEverySinkAndEverySource() =>
-        Assert.Equal("value @ ControlTerminal, value @ StringConstant -> x @ Multiply, y @ Subtract",
-                     BadWireCleanup.FormatWireLine(
-                         "value @ ControlTerminal; value @ StringConstant; -> x @ Multiply; y @ Subtract; "));
-
-    /// <summary>A loose fragment has no source end; it is the shape that gates nothing.</summary>
-    [Fact]
-    public void AWireWithNoSourceIsNamedAsSuch() =>
-        Assert.Equal("(no source) -> x @ Multiply", BadWireCleanup.FormatWireLine("-> x @ Multiply; "));
-
-    [Fact]
-    public void AWireWithNoSinkIsNamedAsSuch() =>
-        Assert.Equal("x+y @ Add -> (no sink)", BadWireCleanup.FormatWireLine("x+y @ Add; -> "));
+    /// <summary>
+    /// Source ends, then sink ends, each list joined with ", ". A loose fragment has no source end;
+    /// it is the shape that gates nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("x+y @ Add; -> x @ Multiply; ", "x+y @ Add -> x @ Multiply")]
+    [InlineData("value @ ControlTerminal; value @ StringConstant; -> x @ Multiply; y @ Subtract; ",
+                "value @ ControlTerminal, value @ StringConstant -> x @ Multiply, y @ Subtract")]
+    [InlineData("-> x @ Multiply; ", "(no source) -> x @ Multiply")]
+    [InlineData("x+y @ Add; -> ", "x+y @ Add -> (no sink)")]
+    public void AWireLineReadsSourcesArrowSinks(string helperLine, string expected) =>
+        Assert.Equal(expected, BadWireCleanup.FormatWireLine(helperLine));
 
     /// <summary>The empty-array template must not read as one broken wire with an empty name.</summary>
     [Fact]

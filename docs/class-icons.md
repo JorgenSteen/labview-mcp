@@ -18,8 +18,7 @@ sets it with `{LV.LVClassLibrary}` (or `{LV.Library}`) `Set Icon`, which takes *
 file. So the PNG goes through a **carrier VI** first: `Set VI Icon from File` on an empty VI held in
 memory, `VI Icon.Get as Image Data`, then `Set Icon` on the owner and `Save`. The carrier is never
 saved. The spellings come from NI's own code (`LIBUIP_SetLibIconAndApplyToVIs.vi`,
-`vi.lib\LabVIEW Icon API\`); `{LV.Library}` is missing from `lvai_vi_server_reference`, and
-ValidateAIXML rejecting `Set Iconx` and `Library.Openx` as "Invalid method" is what confirmed them.
+`vi.lib\LabVIEW Icon API\`), and ValidateAIXML rejecting `Set Iconx` and `Library.Openx` as "Invalid method" is what confirmed them.
 
 The owner's icon then reaches the members through `ApplyIconToVIs`. It lays the owner's icon over
 each member's own icon, and **white is transparent**, so a member keeps its own glyph wherever the
@@ -55,8 +54,8 @@ Two more traps in the list format, both measured:
 
 - **The runner cannot set an array**, so a list crosses as one `;`-separated string, and from about
   100 paths the string and its answer pass the size limit. The read-back always goes through the
-  **list-file** helper, 100 VIs per call. The apply helper uses a list file above 100 members; that
-  twin is the one unmeasured helper.
+  **list-file** helper, 100 VIs per call. The apply helper takes its member list through a file
+  too, whatever its length (since 2026-10-14; measured that day on a class and a plain library).
 - **The apply helper splits with Spreadsheet String To Array**, so a trailing `;` is an empty last
   path and Error 7. The read-back helper loops on Match Pattern and expects one `;` per entry. The
   two joins are pinned by a unit test. A path that itself contains `;` is refused
@@ -69,7 +68,8 @@ Two more traps in the list format, both measured:
 nothing of it in memory, four times over two sessions. Run as the **first call after a LabVIEW
 restart**, the same class, files and helper answered 0. The class was probably held by an earlier
 `LVClass.Open` in the same instance; that is supported, not proven. The tools put this in `hint`.
-They never restart LabVIEW themselves. A restart needs the user's go-ahead.
+They never restart LabVIEW themselves; `lvai_restart_labview` does, under the go-ahead rules of
+`labview-restart.md` §2.
 
 **Save version.** The helpers run with the project closed, so they save in the version of the
 LabVIEW that runs them, and a project kept in an older version is upgraded file by file. A
@@ -210,5 +210,4 @@ and run through `lvai_run_and_read_typed`, project closed:
 
 Still open:
 
-1. The apply list-file twin (`lvai_icon_apply_and_save_n_file.xml`), used above 100 members.
-2. `keepOwnLayer` on an own layer of editable text made in the icon editor.
+1. `keepOwnLayer` on an own layer of editable text made in the icon editor.

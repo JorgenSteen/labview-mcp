@@ -40,13 +40,26 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
         if (!HelperCache.NeedsRebuild(aixml, helperVi)) return (helperVi, false, null);
         Directory.CreateDirectory(Path.GetDirectoryName(helperVi)!);
 
+        return await GenerateAsync(aixml, helperVi, timeoutSeconds, ct) is { } failure
+            ? (null, false, failure)
+            : (helperVi, true, null);
+    }
+
+    /// <summary>
+    /// Validate a helper's AIXML, then convert it to <paramref name="helperVi"/>. Null on success,
+    /// otherwise the error answer, which names the stage (helperAixmlInvalid or
+    /// helperGenerationFailed) and LabVIEW's error code.
+    /// </summary>
+    internal async Task<string?> GenerateAsync(string aixml, string helperVi, int timeoutSeconds,
+                                               CancellationToken ct)
+    {
         var validation = await connection.InvokeAsync((c, t) =>
             c.ValidateAIXMLAsync(new ValidateAIXMLRequest { AiXMLFilePath = aixml },
                 deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
         if (validation.ErrorCode != 0)
-            return (null, false, Json.Error("helperAixmlInvalid",
+            return Json.Error("helperAixmlInvalid",
                 $"The helper AIXML at '{aixml}' does not validate: {validation.ErrorMessage}",
-                new { aiXmlPath = aixml, errorCode = validation.ErrorCode }));
+                new { aiXmlPath = aixml, errorCode = validation.ErrorCode });
 
         var generation = await connection.InvokeAsync((c, t) =>
             c.ConvertAIXMLToVIAsync(new ConvertAIXMLToVIRequest
@@ -55,12 +68,20 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
                 ViPath = helperVi,
                 OpenVI = false,
             }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
+        if (generation.ErrorCode == 0 && File.Exists(helperVi)) return null;
 
-        return generation.ErrorCode == 0 && File.Exists(helperVi)
-            ? (helperVi, true, null)
-            : (null, false, Json.Error("helperGenerationFailed",
-                $"Could not generate the helper VI at '{helperVi}': {generation.ErrorMessage}",
-                new { helperViPath = helperVi, errorCode = generation.ErrorCode }));
+        return Json.Error("helperGenerationFailed",
+            $"Could not generate the helper VI at '{helperVi}': {generation.ErrorMessage}",
+            new
+            {
+                helperViPath = helperVi,
+                errorCode = generation.ErrorCode,
+                hint = generation.ErrorCode == 1051
+                    ? "Error 1051: a VI of that name is already in LabVIEW's memory, and a failed generation " +
+                      "keeps the name occupied for the session. Restart LabVIEW, or pass another " +
+                      "helperDirectory where the tool takes one."
+                    : null,
+            });
     }
 
     /// <summary>
@@ -136,12 +157,20 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
 
     /// <summary>The code of an error-cluster indicator, or null when the helper did not report it.</summary>
     internal static int? Code(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
-        Xml(values, indicator) is { } xml
+        ClusterCode(Xml(values, indicator));
+
+    internal static string? Source(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
+        ClusterSource(Xml(values, indicator));
+
+    /// <summary>The code of an error cluster as the run helper flattens it to XML.</summary>
+    internal static int? ClusterCode(string? xml) =>
+        xml is not null
         && Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>") is { Success: true } m
         && int.TryParse(m.Groups[1].Value, out var code) ? code : null;
 
-    internal static string? Source(IReadOnlyList<LvValuesXml.Value> values, string indicator) =>
-        Xml(values, indicator) is { } xml
+    /// <summary>The source of a flattened error cluster, entities decoded; null when empty.</summary>
+    internal static string? ClusterSource(string? xml) =>
+        xml is not null
         && Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline)
             is { Success: true } m && m.Groups[1].Value.Length > 0
             ? System.Net.WebUtility.HtmlDecode(m.Groups[1].Value) : null;

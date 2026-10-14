@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using LabVIEWMcp.Infra;
 using LabVIEWMcp.Tests.Infra;
 using LabVIEWMcp.Tools;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 
 namespace LabVIEWMcp.Tests.Tools;
@@ -18,7 +19,8 @@ public class ClassMembershipToolsTests
 {
     private sealed class Tree : IDisposable
     {
-        public string Root { get; } = Directory.CreateTempSubdirectory("add-to-class").FullName;
+        private readonly TempTree _tree = new("add-to-class");
+        public string Root => _tree.Root;
         public string Project { get; }
         public string Class { get; }
         public string Loose { get; }
@@ -28,11 +30,8 @@ public class ClassMembershipToolsTests
 
         public Tree()
         {
-            Project = Path.Combine(Root, "Shop.lvproj");
-            File.WriteAllText(Project, "<Project/>");
-            Directory.CreateDirectory(Path.Combine(Root, "Customer"));
-            Class = Path.Combine(Root, "Customer", "Customer.lvclass");
-            File.Copy(OwnerHousekeepingTests.Fixture("Customer.lvclass"), Class);
+            Project = _tree.Write("Shop.lvproj", "<Project/>");
+            Class = Copy("Customer.lvclass", Path.Combine("Customer", "Customer.lvclass"));
             Loose = Copy("Launcher.vi", "Launcher.vi");
             // A loose typedef-named file: Launcher's bytes (no LIBN) under the name a caller links to.
             LooseCtl = Copy("Launcher.vi", Path.Combine("TypeDefs", "Drink Type.ctl"));
@@ -40,18 +39,10 @@ public class ClassMembershipToolsTests
             Caller = Copy("Write Drink Type.vi", Path.Combine("Callers", "Write Drink Type.vi"));
         }
 
-        private string Copy(string fixture, string relative)
-        {
-            var target = Path.Combine(Root, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(OwnerHousekeepingTests.Fixture(fixture), target);
-            return target;
-        }
+        private string Copy(string fixture, string relative) =>
+            _tree.Copy(OwnerHousekeepingTests.Fixture(fixture), relative);
 
-        public void Dispose()
-        {
-            try { Directory.Delete(Root, recursive: true); } catch (IOException) { }
-        }
+        public void Dispose() => _tree.Dispose();
     }
 
     private static string Paths(params string[] paths) => System.Text.Json.JsonSerializer.Serialize(paths);

@@ -2,8 +2,9 @@
 
 This folder exists only on the fork's `main`, which is the user's own version: upstream
 (Zuehlke/labview-mcp) plus every feature branch merged in. It is **never part of a pull request**.
-The PR branches (`docs/af-lifecycle-overrides`, `feat/class-icons`, `feat/af-overrides`,
-`feat/restart-guards`) stay as they are and do not contain it.
+The feature and PR branches (`docs/af-lifecycle-overrides`, `feat/class-icons`, `feat/af-overrides`,
+`feat/restart-guards`, `feat/class-housekeeping-tools`, `fix/pre-push-gate`) stay as they are and do
+not contain it.
 
 `Update-LocalPlugin.ps1` builds an installable plugin folder from `main` the same way
 `.github/workflows/release.yml` assembles its staging tree (Release build + embedded-docs check,

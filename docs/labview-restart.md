@@ -133,12 +133,10 @@ under, so that a refused validate or convert cannot burn a real name: `LVMCP Val
 `LVMCP TD Carrier ` (`TypedefCreateTools`). The other `LVMCP …` names in the code (`Stub`, the
 `ClsW`/`ClsR`/`Mth…` sockets, `Flat`) are saved files and are not scratch. The user asked for the
 unsaved scratch VIs to be closed without saving before the IDE close. **There is no route that does
-it, and the tool says so instead.** Measured 2026-09-26 (`docs/scratch-vis-in-memory.md` §1):
-`Open VI Reference` by name answers `Error 1004` for them in the helpers' instance, the IDE's main
-instance and the active project's, and the converter's `1051` check does not see them either. So
-neither `lvai_close_vi` nor `scripts/lvai_close_own_panel.xml` can reach them, and generating any
-new helper would itself leave another `LVMCP Validate` VI. Closing their WINDOWS raises LabVIEW's
-save prompt (§2a), and a dialog is never answered here. So they keep blocking as `unsaved`. The
+it, and the tool says so instead:** no VI Server instance reaches them by name
+(`docs/scratch-vis-in-memory.md` §1), generating any new helper would itself leave another
+`LVMCP Validate` VI, and closing their WINDOWS raises LabVIEW's save prompt (§2a), which is never
+answered here. So they keep blocking as `unsaved`. The
 answer's `guards.scratchVis` lists them with `closedByThisTool: false` and the reason. With the
 user's go-ahead the close raises the prompt, and "Don't Save - All" is safe for these.
 
@@ -268,47 +266,25 @@ Every real close or restart in this list needs the user's go-ahead, or a LabVIEW
 that this build started. Use a throwaway project copy and the fork's own build, never the installed
 plugin at the same time.
 
-1. **State, nothing open.** `lvai_labview_state`: one LabVIEW, `possibleDialogs` empty, `windowCounts`
-   only frame and system kinds. With `includeHiddenWindows`, check that every hidden window of the
-   station is classified: each `hidden-unrecognised` entry that is not a dialog is a class for the
-   list in section 4. Until it is added, every restart there needs a go-ahead.
-2. **A dialog.** Raise a save prompt by hand. If it is visible: `lvai_labview_state` lists it under
-   `possibleDialogs`, and `lvai_restart_labview` answers `stoppedBy: dialog` even with a go-ahead.
-   If it reports itself invisible (the Error list case): it is listed under `hiddenUnrecognised`.
-3. **An unrecognised hidden window, overridden.** On a LabVIEW with a `hidden-unrecognised` window
-   (from step 1, or the invisible Error list): without a go-ahead, `stoppedBy: hiddenWindows` naming
-   title and class, and LabVIEW stays. With the user's go-ahead: the close goes ahead and
-   `overriddenHiddenWindows` lists each window with its class. Add the classes that turn out to be
-   system windows to `SystemClassPrefixes`.
-4. **An unsaved `LVMCP Validate` VI in memory.** Make one by validating a document the generator
-   refuses (`lvai_validate_aixml` with an unsupported subVI), then check that `lvai_labview_state`
-   lists `LVMCP Validate….vi … *` under `unsaved`, and that a user VI is open and unsaved beside it.
-   Expected without a go-ahead: `stoppedBy: unsaved`, `guards.scratchVis` listing only the LVMCP
-   windows with `closedByThisTool: false`, and both VIs untouched. Re-confirm §1 on this build:
-   `Open VI Reference` by that name in the helpers' and the active project's instance answers 1004.
-   If it does NOT, a close-without-save route exists, so record it and wire it in before the PR. With
-   the user's go-ahead, the close raises "Save changes? (Exit)": the user's VI must be listed beside
-   the LVMCP ones, and the user answers it.
-5. **Each refusal.** Two LabVIEW versions running → `processes`. A busy LabVIEW (a long helper run) →
-   `busy` with two samples. A `*` panel → `unsaved`. An `LVAutoSave` file → `autoSave`. The service
-   blocked → `service`. Another project active → `activeProject`. A modified VI with no window
-   (`lvai_vis_in_memory` lists it) → `memory`. A user's LabVIEW with a VI open → `ownership`. In
-   each case LabVIEW stays up with the same pid.
-6. **`lvai_vis_in_memory`** on a fresh LabVIEW: about 400 names, all `service`/`labview`, none
-   modified. Then a modified loose VI: one `modified` line.
-7. **Empty LabVIEW restart** (no go-ahead): `ok`, `whose: empty`, a new pid, start time after the
-   close, a new port, the same `NI.NigelLocalService` pid, `LVAutoSave` 0 → 0, about 4 s close and
-   32–40 s start.
-8. **Server-started LabVIEW close:** `lvai_ensure_labview` from no LabVIEW, open a project with
-   `projectPath`, then `lvai_restart_labview mode close projectPath=…`: the project is saved and
-   closed first, LabVIEW closes, and there is no go-ahead.
-9. **A close that does not finish:** an unsaved VI the user agrees to leave, with a go-ahead:
-   `closeDidNotFinish`, `closeMainWindow: true`, the save prompt named in `dialogsNow`. The user
-   answers it.
-10. **Nigel:** LabVIEW up for more than 90 s with no chat and the service down. `lvai_ensure_labview`
-   reports `nigelChat.state: running`, the chat window appears, and the next `lvai_status` answers.
-   Call it again: there is no second start.
-11. **Timeout with a dialog:** a call that times out while a dialog is up carries `possibleDialogs`.
+The checklist was run on 2026-10-10. The results table below names each item by number: 1 the state
+with nothing open, 2 a dialog, 3 an unrecognised hidden window overridden, 4 an unsaved
+`LVMCP Validate` VI, 5 each refusal, 6 `lvai_vis_in_memory`, 7 an empty restart, 8 a close of a
+LabVIEW this server started, 9 a close that does not finish, 10 the Nigel chat start, 11 a timeout
+with a dialog. What no run has covered yet, and how to run it:
+
+- **3, an unrecognised hidden window, overridden.** On a LabVIEW with a `hidden-unrecognised`
+  window: without a go-ahead, `stoppedBy: hiddenWindows` naming title and class, and LabVIEW stays.
+  With the user's go-ahead the close goes ahead and `overriddenHiddenWindows` lists each window with
+  its class. Add the classes that turn out to be system windows to `SystemClassPrefixes`.
+- **5, the `processes`, `service` and `memory` refusals.** Two LabVIEW versions running ->
+  `processes`. The service blocked -> `service`. A modified VI with no window (`lvai_vis_in_memory`
+  lists it) -> `memory`. In each case LabVIEW stays up with the same pid.
+- **6, the modified half.** A modified loose VI gives one `modified` line.
+- **10, the Nigel chat start.** LabVIEW up for more than 90 s with no chat and the service down:
+  `lvai_ensure_labview` reports `nigelChat.state: running`, the chat window appears, and the next
+  `lvai_status` answers. A second call starts nothing.
+- **11, a timeout with a dialog.** A call that times out while a dialog is up carries
+  `possibleDialogs`.
 
 ### Results, 2026-10-10 (LabVIEW 2026 Q3 32-bit, a throwaway project, the fork's own build)
 
@@ -323,7 +299,7 @@ plugin at the same time.
 | 7 | **pass** after the section 6 fix: a LabVIEW this server did not start, empty, no go-ahead: `whose: empty`, two quiet samples, memory read (419 lines, 96 unreadable, all in packed libraries). The first call answered `stillRunning` at 40 s and the second collected the answer. Close 3.2 s, start 22.1 s (a warm start), 56.2 s in all, new pid and port, the same `NI.NigelLocalService` pid, `LVAutoSave` 0 → 0. |
 | 8 | **pass** after a fix: `lvai_ensure_labview` from no LabVIEW (pid recorded), `lvai_open_file`, then `close` with `projectPath` and no go-ahead: `whose: started by this server`, the project saved and closed, close 3.98 s. Before the fix, the project opened as `Name.lvproj * - Project Explorer` before any edit, and the `unsaved` guard counted the tool's own project (section 3). After a project open, LabVIEW was busy for about 90 s (11–23 CPU s per 30 s). |
 | 9 | **pass**, with a person at the machine, and the go-ahead half of item 4: the user pressed Cancel on the item 2 prompt; `close` WITH the go-ahead answered `stillRunning` at 40.0 s, then `closeDidNotFinish`: `closeMainWindow: true`, 20.01 s waited, `dialogsNow` naming "Save changes? (Exit)", `sideEffects` none. The user saw both the edited VI and `LVMCP Validate.vi` listed, pressed "Don't Save - All", and LabVIEW exited. |
-| 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. So the chat appears to be needed when the local service is down, not after every LabVIEW start. **Not so, measured 2026-10-13:** with the local service stopped by hand, a LabVIEW start brought it back and the service came up with no chat (section 8). |
+| 10 | not run: the service answered without the chat 21–46 s after each of five starts, so the chat start never applied (it correctly waited for 60 s). One sample each way: in the morning `NI.NigelLocalService` was NOT running and the service came up only after the chat was opened; on all five later starts `NI.NigelLocalService` (started by that chat) was still running, and the service came up with the IDE alone. The chat is not needed even then, measured 2026-10-13: with the local service stopped by hand, a LabVIEW start brought it back and the service came up with no chat (section 8). |
 | 11 | not run: no call timed out |
 | C | **pass**, the real use case (14:27): an AF actor left hung by a lost early stop - its `Actor Core` clone and its helper loop at execState 3, the loop's front panel open, Abort not possible. `lvai_labview_state`: no dialog, CPU quiet; `lvai_vis_in_memory`: 499 lines, none modified, 95 `other` (the actor's and AF's VIs). `restart` WITH the go-ahead: `stillRunning` at 40 s, then `restarted`. `CloseMainWindow` closed the LabVIEW with the running actor in **1.72 s, with no prompt**; start 22.2 s, new pid and port, the same `NI.NigelLocalService` pid. |
 

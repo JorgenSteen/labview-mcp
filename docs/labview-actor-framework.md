@@ -29,8 +29,8 @@ and each one cost a session. To build an actor today:
 4. **Typedefs in the private data:** §15 to §18; the `.ctl` goes into the library (§15e).
 5. **Lifecycle overrides, their bodies, helper loops and how they stop:** §19. The override comes from
    NI's provider through `scripts/lvai_create_override.xml`, and its bodies are class members hooked
-   in by VI Server scripting. Two tools that wrap this, `lvai_create_override` and
-   `lvai_af_add_hook`, are **proposed** in a separate PR; they are not in this build.
+   in by VI Server scripting. `lvai_create_override`, `lvai_af_add_hook` and `lvai_af_remove_hook`
+   do this; `af-override-tools.md` has their shapes, panes and refusals.
 6. **Launching and checking:** §9's launcher, and its note on launchers that must stop what they
    launch; §19c for proving that a tree stopped.
 
@@ -1454,34 +1454,22 @@ known of a fifth, `Handle Last Ack Core`.
 AIXML over it stops it being a member. For the lifecycle overrides this does not need solving,
 because it can be avoided:
 
-1. **Create the override** with `scripts/lvai_create_override.xml`, project open and active:
-   `parent method path` = `<LabVIEW>\vi.lib\ActorFramework\Actor\<Pre Launch Init | Actor Core |
-   Stop Core | Handle Error>.vi`, `new vi path` = `<class folder>\<same file name>.vi`, and
-   `vi name in memory` **library-qualified**: `<Lib>.lvlib:<Class>.lvclass:<same file name>.vi`
-   (`<Class>.lvclass:<file>.vi` only for a class in no library; otherwise `open new vi error` and
-   nothing is saved). The provider places `Call Parent Class Method` itself. This matters because
-   Call Parent cannot be authored in AIXML on a plain class either (validate: "Object terminal not
-   found"; convert: Error 1), not only on the interface members CLAUDE.md names. A tool that wraps
-   the script, `lvai_create_override`, is **proposed** in a separate PR; it is not in this build.
+1. **Create the override with `lvai_create_override`** (`af-override-tools.md` §2, which has the
+   helper's inputs and the library-qualified in-memory name it derives). NI's provider places
+   `Call Parent Class Method` itself. This matters because Call Parent cannot be authored in AIXML
+   on a plain class either (validate: "Object terminal not found"; convert: Error 1), not only on the
+   interface members CLAUDE.md names.
 2. **Write the body as its own class member** with `lvai_add_class_method`, like any method. Its
    one class terminal is `<Class> in`, or `<Class> in`/`<Class> out` when it has to hand a modified
    object on.
 3. **Drop the body into the override's diagram by VI Server scripting, and never convert the
-   override again.** `New VI Object` with a `ref{LV.Node}` class and the body's path places the
-   node; `Connect Wire` wires it, matching terminals by NAME. A tool for these shapes,
-   `lvai_af_add_hook`, is **proposed** in the same separate PR.
-   - **Branch:** wire the override's panel terminal `<Class> in` to the body's `<Class> in`. The
-     body runs beside Call Parent. On `Actor Core` this is where a helper loop goes.
-   - **In series, before Call Parent:** `{LV.Wire}` `Delete` on the wire from the panel terminal to
-     Call Parent, then `Connect Wire` panel → body in and body out → Call Parent, for the class wire
-     and optionally the error wire. Use this when the body stores something in the object that Call
+   override again.** `lvai_af_add_hook` does it: it places the node and wires it by terminal NAME,
+   in the four shapes and with the measurements of `af-override-tools.md` §3a.
+   - **Branch** beside Call Parent: on `Actor Core` this is where a helper loop goes.
+   - **In series, before Call Parent:** for a body that stores something in the object that Call
      Parent must carry. Not for creating references on `Actor Core`: see §19c.
-   - **In series, after Call Parent:** the same insertion with the roles swapped: Call Parent's
-     `<Class> out` and `error out` into the body, the body's outputs into the override's indicators.
-     Measured 2026-10-09 on `Pre Launch Init` with both wires: the body's error 5000 came out of the
-     Launch call. This is the shape for a body whose failure must fail the launch (§19c). Measured
-     again 2026-10-10 on `Handle Error` (class and `error out`) and on `Stop Core` (class only; its
-     pane has no error terminals): placed, `execState 1` cold, and both bodies ran at the stop.
+   - **In series, after Call Parent:** the shape for a body whose failure must fail the launch
+     (§19c); on `Pre Launch Init` the body's error 5000 came out of the Launch call.
    - **A third wire after Call Parent** (`Handle Error`'s `stop actor?`): the same cut-and-reconnect
      on the `stop actor?` and `error out` terminals places a second body after the first, so
      the override reads Call Parent → class/error body → `stop actor?`/error body → indicators.
@@ -1490,12 +1478,9 @@ because it can be avoided:
 
 The scripting quirks that cost the most, each measured on this LabVIEW:
 
-- Call Parent is a `CallParentNode`: find it over `All Objects[]` by its `Actor out` terminal.
-  > Corrected 2026-10-10: this said Call Parent is **not** in the diagram's `SubVIs[]`. On this
-  > LabVIEW it is, listed under the PARENT's VI name (e.g. `Actor Framework.lvlib:Actor.lvclass:Actor
-  > Core.vi`), measured with a read-only diagram helper on throwaway overrides. So code that matches
-  > hook nodes over `SubVIs[]` by name must leave that entry out, or a hook named like the override
-  > selects Call Parent.
+- Call Parent is a `CallParentNode`: find it over `All Objects[]` by its `Actor out` terminal. It
+  is also in the diagram's `SubVIs[]`, under the PARENT's VI name, so code that matches hook nodes
+  there by name must leave it out (`af-override-tools.md` §3d).
 - `Actor Core`'s `Actor out` is typed `Actor`, on the Call Parent node too, not the child class. A
   body after Call Parent that needs the child type takes the class wire from before Call Parent.
 - Merge Errors by scripting is `New VI Object` with class **`GrowableFunction`**, style **2147**; the

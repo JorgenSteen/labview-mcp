@@ -221,9 +221,6 @@ internal static class LabViewState
     internal static bool IsSystemClass(string className) =>
         SystemClassPrefixes.Any(p => className.StartsWith(p, StringComparison.Ordinal));
 
-    /// <summary>Where LabVIEW keeps its recovery files; Documents may be redirected (OneDrive).</summary>
-    internal static string DefaultAutoSaveDirectory() => AutoSaveRecovery.DefaultDirectory();
-
     public static LabViewSnapshot Take(ILabViewMachine machine, string? autoSaveDirectory = null)
     {
         var labview = machine.Processes(LabViewProcess);
@@ -235,7 +232,7 @@ internal static class LabViewState
             machine.Now, labview,
             machine.Processes(NigelServiceProcess),
             machine.Processes(NigelChatProcess),
-            AutoSave(machine, autoSaveDirectory ?? DefaultAutoSaveDirectory()),
+            AutoSave(machine, autoSaveDirectory ?? AutoSaveRecovery.DefaultDirectory()),
             windows);
     }
 

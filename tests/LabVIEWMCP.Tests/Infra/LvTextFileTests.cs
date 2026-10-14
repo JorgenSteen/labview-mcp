@@ -28,22 +28,15 @@ namespace LabVIEWMcp.Tests.Infra;
 public sealed class LvTextFileTests : IDisposable
 {
     private static readonly byte[] Bom = [0xEF, 0xBB, 0xBF];
-    private readonly string _root = Directory.CreateTempSubdirectory("lvtextfile").FullName;
+    private readonly TempTree _tree = new("lvtextfile");
+    private string _root => _tree.Root;
 
-    public void Dispose()
-    {
-        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
-    }
+    public void Dispose() => _tree.Dispose();
 
     private static string Fixture(string name) =>
         RepoTree.Path("tests", "LabVIEWMCP.Tests", "Fixtures", "project-files", name);
 
-    private string Copy(string fixture, string? asName = null)
-    {
-        var target = Path.Combine(_root, asName ?? Path.GetFileName(fixture));
-        File.Copy(fixture, target, overwrite: true);
-        return target;
-    }
+    private string Copy(string fixture, string? asName = null) => _tree.Copy(fixture, asName);
 
     private static bool HasBom(byte[] b) => b.Length >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF;
 

@@ -5785,7 +5785,7 @@ class	property	access	source
 {LV.Tunnel}	Position:Top	read
 {LV.Tunnel}	Selected	read
 {LV.Tunnel}	Total Bounds Rect	read
-{LV.Tunnel}	Use Default if Unwired	read/write
+{LV.Tunnel}	Use Default if Unwired	read/write	lvserver.rsc string; read/write is the IDE's right-click setting - AIXML refuses it, the route is scripts/pylv-set-use-default.py
 {LV.TypeCast}	Bounds	read
 {LV.TypeCast}	Bounds:Area Height	read
 {LV.TypeCast}	Bounds:Area Width	read

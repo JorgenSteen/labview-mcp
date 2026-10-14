@@ -5,6 +5,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using LabVIEWMcp.Infra;
+using LabVIEWMcp.Tests.Support;
 using Xunit;
 using Rgba = LabVIEWMcp.Infra.PngPixels.Rgba;
 
@@ -18,19 +19,11 @@ namespace LabVIEWMcp.Tests.Infra;
 /// </summary>
 public sealed class PngPixelsTests : IDisposable
 {
-    private readonly string _dir = Directory.CreateTempSubdirectory("lvai-png-tests").FullName;
+    private readonly TempTree _tree = new("lvai-png-tests");
 
-    public void Dispose()
-    {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
-    }
+    public void Dispose() => _tree.Dispose();
 
-    private string Save(string name, byte[] png)
-    {
-        var path = Path.Combine(_dir, name);
-        File.WriteAllBytes(path, png);
-        return path;
-    }
+    private string Save(string name, byte[] png) => _tree.Write(name, png);
 
     private static readonly Rgba White = new(0xFF, 0xFF, 0xFF, 0xFF);
     private static readonly Rgba Blue = new(0x00, 0x66, 0x99, 0xFF);
@@ -210,8 +203,9 @@ public sealed class PngPixelsTests : IDisposable
     [Fact]
     public void Size_reads_the_header_and_refuses_what_is_not_a_PNG()
     {
-        Assert.Equal((32, 32), PngPixels.Size(Save("ok.png", Truecolour(Icon()))));
-        Assert.Null(PngPixels.Size(Save("no.png", "not a png at all, just text"u8.ToArray())));
+        // the icon tools' size check is DiagramSize.PngSize; pinned here on an icon-shaped file
+        Assert.Equal((32, 32), DiagramSize.PngSize(Save("ok.png", Truecolour(Icon()))));
+        Assert.Null(DiagramSize.PngSize(Save("no.png", "not a png at all, just text"u8.ToArray())));
     }
 
     // ---------------------------------------------------------------- comparing

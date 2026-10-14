@@ -121,6 +121,9 @@ public class ModalDialogClassifierTests
 {
     private const int Pid = 4520;
 
+    /// <summary>An LVAutoSave folder that does not exist, so no recovery file is counted.</summary>
+    private const string NoAutoSave = @"X:\absent";
+
     /// <summary>The measured window list (titles, classes, visibility), with the owner and enabled state.</summary>
     private static FakeLabViewMachine Measured1215(bool frameDisabled = true, bool ownedByFrame = true)
     {
@@ -142,8 +145,7 @@ public class ModalDialogClassifierTests
     [Fact]
     public void The_measured_untitled_modal_dialog_is_a_possible_dialog_and_nothing_else_is()
     {
-        var s = LabViewState.Take(Measured1215(), @"X:
-one");
+        var s = LabViewState.Take(Measured1215(), NoAutoSave);
 
         var dialog = Assert.Single(s.Dialogs);
         Assert.Equal(50, dialog.Window.Handle);
@@ -156,8 +158,7 @@ one");
     [Fact]
     public void Windows_text_services_and_the_NI_RPC_thread_are_system_windows_now()
     {
-        var s = LabViewState.Take(Measured1215(), @"X:
-one");
+        var s = LabViewState.Take(Measured1215(), NoAutoSave);
         Assert.All(s.Windows.Where(w => w.Window.ClassName is "CiceroUIWndFrame" or "NI-RPC Message Thread Class"),
                    w => Assert.Equal(WindowKinds.HiddenSystem, w.Kind));
         // VI Hierarchy is LabVIEW's, but one sighting does not say it is always there: still named.
@@ -167,18 +168,15 @@ one");
     [Fact]
     public void Owned_by_the_frame_is_enough_and_a_disabled_frame_is_enough()
     {
-        Assert.Single(LabViewState.Take(Measured1215(frameDisabled: false), @"X:
-one").Dialogs);
-        var unowned = LabViewState.Take(Measured1215(ownedByFrame: false), @"X:
-one");
+        Assert.Single(LabViewState.Take(Measured1215(frameDisabled: false), NoAutoSave).Dialogs);
+        var unowned = LabViewState.Take(Measured1215(ownedByFrame: false), NoAutoSave);
         Assert.Contains("disabled", Assert.Single(unowned.Dialogs).Reason);
     }
 
     [Fact]
     public void An_untitled_window_neither_owned_by_the_frame_nor_beside_a_disabled_one_stays_untitled()
     {
-        var s = LabViewState.Take(Measured1215(frameDisabled: false, ownedByFrame: false), @"X:
-one");
+        var s = LabViewState.Take(Measured1215(frameDisabled: false, ownedByFrame: false), NoAutoSave);
         Assert.Empty(s.Dialogs);
     }
 
@@ -188,16 +186,14 @@ one");
         var m = Measured1215();
         m.AddWindow(Pid, "LVDChild", "Ask User.vi", true);
         m.AddWindow(Pid, "LVDChild", "Main.vi Front Panel", true, enabled: false);
-        var s = LabViewState.Take(m, @"X:
-one");
+        var s = LabViewState.Take(m, NoAutoSave);
 
         Assert.Contains(s.Dialogs, d => d.Window.Title == "Ask User.vi");
         Assert.DoesNotContain(s.Dialogs, d => d.Window.Title == "Main.vi Front Panel");
 
         var calm = Measured1215(frameDisabled: false, ownedByFrame: false);
         calm.AddWindow(Pid, "LVDChild", "Ask User.vi", true);
-        Assert.Empty(LabViewState.Take(calm, @"X:
-one").Dialogs);
+        Assert.Empty(LabViewState.Take(calm, NoAutoSave).Dialogs);
     }
 
     /// <summary>
@@ -215,8 +211,7 @@ one").Dialogs);
         m.AddWindow(Pid, "LVDChild", "Untitled 7 Block Diagram", true, owner: 61);
         m.AddWindow(Pid, "LVDChild", "LVMCP Validate.vi Front Panel *", false, owner: 61);
         m.AddWindow(Pid, "LVDChild", "LV AI gRPC Service.lvlibp:gRPC Implementations.lvlib:RunService.vi", false, owner: 61);
-        var s = LabViewState.Take(m, @"X:
-one");
+        var s = LabViewState.Take(m, NoAutoSave);
         Assert.Empty(s.Dialogs);
         Assert.Equal(2, s.Of(WindowKinds.Vi).Count());
 
@@ -228,8 +223,7 @@ one");
         h3.AddWindow(Pid, "LVDChild", "Save changes before closing?", false, owner: 61);
         h3.AddWindow(Pid, "LVDChild", "Pilot.lvclass:Pass.vi Front Panel *", true, owner: 61, enabled: false);
         h3.AddWindow(Pid, "LVDChild", "Untitled 8 Front Panel", true, owner: 61, enabled: false);
-        var d = LabViewState.Take(h3, @"X:
-one");
+        var d = LabViewState.Take(h3, NoAutoSave);
         Assert.Equal("Save changes before closing?", Assert.Single(d.Dialogs).Window.Title);
     }
 
@@ -248,15 +242,13 @@ one");
         m.AddProcess(Pid, "LabVIEW");
         m.AddWindow(Pid, "LVFrame", "LabVIEW", true, handle: 61);
         m.AddWindow(Pid, "LVDChild", "", false, owner: 61);
-        Assert.Empty(LabViewState.Take(m, @"X:
-one").Dialogs);
+        Assert.Empty(LabViewState.Take(m, NoAutoSave).Dialogs);
     }
 
     [Fact]
     public async Task The_state_tool_names_it_with_its_reason()
     {
-        var state = await RestartTools.StateAsync(Measured1215(), @"X:
-one", 0, includeHiddenWindows: false, default);
+        var state = await RestartTools.StateAsync(Measured1215(), NoAutoSave, 0, includeHiddenWindows: false, default);
         var d = Assert.Single(state["possibleDialogs"]!.AsArray())!;
         Assert.Equal("", d["title"]!.GetValue<string>());
         Assert.Contains("owned by the LabVIEW frame", d["reason"]!.GetValue<string>());

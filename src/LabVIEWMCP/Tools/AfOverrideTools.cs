@@ -3,7 +3,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using LabVIEWMcp.Grpc;
 using LabVIEWMcp.Infra;
@@ -163,8 +162,8 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
                 ["note"] = ok
                     ? "Created and listed in the class file. Close the project and read it cold with " +
-                      "lvai_exec_state (state 1 expected); put it in the class's override folder by hand " +
-                      "if the project keeps one - no tool moves a member into a virtual folder."
+                      "lvai_exec_state (state 1 expected); put it in the class's override folder with " +
+                      "lvai_move_to_folder if the project keeps one."
                     : "The helper reported no error but the class file does not show a dynamic member at " +
                       "the new path. Treat this as a failure and read `verify`.",
             });
@@ -987,21 +986,9 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
     private async Task<(ViTerminals.Result? Terms, string? Error)> TerminalsAsync(
         string vi, int timeoutSeconds, CancellationToken ct)
     {
-        var export = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", $"af-hook.{Guid.NewGuid():N}.xml");
-        Directory.CreateDirectory(Path.GetDirectoryName(export)!);
-        var exported = await connection.InvokeAsync((c, t) =>
-            c.ConvertVIToAIXMLAsync(new ConvertVIToAIXMLRequest { ViPath = vi, AiXMLFilePath = export },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        try
-        {
-            if (exported.ErrorCode != 0 || !File.Exists(export)) return (null, exported.ErrorMessage);
-            return ViTerminals.Parse(File.ReadAllText(export)) is { } parsed
-                ? (parsed, null) : (null, "the export did not parse");
-        }
-        finally
-        {
-            if (File.Exists(export)) File.Delete(export);
-        }
+        var (aixml, _, message) = await BackendRoute.ExportAsync(connection, vi, "af-hook", timeoutSeconds, ct);
+        if (aixml is null) return (null, message);
+        return ViTerminals.Parse(aixml) is { } parsed ? (parsed, null) : (null, "the export did not parse");
     }
 
     // ------------------------------------------------------------------ reading helper output
@@ -1014,21 +1001,11 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         return null;
     }
 
-    internal static int? StageCode(IReadOnlyList<LvValuesXml.Value> values, string name)
-    {
-        var xml = values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)).Xml;
-        if (string.IsNullOrEmpty(xml)) return null;
-        var match = Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>");
-        return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
-    }
+    internal static int? StageCode(IReadOnlyList<LvValuesXml.Value> values, string name) =>
+        HousekeepingHelpers.Code(values, name);
 
-    internal static string? StageSource(IReadOnlyList<LvValuesXml.Value> values, string name)
-    {
-        var xml = values.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase)).Xml;
-        if (string.IsNullOrEmpty(xml)) return null;
-        var match = Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline);
-        return match.Success && match.Groups[1].Value.Length > 0 ? match.Groups[1].Value : null;
-    }
+    internal static string? StageSource(IReadOnlyList<LvValuesXml.Value> values, string name) =>
+        HousekeepingHelpers.Source(values, name);
 
     private static int? Int(string? text) => int.TryParse(text, out var n) ? n : null;
 

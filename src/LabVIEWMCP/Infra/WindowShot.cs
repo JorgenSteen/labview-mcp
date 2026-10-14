@@ -8,23 +8,7 @@ using System.IO.Compression;
 namespace LabVIEWMcp.Infra;
 
 /// <summary>An RGB picture, row-major, top row first, 3 bytes per pixel.</summary>
-internal sealed record WindowImage(int Width, int Height, byte[] Rgb)
-{
-    public (byte R, byte G, byte B) At(int x, int y)
-    {
-        var i = (y * Width + x) * 3;
-        return (Rgb[i], Rgb[i + 1], Rgb[i + 2]);
-    }
-
-    /// <summary>A copy of one rectangle - how a button template is cut from a measured picture.</summary>
-    public WindowImage Crop(int x, int y, int width, int height)
-    {
-        var rgb = new byte[width * height * 3];
-        for (var row = 0; row < height; row++)
-            Array.Copy(Rgb, ((y + row) * Width + x) * 3, rgb, row * width * 3, width * 3);
-        return new WindowImage(width, height, rgb);
-    }
-}
+internal sealed record WindowImage(int Width, int Height, byte[] Rgb);
 
 /// <summary>
 /// Screenshots of dialogs. WHY: LabVIEW draws its own dialogs (`LVDChild`) with no child
@@ -89,46 +73,22 @@ internal static class WindowShot
     }
 
     /// <summary>
-    /// Decode the PNGs this class writes (8-bit RGB, every scanline filter 0) - enough for the
-    /// button templates shipped with the server. Anything else answers null.
+    /// Decode a PNG - the ones this class writes and the button templates shipped with the server -
+    /// through <see cref="PngPixels"/>, dropping alpha. Anything that is not a PNG answers null.
     /// </summary>
     public static WindowImage? DecodePng(byte[] png)
     {
-        if (png.Length < 33 || png[0] != 0x89 || png[1] != 0x50) return null;
-        int width = 0, height = 0;
-        using var idat = new MemoryStream();
-        var at = 8;
-        while (at + 8 <= png.Length)
+        PngPixels.Image image;
+        try { image = PngPixels.Decode(png); }
+        catch (PngPixels.PngException) { return null; }
+        var rgb = new byte[image.Pixels.Length * 3];
+        for (var i = 0; i < image.Pixels.Length; i++)
         {
-            var length = BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(at, 4));
-            var type = System.Text.Encoding.ASCII.GetString(png, at + 4, 4);
-            var data = png.AsSpan(at + 8, length);
-            if (type == "IHDR")
-            {
-                width = BinaryPrimitives.ReadInt32BigEndian(data[..4]);
-                height = BinaryPrimitives.ReadInt32BigEndian(data.Slice(4, 4));
-                if (data[8] != 8 || data[9] != 2 || data[12] != 0) return null;
-            }
-            else if (type == "IDAT") idat.Write(data);
-            else if (type == "IEND") break;
-            at += 12 + length;
+            rgb[3 * i] = image.Pixels[i].R;
+            rgb[3 * i + 1] = image.Pixels[i].G;
+            rgb[3 * i + 2] = image.Pixels[i].B;
         }
-        if (width <= 0 || height <= 0) return null;
-
-        idat.Position = 0;
-        using var zlib = new ZLibStream(idat, CompressionMode.Decompress);
-        using var raw = new MemoryStream();
-        zlib.CopyTo(raw);
-        var bytes = raw.ToArray();
-        var stride = width * 3;
-        if (bytes.Length != height * (1 + stride)) return null;
-        var rgb = new byte[height * stride];
-        for (var y = 0; y < height; y++)
-        {
-            if (bytes[y * (1 + stride)] != 0) return null;
-            Array.Copy(bytes, y * (1 + stride) + 1, rgb, y * stride, stride);
-        }
-        return new WindowImage(width, height, rgb);
+        return new WindowImage(image.Width, image.Height, rgb);
     }
 
     private static void WriteChunk(Stream target, string type, ReadOnlySpan<byte> data)
