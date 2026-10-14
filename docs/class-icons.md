@@ -18,8 +18,7 @@ sets it with `{LV.LVClassLibrary}` (or `{LV.Library}`) `Set Icon`, which takes *
 file. So the PNG goes through a **carrier VI** first: `Set VI Icon from File` on an empty VI held in
 memory, `VI Icon.Get as Image Data`, then `Set Icon` on the owner and `Save`. The carrier is never
 saved. The spellings come from NI's own code (`LIBUIP_SetLibIconAndApplyToVIs.vi`,
-`vi.lib\LabVIEW Icon API\`); `{LV.Library}` is missing from `lvai_vi_server_reference`, and
-ValidateAIXML rejecting `Set Iconx` and `Library.Openx` as "Invalid method" is what confirmed them.
+`vi.lib\LabVIEW Icon API\`), and ValidateAIXML rejecting `Set Iconx` and `Library.Openx` as "Invalid method" is what confirmed them.
 
 The owner's icon then reaches the members through `ApplyIconToVIs`. It lays the owner's icon over
 each member's own icon, and **white is transparent**, so a member keeps its own glyph wherever the
@@ -69,7 +68,8 @@ Two more traps in the list format, both measured:
 nothing of it in memory, four times over two sessions. Run as the **first call after a LabVIEW
 restart**, the same class, files and helper answered 0. The class was probably held by an earlier
 `LVClass.Open` in the same instance; that is supported, not proven. The tools put this in `hint`.
-They never restart LabVIEW themselves. A restart needs the user's go-ahead.
+They never restart LabVIEW themselves; `lvai_restart_labview` does, under the go-ahead rules of
+`labview-restart.md` §2.
 
 **Save version.** The helpers run with the project closed, so they save in the version of the
 LabVIEW that runs them, and a project kept in an older version is upgraded file by file. A

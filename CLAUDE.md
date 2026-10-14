@@ -1591,7 +1591,7 @@ therefore needs `projectPath`: without one the edit would be undone by LabVIEW's
 re-run is REFUSED (`memberAlreadyListedWithoutProject`), and a class file the remover declines stops
 the call (`memberEntryCouldNotBeDropped`) instead of proceeding hopefully. A member a LOADED VI
 calls (an override hook) still fails the re-add with 56003 after the drop, so a re-run first asks
-the project's instance for its callers and refuses with `memberHasLoadedCallers` (unmeasured;
+the project's instance for its callers and refuses with `memberHasLoadedCallers` (measured 2026-10-10;
 `docs/af-override-tools.md` §5). Read `privateDataBytes`
 before and after anyway — it costs no LabVIEW and nothing else in the chain reports anything.
 Repair of an already-damaged class is a rebuild: `lvai_create_accessors` with an explicit
@@ -2887,7 +2887,7 @@ literally it argued away 600 usable palette VIs.
 | How do I wire a USER EVENT's refnum onto the DYNAMIC EVENT terminal? | `docs/labview-vit-templates.md` §5a, `docs/vi-server-reference.md` | `lvai_wire_dynamic_events` — author the refnum into the structure as an ordinary TUNNEL first, so AIXML keeps the net |
 | How does the handler READ the user event's PAYLOAD? | `scripts/aixml-skeletons/user-event-two-loops.md`, `experiments/pylabview/event-data-fields/` (source tree only) | `lvai_set_event_data_fields` — third call of the route; author a labelled placeholder constant into a PRIM input first, and field index 4 is the first payload item |
 | How do I give a VI an icon? | `docs/vi-server-reference.md` | `lvai_set_vi_icon` |
-| How do I give a CLASS or LIBRARY an icon, push it onto the members, or check icons by read-back? | `docs/class-icons.md` | `lvai_set_owner_icon` (project closed; saves each member, codes per member), `lvai_read_icons` (pixel compare; LabVIEW writes no PNG into a missing folder or past MAX_PATH and answers 0), `lvai_set_vi_icon keepOwnLayer` (template only, no flattening; unmeasured) |
+| How do I give a CLASS or LIBRARY an icon, push it onto the members, or check icons by read-back? | `docs/class-icons.md` | `lvai_set_owner_icon` (project closed; saves each member, codes per member), `lvai_read_icons` (pixel compare; LabVIEW writes no PNG into a missing folder or past MAX_PATH and answers 0), `lvai_set_vi_icon keepOwnLayer` (template only, no flattening; measured on a pixel own layer) |
 | How do I set a CLASS's or LIBRARY's DESCRIPTION? | `docs/lvclass-creation.md` §10a | `lvai_set_class_description` - project OPEN and ACTIVE; text outside CP1252 is refused before LabVIEW (it would be stored as `?` in silence), verified from the saved `NI.Lib.Description` |
 | How do I put class or library members into a VIRTUAL FOLDER, or create one? | `docs/lvclass-creation.md` §10b | `lvai_move_to_folder` - project OPEN and ACTIVE; only the owner file changes (no file move, no relink); non-members, accessors inside a property definition and nested paths are refused from the file; verified from the saved owner |
 | How do I change VI DESCRIPTIONS without regenerating the VIs (icons kept)? | `docs/lvclass-creation.md` §10c | `lvai_set_vi_descriptions` - many VIs in one call, project CLOSED, `VI Description` + `Save.Instrument`; CP1252 refused up front, verified per VI from the saved STRG resource and an unchanged icon |

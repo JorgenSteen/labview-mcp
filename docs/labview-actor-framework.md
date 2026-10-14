@@ -29,8 +29,8 @@ and each one cost a session. To build an actor today:
 4. **Typedefs in the private data:** §15 to §18; the `.ctl` goes into the library (§15e).
 5. **Lifecycle overrides, their bodies, helper loops and how they stop:** §19. The override comes from
    NI's provider through `scripts/lvai_create_override.xml`, and its bodies are class members hooked
-   in by VI Server scripting. Two tools that wrap this, `lvai_create_override` and
-   `lvai_af_add_hook`, are **proposed** in a separate PR; they are not in this build.
+   in by VI Server scripting. `lvai_create_override`, `lvai_af_add_hook` and `lvai_af_remove_hook`
+   do this; `af-override-tools.md` has their shapes, panes and refusals.
 6. **Launching and checking:** §9's launcher, and its note on launchers that must stop what they
    launch; §19c for proving that a tree stopped.
 
@@ -1461,15 +1461,15 @@ because it can be avoided:
    (`<Class>.lvclass:<file>.vi` only for a class in no library; otherwise `open new vi error` and
    nothing is saved). The provider places `Call Parent Class Method` itself. This matters because
    Call Parent cannot be authored in AIXML on a plain class either (validate: "Object terminal not
-   found"; convert: Error 1), not only on the interface members CLAUDE.md names. A tool that wraps
-   the script, `lvai_create_override`, is **proposed** in a separate PR; it is not in this build.
+   found"; convert: Error 1), not only on the interface members CLAUDE.md names.
+   `lvai_create_override` wraps the script (`af-override-tools.md` §2).
 2. **Write the body as its own class member** with `lvai_add_class_method`, like any method. Its
    one class terminal is `<Class> in`, or `<Class> in`/`<Class> out` when it has to hand a modified
    object on.
 3. **Drop the body into the override's diagram by VI Server scripting, and never convert the
    override again.** `New VI Object` with a `ref{LV.Node}` class and the body's path places the
-   node; `Connect Wire` wires it, matching terminals by NAME. A tool for these shapes,
-   `lvai_af_add_hook`, is **proposed** in the same separate PR.
+   node; `Connect Wire` wires it, matching terminals by NAME. `lvai_af_add_hook` places these
+   shapes (`af-override-tools.md` §3).
    - **Branch:** wire the override's panel terminal `<Class> in` to the body's `<Class> in`. The
      body runs beside Call Parent. On `Actor Core` this is where a helper loop goes.
    - **In series, before Call Parent:** `{LV.Wire}` `Delete` on the wire from the panel terminal to
