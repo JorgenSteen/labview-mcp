@@ -986,21 +986,9 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
     private async Task<(ViTerminals.Result? Terms, string? Error)> TerminalsAsync(
         string vi, int timeoutSeconds, CancellationToken ct)
     {
-        var export = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", $"af-hook.{Guid.NewGuid():N}.xml");
-        Directory.CreateDirectory(Path.GetDirectoryName(export)!);
-        var exported = await connection.InvokeAsync((c, t) =>
-            c.ConvertVIToAIXMLAsync(new ConvertVIToAIXMLRequest { ViPath = vi, AiXMLFilePath = export },
-                deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-        try
-        {
-            if (exported.ErrorCode != 0 || !File.Exists(export)) return (null, exported.ErrorMessage);
-            return ViTerminals.Parse(File.ReadAllText(export)) is { } parsed
-                ? (parsed, null) : (null, "the export did not parse");
-        }
-        finally
-        {
-            if (File.Exists(export)) File.Delete(export);
-        }
+        var (aixml, _, message) = await BackendRoute.ExportAsync(connection, vi, "af-hook", timeoutSeconds, ct);
+        if (aixml is null) return (null, message);
+        return ViTerminals.Parse(aixml) is { } parsed ? (parsed, null) : (null, "the export did not parse");
     }
 
     // ------------------------------------------------------------------ reading helper output
