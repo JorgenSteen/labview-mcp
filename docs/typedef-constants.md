@@ -314,5 +314,10 @@ an empty run is retried, up to three tries (`TypedefTools.SweepAttempts`), and
 open all correct, at most one retry each; `Gibtsnicht.vi` refused as `subViNotOnDiagram`; the bind
 `ok: true` with `coercedBefore: 1`, `coercedAfter: 0`.
 
-`lvai_exec_state` opens its VI without an application reference too, and has not been measured
-against this.
+`lvai_exec_state` opens its VI without an application reference too, and does NOT share the
+defect - measured 2026-10-13 on the same fixture, three reads per VI in each of three states (no
+project, project open, project open with the caller held open): both class accessors read 1, the
+caller 0 with the identical linker error every time, and a VI from another project 1 - 36 of 36
+as expected, none empty. It reads one property of the VI, where the sweep walks the diagram's
+objects. Not measured: a VI whose project copy carries UNSAVED changes, where a second copy would
+read the file rather than what the IDE shows.
