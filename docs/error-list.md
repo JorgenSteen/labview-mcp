@@ -161,3 +161,28 @@ two grpc `convert`, three composer `convert`, two composer `lvai_generate_vi`) a
 with its Error List line, `errorsNotReadBecause: null` throughout. Over the five acceptance rounds
 the unread-lines case occurred 4 times in about 40 parallel calls, always with another call in
 flight, never on a call alone, and not once since both routes retry.
+
+### 6e. What invalidates the reference: a second ActiveX operation on the same VI (2026-10-14)
+
+The miss came back on an EXECUTABLE VI, where the retry does not fire because it is limited to
+broken VIs. `lvai_exec_state` answered `execState 1` with `errors: null` and
+`errorsNotReadBecause: "Get Errors answered error 1026 …"`. The call had been issued together with
+`lvai_run_vi_and_read_values` on the same VI, both on the composer route. The same `lvai_exec_state`
+issued alone answered `errors: []`, read.
+
+The exec-state helper's gate (`ExecStateTools.HelperGate`) serialises helper runs against each
+other, but not against the run tool's own ActiveX `Run`. That run opens and releases its own
+reference to the target in the middle of the helper's run. **`LabViewCom.WithLabViewAsync` now holds
+one process-wide gate (`ComGate`) for every ActiveX operation**, so the helper, a run, a print and a
+panel open take turns. LabVIEW serialises the work anyway. Over raw stdio
+(`scripts/mcp_drive.py`), with exec-state + run fired together on one VI:
+
+| build | rounds | Error List read | `1026` |
+|---|---|---|---|
+| main (`1d544eb`, the plugin) | 5 | 4 | 1 (round 4) |
+| fix (`89139c8`) | 10 | 10 | 0 |
+
+The gate does not reach the grpc route (6c), which goes through NI's service and keeps its retry. A
+call that times out releases the gate while its worker may still sit in a COM call, so a hung LabVIEW
+does not lock the server for ever. The next call then runs beside the stuck one, as every call did
+before.
