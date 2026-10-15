@@ -2189,7 +2189,11 @@ class Composer:
     # on NI's In Range and Coerce.vi (aggregate=true)
     NODE_ATTRS = {"_name", "inputs", "outputs", "uid", "uid_parent", "_id"}
     PRIM_MODES = {"In Range and Coerce": ("includeHigh", "includeLow"),   # name -> mode attributes add_node writes
-                  "Read from Text File": ("readLines",)}
+                  "Read from Text File": ("readLines",),
+                  "Array To Cluster": ("elements",)}
+    # Array To Cluster's cluster size when `elements` is absent - LabVIEW's own default, read off
+    # NI's converter's build of a probe without the attribute, 2026-10-15: nine fields
+    ARRAY_TO_CLUSTER_DEFAULT = 9
     # a mode that is a bit of the prim's objFlags, read off probes/pmodes.xml through NI's own
     # converter: includeLow 0x200000, includeHigh 0x100000, neither 0 (NI's exports write the
     # attribute only when it is true, 21 of 27 In Range nodes with both)
@@ -2208,6 +2212,37 @@ class Composer:
         if unknown:
             raise Unsupported("Node %r: mode %s is not composable yet" % (
                 unescape(el.get("_name") or ""), ", ".join("%s=%s" % (a, el.get(a)) for a in unknown)))
+
+    def _array_to_cluster_type(self, el, net):
+        """Array To Cluster's output: a cluster of `elements` fields, each the wired array's
+        ELEMENT type - read off NI's converter's build of two probes, 2026-10-15: an array{double}
+        with elements="3" answers Cluster{Items[0], Items[1], Items[2]} of NumFloat64, labelled
+        after the wire's source `Items`, and without the attribute nine of them. The part's donor
+        is a cluster of three STRINGS, which every Array To Cluster composed as until then - right
+        by luck for the ATM's three menu captions, broken for any other element type or size -
+        and `elements` itself was refused."""
+        raw = el.get("elements")
+        try:
+            n = int(raw) if raw is not None else self.ARRAY_TO_CLUSTER_DEFAULT
+        except ValueError:
+            raise Unsupported("Array To Cluster %s: elements=%r is not a number" % (el.get("uid"), raw))
+        if not 1 <= n <= 256:
+            raise Unsupported("Array To Cluster %s: elements=%d is outside 1..256" % (el.get("uid"), n))
+        arr = self.net_type.get(net) if net else None
+        if arr is None or arr.get("Type") != "Array" or len(arr.findall("Dimension")) != 1:
+            raise Unsupported("Array To Cluster %s: needs a wired 1D array to type its cluster" % el.get("uid"))
+        item = elem_of(arr)
+        lab = self._source_label(net) or ""
+        out = ET.Element("TypeDesc", {"Type": "Cluster", "Format": "inline"})
+        if lab:
+            out.set("Label", lab)
+        for i in range(n):
+            f = copy.deepcopy(item)
+            f.attrib.pop("Label", None)
+            if lab:
+                f.set("Label", "%s[%d]" % (lab, i))
+            out.append(f)
+        return out
 
     def add_node(self, el):
         name = unescape(el.get("_name"))
@@ -2390,6 +2425,12 @@ class Composer:
             ET.SubElement(a, "Dimension", {"Flags": "0x00FF", "FixedSize": "0xFFFFFF"})
             ET.SubElement(a, "TypeDesc", {"Type": "String", "Prop1": "0xFFFFFFFF", "Format": "inline"})
             new_types[idx_of[id(by_name["text"])]] = a
+        if name == "Array To Cluster":
+            # NI's converter takes the terminal names in any case (`array`/`cluster` in its
+            # exports), so the lookup does too
+            out_term = next(t for t in terms if int(t.find("dco").findtext("objFlags") or 0) & 1)
+            arr_net = next((n for k, n in ins if k.lower() == "array"), None)
+            new_types[idx_of[id(out_term)]] = self._array_to_cluster_type(el, arr_net)
         for tname, net in outs:
             if net:
                 self.net_type[net] = new_types[idx_of[id(by_name[tname])]]
@@ -3056,6 +3097,36 @@ class Composer:
         dco.find("typeDesc").text = "TypeID(%d)" % self.heap_tid(tree)
         return t
 
+    NMUX_ROW = 16
+    NMUX_PAD = 24
+
+    def _nmux_geometry(self, node, agg, field_terms, names, bundle):
+        """Size a Bundle/Unbundle By Name node for its fields, as LabVIEW sizes its own. The
+        harvested part carries ONE field's geometry, and every further field used to be cloned
+        onto that same first row at that part's width - a two-field Unbundle drew `code` over a
+        clipped, empty second row (the user's report of 2026-10-14). Measured over 68 nMux nodes
+        in NI's own VIs: width = the longest field name's text width + 24, height = 16 per field
+        + 1, field k on row 16k; an Unbundle has its cluster terminal on the left (0, 0, H, 16)
+        and its fields right of it (16k, 16, 16k+16, W), a Bundle has its output on the right
+        (0, W-8, H, W) and its fields left (16k, 0, 16k+16, W-16)."""
+        if not field_terms:
+            return
+        w = int(-(-max(text_width(n) for n in names) // 1)) + self.NMUX_PAD
+        h = self.NMUX_ROW * len(field_terms) + 1
+        b = node.find("bounds")
+        if b is not None and b.text:
+            top, left = lvheap.parse_bounds(b.text)[:2]
+            b.text = lvheap.fmt_bounds((top, left, top + h, left + w))
+        ab = agg.find("dco/termBounds")
+        if ab is not None:
+            ab.text = lvheap.fmt_bounds((0, w - 8, h, w) if bundle else (0, 0, h, 16))
+        for k, t in enumerate(field_terms):
+            tb = t.find("dco/termBounds")
+            if tb is not None:
+                r = self.NMUX_ROW * k
+                tb.text = lvheap.fmt_bounds((r, 0, r + self.NMUX_ROW, w - 16) if bundle
+                                            else (r, 16, r + self.NMUX_ROW, w))
+
     def add_agg_node(self, el):
         """Bundle (mux), Unbundle (demux), Bundle/Unbundle By Name (nMux), Index Array (aIndx)
         and Build Array (aBuild), measured on an AIXML-generated VI:
@@ -3129,6 +3200,9 @@ class Composer:
                     self.net_type[net] = unlabel(ends[key][1])
             for key, (t, _) in ends.items():
                 self.ends[(el.get("uid"), key)] = (t.get("uid"), diag)
+            if name == "Unbundle By Name":
+                self._nmux_geometry(node, agg, [ends[k][0] for k, _ in picked],
+                                    [k for k, _ in picked], bundle=False)
         elif name in ("Bundle By Name", "Bundle"):
             agg, cref, tpl = terms[0], terms[1], terms[2]
             cin = [n for t, n in ins if t in ("input cluster", "cluster")]
@@ -3160,6 +3234,7 @@ class Composer:
             self.ends[(el.get("uid"), "output cluster")] = (agg.get("uid"), diag)
             field_ins = [(t, n) for t, n in ins if t not in ("input cluster", "cluster")]
             if name == "Bundle By Name":
+                named = []
                 for fname, net in field_ins:
                     if fname not in labels:
                         raise Unsupported("%s %s: no field %r (has %s)" % (name, el.get("uid"), fname, ", ".join(labels)))
@@ -3168,6 +3243,8 @@ class Composer:
                     tl.append(t)
                     ET.SubElement(dl, "SL__arrayElement", {"uid": t.find("dco").get("uid")})
                     self.ends[(el.get("uid"), fname)] = (t.get("uid"), diag)
+                    named.append((t, fname))
+                self._nmux_geometry(node, agg, [t for t, _ in named], [f for _, f in named], bundle=True)
             else:
                 # one terminal per field, in field order; AIXML names them after the fields and
                 # repeats "element" for unlabelled ones
@@ -6524,8 +6601,14 @@ class Composer:
                     loop.find("termList").append(c)    # out of the border slots below
             t, l, b, r = lvheap.parse_bounds(loop.find("bounds").text)
             cr = loop.find("contRect")
+            # The diagram rect inside the border, as LabVIEW writes it per class (measured on
+            # NI's labelled loops, 8 For and 63 While): a For Loop's border is ONE pixel on top
+            # and left with its page stack bottom-right, a While Loop's six all round. Written
+            # 6 for a For Loop, its subdiagram label - which sits on the contRect - floated
+            # 5 px inside the frame instead of filling its top edge.
+            ins = (1, 1, 5, 5) if loop.get("class") == "forLoop" else (6, 6, 6, 6)
             if cr is not None:
-                cr.text = lvheap.fmt_bounds((t + 6, l + 6, b - 6, r - 6))
+                cr.text = lvheap.fmt_bounds((t + ins[0], l + ins[1], b - ins[2], r - ins[3]))
             sb = inner.srn.find("bounds")
             if sb is not None:
                 sb.text = lvheap.fmt_bounds((-t, -l, -t, -l))
@@ -6542,6 +6625,15 @@ class Composer:
                 tb = dco.find("termBounds")
                 if tb is not None:
                     tb.text = lvheap.fmt_bounds((h - 26, x, h - 10, x + 16))
+            # A For Loop's N sits in the top-left corner - BELOW a subdiagram label, overlapping
+            # its last pixel row: measured on 22 of 25 labelled NI loops, N's top is the label's
+            # bottom - 1 (label 1..18 -> N 17..33); left where it is, N covers the label.
+            for c in loop.find("termList") if lh else ():
+                if c.find("dco") is not None and c.find("dco").get("class") == "lMax":
+                    tb = c.find("dco/termBounds")
+                    ny = ins[0] + lh - 1         # the label starts at the contRect
+                    if tb is not None:
+                        tb.text = lvheap.fmt_bounds((ny, 0, ny + 16, 16))
             slot = {0: 1 if loop.find("loopLimitDCO") is not None else 0, 1: 0}
             for c in loop.find("termList"):
                 tb = c.find("dco/termBounds")
@@ -7039,7 +7131,8 @@ class Composer:
                 absolute_owners=[h.get("uid") for h, _ in getattr(self, "fb_pairs", [])])
             self.report.append("wires routed: %d, left generic: %d" % (routed, left))
         self.connector_pane()
-        self.description = vi.get("description") or ""
+        # escaped as NI escapes it (\2C, \3A, \0A, a doubled backslash), like a control's below
+        self.description = unescape(vi.get("description") or "")
 
     def set_array_anchors(self):
         """Give every array constant its nRC/oRC anchor now that every position is final (see

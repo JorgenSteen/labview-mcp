@@ -262,7 +262,7 @@ ones stay in `helpers`, so neither backend runs or overwrites the other's.
 | `lvai_placeholder_subvi`, `lvai_add_vis_to_project` | the stub composed from the reader's export; the listing is a file edit and never needed NI |
 | `lvai_set_vi_icon` | the icon helper composed and run over ActiveX, judged by the same read-back file. Until 2026-10-11 it took the parameter and still called NI's `RunVIAsTopLevel` |
 | `lvai_exec_state` | the SAME `lvai_exec_state.xml` helper, COMPOSED and run over ActiveX, so linker errors are named as on grpc (`route: helper`) - `Missing subVI X.vi in VI Y.vi.`. Only when the helper cannot be composed or run is `ExecState` read directly over ActiveX, which has no linker-error property: then `route: direct`, `linkerErrorsAvailable: false` and `linkerErrorsUnavailableBecause`. A route on pylabview (`lvai_generate_test`, `lvai_add_class_method`, …) reads it the same way. Until 2026-10-12 the direct read was the only one, and `linkerErrors` was null for every VI |
-| `lvai_run_vi_and_read_values` | the panel's names and types read from the FILE (ActiveX can set and get a control by name but cannot list them), inputs converted by type, `SetControlValue` → `Run` → `GetControlValue`. **The answer has the gRPC shape**: the INDICATORS (as NI's helper reads them), each with LabVIEW's type tag (`DBL`), its `Val` text and LabVIEW's flattened `xml` - generated from the value and its type, measured identical to NI's on 11 of 11 values - plus the AIXML `literal`. A DBL keeps LabVIEW's shape, not its last digits (LabVIEW printed 5050 as `5049.99999999999999`). `runForMs` works — a snapshot, then Abort. Refused before anything runs: `signalsJson` (ActiveX has no Value (Signaling)), a control the panel does not have, a value that does not convert, a broken VI, a waveform, a refnum, a 2D array |
+| `lvai_run_vi_and_read_values` | the panel's names and types read from the FILE (ActiveX can set and get a control by name but cannot list them), inputs converted by type, `SetControlValue` → `Run` → `GetControlValue`. **The answer has the gRPC shape**: the INDICATORS (as NI's helper reads them), each with LabVIEW's type tag (`DBL`), its `Val` text and LabVIEW's flattened `xml` - generated from the value and its type, measured identical to NI's on 11 of 11 values - plus the AIXML `literal`. A DBL keeps LabVIEW's shape, not its last digits (LabVIEW printed 5050 as `5049.99999999999999`). `runForMs` works — a snapshot, then Abort. Refused before anything runs: a control the panel does not have, a value that does not convert, a broken VI, a waveform, a refnum. A 2D (nD) array crosses as ONE rectangular array since 2026-10-15. **`signalsJson` runs the timed helper COMPOSED and run over ActiveX** (since 2026-10-15) against the target whose typed inputs were set first and whose reference is held - ActiveX itself has no Value (Signaling) |
 
 Before either backend: `lvai_check_aixml`'s pre-checks, and the refusal of a property name with its
 category dropped (`propertyNameWouldCrashLabview`) — that document is wrong whichever converter
@@ -299,7 +299,7 @@ log, `lvai_apply_aixml_to_vi`), or is the three-step gRPC event route the compos
 or pylabview": read the server default from `pylv_status` (now in every roster), compose an Event
 Structure in one `lvai_generate_vi` call instead of the three-step gRPC route, let a `Call` resolve
 by file instead of opening callees, treat `composerRefused` as a composer gap and repeat that one
-call on `grpc` only when NI's service is up, and expect no `signalsJson` over ActiveX.
+call on `grpc` only when NI's service is up. `signalsJson` works over ActiveX since 2026-10-15.
 `PluginAgentTests.EveryAgentCarriesTheBackendRuleAndMayReadTheBackend` keeps it in all eight.
 
 ## Where the pylabview pieces are found
@@ -951,6 +951,175 @@ fails `errorKind: comStartedLabView`.
 LabVIEW 2020 f1 with no NI service involved. One step did not work there: Clean Up Diagram answered
 **LabVIEW error 2** at `Block Diagram:Clean Up` (Clean Up Panel worked); the step is reported and
 never gating, so the VI is left as composed. Not investigated further.
+
+## Reading a `.ctl` on `pylabview` (2026-10-14)
+
+**`lvai_convert_vi_to_aixml` on a `.ctl` answered `composerFailed` on this backend, where `grpc`
+answered the control** - `TypeError: int() can't convert non-string with explicit base` in
+`vi2aixml.py`'s `pane_flags`, on **119 of 121** `.ctl` files on this station. A `.ctl` LabVIEW has
+saved points `CONP` at its `TypeDef`, not at a `Function` (`lvai_describe_ctl`'s `wrappedType`), so
+there is no pane and the TypeDef's children carry no `Flags`. The two that read were flag-patched
+controls never resaved (`wrappedType: Function`).
+
+Compared then over 46 controls against NI's exports of the same files: **0 identical before, 46
+after.** What had to change besides the crash, each counted on those 46 or on NI's cached exports:
+
+| what | NI's export | the reader wrote |
+|---|---|---|
+| a control at the heap's default conNum on a TypeDef pane | `conIdx="0" connection="required"` (3 of 46) | nothing |
+| a control with NO terminal on the control's diagram - the usual case for one LabVIEW saved | **no element at all** (18 of 46) | the control, inserted at root with a note |
+| an unwired terminal | `outputs="value:"` / `inputs="value:"` on every one of ~5 500, 0 omitted | nothing - **VIs too** |
+| a typedef or cluster with no DefaultData | its elements' literals, `[0,0]`, `[false,0,]` | `0` - **VIs too** |
+| the VI description | `,` `:` and control characters as `\2C` `\3A` `\0A`, a backslash doubled, the rest raw | raw - **VIs too** |
+| a MULTI-LINE description (pylabview's `<Chunk>` lines) or one left `Format="bin"` | the text | whitespace, or empty - **VIs too** |
+| a file saved under another name (`pdc.ctl` holding `Channel.ctl`) | the FILE name | the stored name |
+
+The 18 NI-empty controls are matched, not improved on: the reader writes no element either and
+leaves an XML comment saying so, so the information stays visible while the elements agree. Over
+300 cached NI exports of VIs (the old reader's 300 were 278 of the same and 22 later ones, since a
+copy of it outside the repository could not read 22) the same changes took matching descriptions from 150 to 297, values on
+controls and indicators from 1 651 to 1 823, and the empty-net attributes from 0 to 151 of 151.
+What is left: 3 descriptions are stale cache entries, and 29 values a type the reader has no
+literal for (a VISA name's `COM1`, a numeric with units) - both older than this change.
+
+**The composer had the matching half wrong**: it unescaped a CONTROL's description and wrote the
+VI's own verbatim, so an NI export's `\2C` landed in the composed VI as those three characters -
+visible in `user.lib\LV_MCP` sockets composed since 2026-10-10. It unescapes both now.
+`tests/.../Infra/ReaderControlFileTests.cs` pins three real controls to NI's export of them, and
+fails on all three with the reader before the change.
+
+## NI's converter labels every Invoke Node `Instr` (measured 2026-10-14)
+
+Seen by the user on `lvai_vi_errors.vi` built through NI's service: the `Get Broken VI List` node,
+an `{LV.Application}` method, carried the header `Instr` where NI's own
+`AB_Get_Detailed_BrokenVI_Message.vi` shows `App`, and `Get Errors` showed `Instr` where NI's shows
+`VI`. **The AIXML was right** (`type="{LV.Application}"`, `type="{LV.VI}"`) and so was the VI: an
+export of the NI-built VI reads both classes back correctly, and both methods returned the right
+answers in every acceptance run. The header is a STRING in the diagram heap - the invoke node's
+`nodeName` - and NI's converter writes `"Instr"` into it whatever the class is:
+
+| built by | `Get Broken VI List` | `Get Errors` | `methCode` / `invokeFlags` |
+|---|---|---|---|
+| NI's own VI (`AB_Get_Detailed_BrokenVI_Message.vi`) | `nodeName "App"` | `nodeName "VI"` | 2429 / 201408, 1106 / 200408 |
+| our composer (`pylabview`) | `"App"` | `"VI"` | identical |
+| NI's converter (`grpc`) | **`"Instr"`** | **`"Instr"`** | identical |
+
+The same label is on `BD.CleanUp` and `Save.Instrument` in `lvai_cleanup_diagram.vi`, both ordinary
+public `{LV.VI}` methods, so it is not about the methods being unlisted. Only `oMId` differs besides
+the label, and that is the node's index into the VI's own object table. Property nodes built by NI's
+converter keep their real class (`App`, `Project`). So: **cosmetic, and NI's** - a reader of a
+grpc-built diagram sees `Instr` on every Invoke Node and has to take the class from the reference
+wire or an export. Not patched: the label is the converter's output, and editing heap strings after
+every conversion would be a pylabview step on every grpc build for a display defect. The composer,
+which the error-list helper prefers, writes the right label.
+
+## A Bundle/Unbundle By Name drew only its first field (fixed 2026-10-14)
+
+Seen by the user on the composed `lvai_vi_errors.vi`: an `Unbundle By Name` over `code,source`
+showed `code` and a clipped, empty second row. The composer clones its terminals from a harvested
+ONE-field part and placed every field on that part's first row at that part's width (29 px), so
+the second field sat under the first. NI's converter drew the same node correctly. Measured over
+68 `nMux` nodes in NI's own VIs (`(Un)Bundle By Name` in the cached exports, heaps read with
+pylabview): **width = text width of the longest field name + 24, height = 16 per field + 1, field
+k on row 16k**; an Unbundle has its cluster terminal at `(0, 0, H, 16)` and its fields at
+`(16k, 16, 16k+16, W)`, a Bundle its output at `(0, W-8, H, W)` and its fields at
+`(16k, 0, 16k+16, W-16)`. The only exceptions were nested fields (`Settings.Graph?`), drawn by their
+last part, which the composer refuses anyway. `Composer._nmux_geometry` applies it; re-measured on
+the composed `lvai_vi_errors.vi` (both nodes show `code`/`source`) and on a probe bundling and
+unbundling three fields, which ran `[true,42,probe]`.
+
+## A For Loop's subdiagram label floated, and its N sat on it (fixed 2026-10-14)
+
+Seen by the user on the same composed VI: the loop's `N` was drawn ON the subdiagram label bar,
+where LabVIEW's own loop has it below. The composer placed the label but left `N` (the `lMax` DCO)
+at the shell's `(0, 0, 16, 16)`. Measured over 25 labelled For Loops in NI's own VIs: in 22,
+**N's top is the label's bottom - 1** (label `1..18` -> N `17..33`, label `1..42` -> N `41..57`),
+whatever the label's height; every unlabelled loop has N at `(0, 0, 16, 16)`. The three outliers
+are two loops with N at the top despite a label and one at `(55, 0)` under a 56-px label - not a
+rule. The composer now applies it; checked on the composed `lvai_vi_errors.vi` and on `t159` (a
+two-line label with N WIRED: the wire is routed to the new position, `execState 1`).
+
+**And the label itself floated 5 px inside the frame**, which the user saw next: LabVIEW puts a
+subdiagram label exactly on its structure's `contRect`, for every class measured, and the composer
+wrote a For Loop's `contRect` six pixels in all round like a While Loop's. NI's is
+`(+1, +1, -5, -5)` relative to the bounds - a one-pixel border top and left, the page stack
+bottom-right - on all 8 labelled For Loops and on unlabelled ones alike; While Loops (63), Case
+structures (36) and Flat Sequence frames (3) match what the composer writes. A Disable structure
+(`commentNode`) reads `(+1, +1, -1, -1)` on NI's four, but written so in the composer its label
+slid under the frame selector, so that one stays at 6 until the selector's geometry is measured.
+
+## The graft lost its events, and Array To Cluster was refused (fixed 2026-10-15)
+
+Both found by the DQMH ATM cold build of 2026-10-15, both sending that build back to NI's
+service - the user's request was to fix them so that a build needs `grpc` no more.
+
+**`lvai_graft_diagram` on pylabview left an event-driven VI eBad** - "one or more event cases
+have no events defined", `events: null` in the answer, and `grpc` grafted the same scaffold clean.
+The graft reads the scaffold's frames off its EXPORT with `EventFrames`, which matches NI's
+spelling ` "Card Simulator"\3A Value Change `. **`vi2aixml.py` wrote the colon RAW** -
+` "Card Simulator": Value Change ` - so on pylabview every frame was an unrecognised selector, and
+`ReregisterEventsAsync` turned that refusal into the same `null` as "no Event Structure" and
+grafted on. NI escapes `:` as `\3A` and `,` as `\2C` in every selector - all 443 Value Change
+selectors in the cached exports, and multi-source ones as `<Preview>\2C <Terminals>\3A Mouse Down`;
+`;` between events stays raw. Three fixes: the reader escapes as NI does, `EventFrames` accepts
+either spelling, and a refused selector now FAILS the graft (`eventReregistrationFailed` with the
+refusal) instead of passing as "nothing to register". The composer reads both spellings already -
+it unescapes a selector before splitting it.
+
+**`Array To Cluster elements="3"` was refused** - `mode elements=3 is not composable yet`. Measured
+on NI's converter's builds of two probes (array{double} in): with `elements="3"` the output is a
+cluster of three `NumFloat64` labelled `Items[0..2]` after the wire's source `Items`, WITHOUT the
+attribute nine of them. The size lives in the output's type and nowhere else in the heap. The
+composer wrote the PART DONOR's type instead - a cluster of three strings from
+`examples\Arrays\Array to Cluster.vi` - whatever the document asked for: right by luck for the ATM's
+three menu captions, and for a double array LabVIEW re-typed it on load (a control arm with the
+old composer ran `[1.5,2.5,3.5]`), but the size was always three where NI's is nine, and
+`elements` itself was refused. The composer now types the output from the wired array's element
+type and `elements` (default 9, range 1..256), and **the reader writes `elements="N"`** from the
+output's field count - it wrote none, so a round trip could not keep the size. Measured over
+ActiveX: `elements="3"` on doubles and on strings, and no attribute on doubles, each ran with the
+values NI's build gives.
+
+**Accepted over raw stdio with `LABVIEW_GRPC_PORT=1`**, so a call still reaching NI would have
+failed: the ATM scaffold grafted into a copy of the exam's supplied VI on `pylabview` - `ok`,
+`execState 1`, 8 controls grafted plus the `error out` it adds, `wiringMatchesScaffold`, **5 frames
+registered again**, 39 s. Driven afterwards (`signalsJson`, which only the gRPC run has): card in
+and typing left `Card Simulator` disabled and `User Input`/`Enter` enabled, the scaffold's Account
+mode. `roundtrip.py` over the composer suite: **137 of 138**, `t136` (VI Activation, needs the
+desktop's focus) failing with the old reader too; `t133` and `t138` failed once and passed on a
+rerun, as they did with the old code. Pass the suite's `--out` as a BACKSLASH path - one with
+forward slashes made every case `ExecState None`, because LabVIEW answered "file not found" for it.
+
+## Signals and 2D arrays over ActiveX (2026-10-15)
+
+The two run-route gaps that still sent the DQMH ATM build's verification to NI's service, closed
+the same day as the graft above.
+
+**A 2D array input was refused** (`inputNotConvertible`) - the accounts table of `Find Account.vi`,
+`array.2{string}` in the reader's spelling. The class comment of `ComValues` already recorded that
+a 2D array crosses ActiveX as ONE rectangular array; the code refused it anyway. `ComValues` reads
+the rank from `array.N{T}` or a nested `array{array{T}}`, builds `T[,...]` from a nested literal
+`[[a,b],[c,d]]` (rectangular, or refused naming the row) or from LabVIEW's XML (a `Dimsize` per
+dimension, elements row-major), and writes a 2D indicator back as that XML. Measured: `Find
+Account.vi` with a three-row table and ` 34567 ` answered Found, row 2, Bryan Smith, 750.5.
+
+**`signalsJson` was refused** - ActiveX has no Value (Signaling). The gRPC route fires it from its
+timed helper, `lvai_run_for_ms.xml`, which runs the target through VI Server, signals, snapshots
+and aborts. That helper COMPOSES, so on pylabview it is composed and run over ActiveX in LabVIEW's
+main instance (`LabViewCom.RunHelperOnTargetAsync`). The target's typed inputs are set over COM
+first and its reference is HELD while the helper runs, so the helper's Open VI Reference by path
+reaches the same VI with the values in place - the helper itself sets strings only. **Accepted
+with `LABVIEW_GRPC_PORT=1`**: the grafted ATM driven card-in plus typing answered `signals.errorCode
+0` and `Card Simulator` disabled 2, `User Input`/`Enter` 0 - the gRPC run's answer exactly - in
+4.5 s; the control arm, typing only, left `Card Simulator` 0 and `User Input`/`Enter` 2. And `Find
+Account.vi` through the same route, its table set over COM, ended on its own with Jennifer
+Rodriguez, 1000 (`targetEndedBeforeAbort`), so a typed input survives the held reference.
+
+**A snapshot's Abort leaves a DQMH module RUNNING**, on either route. Every runForMs run of the ATM
+GUI was aborted after its snapshot, `Shut Down ATM` never ran, and the Bank module's `Main.vi`
+stayed `execState 3` - so the next run of `Find Account.vi`, a subVI of its handlers, answered
+`Error 1000` at `Run VI`. Running the module's own `Stop Module.vi` released it. Signal the
+program's Stop as the last signal when it starts a module, or stop the module afterwards.
 
 ## Not covered, and not measured
 
