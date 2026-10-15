@@ -111,6 +111,25 @@ untitled on the measured station). Owner alone is not used for titled windows. O
 once on a LabVIEW that had been in use for two hours, is not on a fresh LabVIEW. One sighting does
 not show that it is always harmless, so it stays `hidden-unrecognised`.
 
+**The start-up splash is `loading`, not a dialog - measured 2026-10-14 and 10-15.** LabVIEW 2026
+Q3's splash ("Initializing plug-ins", about 772x444) was flagged as a possible dialog on every cold
+start, because the rules above were written from a LabVIEW that was already up. It comes in two
+forms. In slow starts it is titled `_Loading` (seen at 54 s). In faster ones it is UNTITLED and
+owned by the frame, which is exactly the "changed on disk" rule. It is unowned for the first ~10 s
+(plain `untitled`) and then owned until the IDE is up: gone at 21 s, 32 s and 56 s over three
+starts. LabVIEW 2020's start showed neither form. So:
+
+- a window titled `_Loading` is `loading`, by its title;
+- an untitled, frame-owned window is `loading` instead of `possible-dialog` while the LabVIEW is
+  younger than `LabViewState.StartupSeconds` (90 s, the same wait the Nigel chat uses) AND has no
+  VI, project or unsaved window. The "changed on disk" prompt needs a VI loaded, and the splash comes
+  before any VI.
+
+`loading` is not in the restart's empty kinds, so a restart still needs a go-ahead while it is up.
+The Nigel chat answers `LabVIEW is still loading` instead of "a person answers it". Accepted live on
+2026-10-15: from 24 s to 55 s of a cold start the answer read `loading` with that reason, and
+`possibleDialogs` was empty throughout.
+
 **The user's decision of 2026-10-10.** A VISIBLE possible dialog is a hard stop that no go-ahead
 opens. A `hidden-unrecognised` window is a go-ahead guard (`hiddenWindows`). It may be a dialog that
 reports itself invisible, or a system window whose class is not in the list yet: that listing had 13

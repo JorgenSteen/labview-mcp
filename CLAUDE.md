@@ -2924,6 +2924,7 @@ literally it argued away 600 usable palette VIs.
 | Why do the cases of one generated test fail by turns, and how does a METHOD test reset a fixture first? | `docs/cold-build-atm-agents-4.md` §3, §4 | the cases of one test VI RUN IN PARALLEL - `lvai_generate_test` and `lvai_generate_method_test` refuse a fixture path a setup writes in one case and another case uses; both take `setup` |
 | How do I generate several VIs from AIXML at once? | `docs/bulk-operations.md` | `lvai_generate_vis` |
 | Why did a tool call fail with no detail? | `docs/tool-argument-errors.md` | — |
+| How do I test a BRANCH build against LabVIEW, before a client restart can see its tools? | `scripts/mcp_drive.py` (its header) | `python -I scripts/mcp_drive.py <exe> <calls.json> [<private TEMP>]` - raw stdio, one server process, `{"parallel": [...]}` for calls fired together; a private TEMP keeps the plugin's helper cache untouched |
 | WHICH RELEASE is this install, and do the plugin and the zip differ? | `docs/release-versioning.md` | `LabVIEWMCP --version`, `lvai_status`/`pylv_status` (`serverVersion`), `scripts/Compare-Installs.ps1` |
 | What must a release TAG look like? | `docs/release-versioning.md` §4 | `scripts/Assert-ReleaseTag.ps1` |
 | Is what is PUBLISHED actually the workflow's artefact? | `docs/release-versioning.md` §2a, §2b | `scripts/Assert-PublishedRelease.ps1` |
