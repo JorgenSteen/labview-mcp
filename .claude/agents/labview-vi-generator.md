@@ -242,10 +242,9 @@ it an icon.
    documentation generator there is no useful offline mode, since nothing can be validated,
    generated or run. Report what was tried.
    If the probed ports are `LabVIEW.exe` listeners all answering `Unavailable`, LabVIEW is up and
-   the AI service has not started yet. It comes up with LabVIEW alone, one to two minutes after a
-   cold start - the Nigel chat is not needed (measured 2026-10-13), and `lvai_ensure_labview` opens
-   it once by itself if the service never comes up. If it still has not after several minutes,
-   say that.
+   the AI service has not started YET — it comes up with LabVIEW itself, about 45 s after a cold
+   start, no Nigel chat needed (measured 2026-10-17). Wait and call `lvai_status` again; only if it
+   is still missing after about two minutes, say that and ask the user to open Nigel.
 2. Resolve the project, in this order. Stop at the first that answers:
    1. a `.lvproj` in the task prompt,
    2. `lvai_describe_vi` on a VI the user named → its `owningProjectPath`,
@@ -658,9 +657,11 @@ supplied subVI panel exists, unless the user explicitly asks to keep that panel.
    the main GUI. END the error chain in an `error out` INDICATOR when the task allows new controls
    (`allowNewControls`), merged with `Merge Errors` like any other VI. When new controls are NOT
    allowed, do not leave the chain dangling - an unwired error output pops LabVIEW's automatic
-   error dialog, a modal that stops the whole gRPC service during a test run - and do not reach for
-   `Simple Error Handler.vi` (it lives in an `.llb`, so it is not callable by bare name): return
-   `NEEDS CLARIFICATION` asking whether an `error out` indicator may be added.
+   error dialog, a modal that stops the whole gRPC service during a test run. `Simple Error
+   Handler.vi` IS callable by bare name on both backends (it lives in the `error.llb` FOLDER; this
+   line said the opposite until 2026-10-15), but it raises the same kind of modal on an error. So
+   return `NEEDS CLARIFICATION` asking whether an `error out` indicator may be added, and name
+   `Simple Error Handler.vi` as the alternative with that cost.
    **EVERY EVENT BUTTON MUST BE WIRED IN THE SCAFFOLD, even one whose value the program never
    needs** - the graft refuses an unwired terminal (`scaffoldTerminalUnwired`). The pattern that
    keeps the user's click count right: put the button's terminal INSIDE its own Value Change
@@ -786,6 +787,11 @@ path and the exact `lvai_graft_diagram` call, so the orchestrator grafts. Two gr
 paste each other's diagrams.
 
 ### Phase 7 — The icon, last
+
+**`lvai_generate_vi` already drew one** (since 2026-10-17, its `icon` step, lines derived from the
+VI name). Pass `icon="DAQ|3AI|TDMS"` to that call to choose the text up front - then this phase is
+only a check of that step's `ok`. Use the call below when the step failed or the VI was changed
+afterwards by a route that does not keep it.
 
 **One call. Do not draw the PNG yourself.**
 
@@ -959,29 +965,49 @@ now, with two numbers and a fixed procedure:
    wrote. Every case adds its own row of calls and assertions - measured 2026-09-26, a thirteen-case
    method test came out 4345 x 4084 px, about 310 px of height per case - so plan about THREE cases
    per test VI and list them all in one runner. `withinBudget: false` on a test VI means split it.
-5. **LabVIEW's own clean-ups run inside `lvai_generate_vi`** (the user's rules of 2026-10-12):
-   `cleanUpDiagram` (Clean Up Diagram) on every deliverable, BEFORE `diagramSize` is measured, and
-   `cleanUpPanel` (the algorithm behind Edit - Clean Up Panel) on every VI that is NOT the
-   application's MAIN VI. **Pass `cleanUpPanel: false` when you generate the main VI** - its panel
-   is the user interface and laid out on purpose - and never run either on a GRAFTED supplied
-   panel. Both default from `measureDiagram`, so helpers skip them. A panel with a tab control or a
-   splitter is skipped by design (the algorithm would open a modal dialog); a failed clean-up
-   leaves the VI as generated and is named in the note, not a reason to regenerate. `lvai_swap_subvis`,
-   `lvai_add_class_method` and `lvai_lunit_add_test_method` clean up the same way since 2026-10-13;
-   a DQMH module's `Main.vi` is never cleaned up, on any route.
+5. **The clean-ups run inside `lvai_generate_vi`** (the user's rules of 2026-10-12):
+   `cleanUpDiagram` on every deliverable, BEFORE `diagramSize` is measured, and `cleanUpPanel` (the
+   algorithm behind Edit - Clean Up Panel) on every VI that is NOT the application's MAIN VI.
+   **Since 2026-10-16 `cleanUpDiagram` is OUR layout engine, the pipeline of `lvai_layout_diagram`**,
+   no longer LabVIEW's Clean Up Diagram (the user's decision). The step says so in `engine`. What it
+   does:
+   - parallel loops stacked in one column;
+   - one straight error rail along the bottom;
+   - constants stacked in front of the terminals they feed;
+   - comments kept with their node;
+   - every structure sized to its contents.
+
+   **Pass `cleanUpPanel: false` when you generate the main VI** - its panel is the user interface
+   and laid out on purpose - and never run either on a GRAFTED supplied panel. Both default from
+   `measureDiagram`, so helpers skip them. A panel with a tab control or a splitter is skipped by
+   design (the algorithm would open a modal dialog). A layout that does not finish puts the VI back
+   as generated and is named in the note; it is not a reason to regenerate. `lvai_swap_subvis`,
+   `lvai_add_class_method` and `lvai_lunit_add_test_method` clean up the same way. A DQMH module's
+   `Main.vi` is never cleaned up automatically, on any route.
 
 **A repeated operation becomes ONE generic subVI taking an ARRAY.** Six property nodes that differ
 only in which control they point at is the canonical case: one call taking the group and one value
 replaces them. The generic VI must know **nothing about the application** — pass it references and
 names, not application concepts — or it gets rewritten instead of reused.
 
-**To act on the caller's own controls**, read the panel with two property nodes whose `reference`
-input is left UNWIRED, which means *this VI*:
+**To act on the caller's own controls, take a BOUND REFERENCE to each one.** Until 2026-10-20
+this paragraph said such a reference cannot be authored and sent you to an array of control NAMES
+plus a lookup VI. That was wrong: it works on both backends, measured by running.
+`<Node _name="VI Server Reference" element="<control label>" outputs="<label>:<net>"/>` is the
+reference. Wire it into a `Property Node` or `Invoke Node` (`type="{LV.Boolean}"`, `{LV.Digital}`,
+`{LV.String}`, `{LV.WaveformChart}`, or `{LV.Control}` for any control), or pass it to a subVI
+whose pane terminal is a refnum: `ref{LV.Control}` for any control, `ref{LV.String}`, or STRICTLY
+typed with the control's data type - `ref{LV.Boolean}{bool}`, `ref{LV.Digital}{double}`,
+`ref{LV.WaveformChart}{double}` (NI's own spelling). Everything in this paragraph runs on BOTH backends, measured. A GROUP is
+`Build Array` over the references into a generic subVI taking `array{ref{LV.Control}}` that indexes
+them in a For Loop - no names, so a renamed control stays in its group. Worked examples to copy
+spellings from, in the source tree: `experiments\aixml-without-grpc\tests\t153`, `t165`-`t170`
+(a typed chart reference into a subVI, two references merged by a Case tunnel into one
+`{LV.Control}` node, an Invoke Node `Reinit To Dflt` through `ref{LV.Control}`, a reference group).
+NOT for a Web Browser control, which AIXML writes as a string: use a stand-in and
+`lvai_bind_control_references`. To read the WHOLE panel, the pair with an UNWIRED `reference`
+(*this VI*) still applies:
 `{LV.VI}` `read+Front Panel` -> `{LV.Panel}` `read+Controls[]` -> `array{ref{LV.Control}}`.
-A control reference **bound to a named control cannot be authored** (measured: `link` is not
-declared for `<Constant>`, and an implicit property node has no `reference out`), so the group
-travels as an array of NAMES and a generic lookup VI turns it into references. Say in the caller's
-documentation that renaming a control silently drops it out of its group.
 
 **Know what factoring buys.** Width follows the longest data-dependency CHAIN, height follows what
 sits in PARALLEL — measured, 1094 -> 880 px of height for ten nodes pulled out, with the width

@@ -91,8 +91,9 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
             """)]
         string? newViPath = null,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(backend, "lvai_create_override", async () =>
         {
             var (plan, refusal) = PlanCreate(classPath, parentMethod, newViPath);
             if (refusal is not null) return refusal;
@@ -162,12 +163,12 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
                 ["note"] = ok
                     ? "Created and listed in the class file. Close the project and read it cold with " +
-                      "lvai_exec_state (state 1 expected); put it in the class's override folder with " +
-                      "lvai_move_to_folder if the project keeps one."
+                      "lvai_exec_state (state 1 expected); put it in the class's override folder " +
+                      "if the project keeps one - lvai_move_to_folder does that, with the project active."
                     : "The helper reported no error but the class file does not show a dynamic member at " +
                       "the new path. Treat this as a failure and read `verify`.",
             });
-        });
+        }));
 
     /// <summary>The helper's stages in diagram order, each with the name a failure reports.</summary>
     internal static readonly (string Indicator, string Label)[] CreateStages =
@@ -432,8 +433,9 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         [Description("The .lvproj to open first; omit when it is already open and active")]
         string? projectPath = null,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(backend, "lvai_af_add_hook", async () =>
         {
             if (AfOverrides.ParseShape(shape) is not { } parsed)
                 return Json.Error("badArguments",
@@ -579,7 +581,7 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
                           "control with the project closed) before trying again.",
             };
             return Json.Document(DqmhHeadless.Merge(answer, detail));
-        });
+        }));
 
     internal static readonly (string Indicator, string Label)[] AddStages =
     [
@@ -606,10 +608,16 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         wire leaves a loose end, and both the override and a sibling override of the same class then
         read state 0 ("error of type 1000088"); Remove Bad Wires on the edited VI cleared both
         (measured). The node is chosen by the hook's VI name; with two of the same name pass
-        `occurrence`. A dry run lists the subVIs on the diagram. A series hook cannot be put back by
-        a delete: the wire through it is gone, and Remove Bad Wires leaves the override's terminal
-        unwired - for a series hook restore the bare override from version control and re-hook
-        instead. NEEDS THE PROJECT OPEN AND ACTIVE. The kit's delete + clean route is measured;
+        `occurrence`. A dry run lists the subVIs on the diagram. A SERIES HOOK IS BYPASSED, the
+        inverse of the series insert: `hookShape` (read off the override's own export) names each
+        output something reads, the call pairs it with the hook's input of the same stem
+        (`<C> out` -> `<C> in`, `error out` -> `error in`), and the helper connects the wire's
+        source at that input straight to every sink of that output before the node goes
+        (`bypassed`, `sinksReconnected`). An output with no input of its stem is refused before
+        anything changes (`seriesHookNotRemovable`). Before 2026-10-17 a series remove cut the
+        class wire and SAVED the eBad override; a remove that leaves the override broken anyway is
+        still NOT SAVED (`removeBrokeOverride`): the file on disk stays the working one. NEEDS THE
+        PROJECT OPEN AND ACTIVE. The kit's delete + clean route is measured;
         Measured 2026-10-10: one hook removed (matches 1, state 1 cold for the override and every
         sibling), `hookNodeAmbiguous` and `occurrence`. NOT RELIABLE: the unsaved-edit check and the
         sibling re-save both read the FP/BD Mods Bitsets. A hand edit in the IDE sets them - a sibling
@@ -628,8 +636,9 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         [Description("The .lvproj to open first; omit when it is already open and active")]
         string? projectPath = null,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(backend, "lvai_af_remove_hook", async () =>
         {
             var (target, targetError) = Target(overridePath, classPath);
             if (targetError is not null) return targetError;
@@ -679,6 +688,35 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
             var siblings = SiblingOverrides(target);
             detail["siblingOverrides"] = DqmhHeadless.Array(siblings);
 
+            // A SERIES HOOK IS REFUSED BEFORE ANYTHING CHANGES. Its output feeds the rest of the
+            // override, so a delete leaves that sink unwired - measured 2026-10-17 on Pre Launch Init
+            // on both backends: state 1 before, 0 after ("Run-time type not propagated from dynamic
+            // input to dynamic output"), and the call then SAVED that over the working override.
+            // The override's own export says which shape it is, on the backend in force.
+            var (aixml, exportCode, exportMessage) = await BackendRoute.ExportAsync(
+                connection, target.OverridePath, "af-remove", timeoutSeconds, ct);
+            var shape = exportCode == 0 && aixml is not null ? HookShape(aixml, exact) : null;
+            detail["hookShape"] = shape is null
+                ? new JsonObject { ["read"] = false, ["reason"] = exportMessage ?? "the export did not parse" }
+                : new JsonObject
+                {
+                    ["read"] = true,
+                    ["nodes"] = shape.Nodes,
+                    ["seriesNodes"] = shape.SeriesNodes,
+                    ["consumedOutputs"] = DqmhHeadless.Array(shape.ConsumedOutputs),
+                    ["bypassPairs"] = DqmhHeadless.Array(shape.Pairs.Select(p => $"{p.Near} -> {p.Far}")),
+                };
+            if (shape is { SeriesNodes: > 0, Unpaired.Count: > 0 })
+                return Json.Error("seriesHookNotRemovable",
+                    $"'{exact}' sits IN SERIES, and its output(s) {string.Join(", ", shape.Unpaired)} have no " +
+                    "input of the same stem to take their source from, so the wire through it cannot " +
+                    "be bypassed and a delete would leave the override not executable. Nothing was " +
+                    "changed. Restore the bare override from version control (or recreate it with " +
+                    "lvai_create_override) and hook again.", detail);
+            // Series nodes are bypassed; when NI's export could not be read the backstop below
+            // still keeps a broken override off the disk.
+            var pairs = shape is { SeriesNodes: > 0 } ? shape.Pairs : [];
+
             // UNSAVED EDITS THIS CALL DID NOT MAKE ARE NOT ITS TO SAVE. The sibling re-save below
             // exists for the 1000088 loose end the delete leaves, so a sibling that is ALREADY
             // modified before anything changes carries someone else's work - refused, named, and
@@ -698,17 +736,28 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
             if (await headless.EnsureWrapperAsync(scripts, RemoveHelper, [], project, steps, timeoutSeconds, ct)
                 is { } removeWrapperError)
                 return removeWrapperError;
-            var (removed, removeError) = await dqmh.RunDetailedAsync(scripts, RemoveHelper, new()
+            var removeInputs = new Dictionary<string, string>
             {
                 ["Override VI Path"] = target.OverridePath,
                 ["Hook VI Name"] = exact,
                 ["Occurrence"] = choice.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            }, timeoutSeconds, ct);
+            };
+            AddArray(removeInputs, "Bypass Near", pairs.Select(p => p.Near));
+            AddArray(removeInputs, "Bypass Far", pairs.Select(p => p.Far));
+            var (removed, removeError) = await dqmh.RunDetailedAsync(scripts, RemoveHelper, removeInputs,
+                timeoutSeconds, ct);
             if (removed is null || removeError is not null)
                 return Json.Error("helperFailed", "The hook could not be removed.",
                     DqmhHeadless.Merge(detail, new JsonObject { ["helperError"] = removeError, ["steps"] = steps }));
             var failed = FirstFailedStage(removed, RemoveStages);
-            var removedOk = failed is null;
+            var stateBefore = Int(DqmhTools.Scalar(removed, "state before"));
+            var stateAfter = Int(DqmhTools.Scalar(removed, "state after"));
+            // A REMOVE THAT BROKE THE OVERRIDE IS NOT SAVED: saving would write the broken VI over
+            // the working one. The pre-check above refuses the series shape; this catches the rest.
+            var bypassMissing = DqmhHeadless.Listed(removed, "Bypass Missing");
+            var bypassIncomplete = failed is null && pairs.Count > 0 && bypassMissing.Count > 0;
+            var brokeIt = failed is null && !bypassIncomplete && BrokeOverride(stateBefore, stateAfter);
+            var removedOk = failed is null && !brokeIt && !bypassIncomplete;
 
             JsonObject? save = null, siblingSave = null;
             if (removedOk)
@@ -727,10 +776,15 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
             return Json.Document(DqmhHeadless.Merge(new JsonObject
             {
                 ["ok"] = removedOk && saved,
-                ["failedAtStep"] = !removedOk ? failed?.Label : !saved ? "save" : null,
+                ["failedAtStep"] = bypassIncomplete ? "bypassSeries"
+                    : brokeIt ? "overrideBroken" : !removedOk ? failed?.Label : !saved ? "save" : null,
+                ["errorKind"] = bypassIncomplete ? "bypassTerminalMissing" : brokeIt ? "removeBrokeOverride" : null,
+                ["bypassed"] = DqmhHeadless.Array(DqmhHeadless.Listed(removed, "Bypassed")),
+                ["bypassMissing"] = DqmhHeadless.Array(bypassMissing),
+                ["sinksReconnected"] = DqmhHeadless.Array(DqmhHeadless.Listed(removed, "Sinks Reconnected")),
                 ["errorCode"] = failed is null ? null : StageCode(removed, failed.Value.Indicator),
-                ["execStateBefore"] = Int(DqmhTools.Scalar(removed, "state before")),
-                ["execStateAfter"] = Int(DqmhTools.Scalar(removed, "state after")),
+                ["execStateBefore"] = stateBefore,
+                ["execStateAfter"] = stateAfter,
                 ["save"] = save,
                 ["siblingSave"] = siblingSave,
                 ["projectPath"] = project,
@@ -739,10 +793,19 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
                 ["note"] = removedOk && saved
                     ? "Removed, bad wires cleared, saved. Close the project and read the override and " +
                       "every sibling override COLD with lvai_exec_state."
-                    : "Not fully done - read failedAtStep. Anything unsaved is in memory only: close " +
-                      "the project WITHOUT saving to discard it.",
+                    : bypassIncomplete
+                        ? "A bypass pair named a terminal the hook node does not have (bypassMissing), so " +
+                          "NOTHING WAS SAVED. The edit is in LabVIEW's memory only: close the project in the " +
+                          "IDE with Don't Save, or restart LabVIEW."
+                    : brokeIt
+                        ? "The delete left the override NOT executable, so NOTHING WAS SAVED - the file on " +
+                          "disk is still the working override. The broken copy is in LabVIEW's memory only: " +
+                          "close the project in the IDE with Don't Save (lvai_close_active_project SAVES " +
+                          "first and would write it), or restart LabVIEW."
+                        : "Not fully done - read failedAtStep. Anything unsaved is in memory only: close " +
+                          "the project WITHOUT saving to discard it.",
             }, detail));
-        });
+        }));
 
     internal const string ModifiedHelper = "lvai_af_modified_members";
 
@@ -783,6 +846,7 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
     internal static readonly (string Indicator, string Label)[] RemoveStages =
     [
         ("open vi error", "openOverride"),
+        ("bypass error", "bypassSeries"),
         ("delete error", "deleteHook"),
         ("remove bad wires error", "removeBadWires"),
         ("error out", "closeReferences"),
@@ -801,6 +865,80 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
         var count = matches.Count;
         var choice = occurrence ?? (count == 1 ? 0 : null);
         return (spellings[0], count, choice is { } c && c < count ? c : null);
+    }
+
+    /// <summary>True when the remove turned an executable override into a broken one.</summary>
+    internal static bool BrokeOverride(int? stateBefore, int? stateAfter) =>
+        stateBefore is not 0 && stateAfter is 0;
+
+    /// <summary>How the hook's nodes sit on the override, read off its AIXML export.</summary>
+    internal sealed record HookShapeResult(int Nodes, int SeriesNodes, List<string> ConsumedOutputs,
+        List<(string Near, string Far)> Pairs, List<string> Unpaired);
+
+    /// <summary>
+    /// The nodes calling <paramref name="hookViName"/> and how many of them are IN SERIES: an output
+    /// net that any other element reads. The two exporters spell the target differently - NI's
+    /// `C.lvclass\3AHook.vi`, the reader's `C.lvclass:Hook.vi` - so the file name after the last
+    /// `:` or `\` is compared. Each consumed output is PAIRED with the input whose wire it bypasses:
+    /// `<stem> out` takes `<stem> in`, or NI's `<stem> in (no error)`, matched by name only. An
+    /// output with no such input is Unpaired.
+    /// Null when the export does not parse.
+    /// </summary>
+    internal static HookShapeResult? HookShape(string aixml, string hookViName)
+    {
+        XDocument doc;
+        try { doc = XDocument.Parse(aixml); }
+        catch (System.Xml.XmlException) { return null; }
+        var wanted = LeafName(hookViName);
+        var elements = doc.Descendants().ToList();
+        var read = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in elements)
+        {
+            foreach (var net in Pairs(e.Attribute("inputs")?.Value).Select(p => p.Net))
+                if (net.Length > 0) read.Add(net);
+            foreach (var name in new[] { "cond", "selectin" })
+                if (e.Attribute(name)?.Value is { Length: > 0 } v) read.Add(v);
+        }
+        int nodes = 0, series = 0;
+        var consumed = new List<string>();
+        var pairs = new List<(string Near, string Far)>();
+        var unpaired = new List<string>();
+        foreach (var call in elements.Where(e => e.Name.LocalName == "Call"
+                     && string.Equals(LeafName(Decode(e.Attribute("target")?.Value ?? "")), wanted,
+                         StringComparison.OrdinalIgnoreCase)))
+        {
+            nodes++;
+            var outs = Pairs(call.Attribute("outputs")?.Value)
+                .Where(p => p.Net.Length > 0 && read.Contains(p.Net)).Select(p => p.Terminal).ToList();
+            if (outs.Count == 0) continue;
+            series++;
+            // By NAME, wired or not: the pylabview reader leaves the Call Parent node out of its
+            // export, so a hook input fed by Call Parent reads unwired there. The helper reads the
+            // real source off the diagram, and an input with none fails its bypass stage.
+            var hookInputs = Pairs(call.Attribute("inputs")?.Value).Select(p => p.Terminal).ToList();
+            foreach (var far in outs.Where(o => !consumed.Contains(o)))
+            {
+                consumed.Add(far);
+                if (BypassInput(far, hookInputs) is { } near) pairs.Add((near, far));
+                else unpaired.Add(far);
+            }
+        }
+        return new HookShapeResult(nodes, series, consumed, pairs, unpaired);
+
+        static string Decode(string s) => s.Replace(@"\3A", ":").Replace(@"\5C", @"\");
+        static string? BypassInput(string output, List<string> inputs)
+        {
+            if (!output.EndsWith(" out", StringComparison.Ordinal)) return null;
+            var stem = output[..^4];
+            return inputs.FirstOrDefault(i => i == stem + " in")
+                   ?? inputs.FirstOrDefault(i => i == stem + " in (no error)");
+        }
+        static string LeafName(string s) => s[(s.LastIndexOfAny([':', '\\']) + 1)..];
+        static IEnumerable<(string Terminal, string Net)> Pairs(string? list) =>
+            (list ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Split(':', 2))
+                .Where(p => p.Length == 2)
+                .Select(p => (p[0], p[1]));
     }
 
     /// <summary>
@@ -986,8 +1124,10 @@ internal sealed class AfOverrideTools(LvaiConnection connection)
     private async Task<(ViTerminals.Result? Terms, string? Error)> TerminalsAsync(
         string vi, int timeoutSeconds, CancellationToken ct)
     {
-        var (aixml, _, message) = await BackendRoute.ExportAsync(connection, vi, "af-hook", timeoutSeconds, ct);
-        if (aixml is null) return (null, message);
+        // ON THE BACKEND IN FORCE: NI's converter on grpc, our reader on pylabview - so a hook's
+        // terminals are read without NI's service when the call runs without it.
+        var (aixml, code, message) = await BackendRoute.ExportAsync(connection, vi, "af-hook", timeoutSeconds, ct);
+        if (code != 0 || aixml is null) return (null, message);
         return ViTerminals.Parse(aixml) is { } parsed ? (parsed, null) : (null, "the export did not parse");
     }
 

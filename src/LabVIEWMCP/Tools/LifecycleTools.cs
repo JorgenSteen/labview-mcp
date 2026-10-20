@@ -39,27 +39,17 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         launch routes and keeps only one whose process is still alive two seconds later. The
         winner is reported as launchMethod; if none survives you get errorKind
         'launch-did-not-survive' listing every attempt, never a hopeful 'starting'.
-        THE SERVICE COMES UP WITH LabVIEW ALONE - THE NIGEL CHAT IS NOT NEEDED. It needs
-        NI.NigelLocalService, and a LabVIEW start brings that up too, through NI's Discovery
-        service. Measured 2026-10-13, LabVIEW.exe started directly, no chat at any point:
-        with the local service already running, its features started 39-44 s after the launch
-        and lvai.LVAI answered at 79 s; with the local service STOPPED first, it was started
-        20 s after the launch, its features 57-62 s, and lvai.LVAI answered at 136 s (first
-        asked), a ValidateAIXML included both times. So while LabVIEW is still coming up,
-        calling again is right - the second call finds the instance and waits. For an
-        unattended long wait use the CLI: LabVIEWMCP --ensure-labview.
-        Twice the service has NOT come up until Nigel was opened - a LabVIEW up twenty
-        minutes with lvai.LVAI on none of 30 listener ports, and a start on 2026-10-10 with
-        the local service down; the cause is not established. That is the case for the Nigel
-        chat below - a remedy, not a requirement.
-        NIGEL CHAT (startNigelChat, default on): when LabVIEW has run for over 90 s, its service
-        does not answer, no LVNigelChat runs and no possible dialog is up, this starts the chat
-        ONCE per LabVIEW process the way LabVIEW's menu does - LVNigelChat.exe --lv-version
-        <add-on folder> --lv-bitness x86|x64 - through the same survive-the-job-object launch, and
-        reports it under nigelChat (a message box is named, never pressed). The command line is
-        the one a LabVIEW skill measured; this tool's port of it is UNMEASURED.
-        OWNERSHIP: a LabVIEW this call starts is recorded (pid + start time) as this server's, and
-        lvai_restart_labview may close it with no go-ahead. A LabVIEW found running is not.
+        THE SERVICE COMES UP WITH LabVIEW ITSELF, about 45 s after a cold start, with no Nigel
+        chat opened - measured 2026-10-17 with NI.NigelLocalService running. This text said for
+        weeks that the 'LV AI gRPC Service' starts with NIGEL and not with the IDE; that is
+        refuted. What still stands is the earlier observation that a LabVIEW up for twenty
+        minutes once held 30 listener ports and served lvai.LVAI on none of them - so a
+        'starting' that persists for more than about two minutes, with LabVIEW visibly
+        running, is not this tool being slow: then ask whoever is at the machine to open
+        Nigel, and call lvai_status once.
+        Otherwise, when LabVIEW is still coming up, calling again is right - the second call
+        finds the instance and waits. For an unattended long wait use the CLI:
+        LabVIEWMCP --ensure-labview.
         """)]
     public async Task<string> EnsureLabViewAsync(
         [Description("How long to wait for the gRPC service to answer, in seconds (capped at 45)")]
@@ -71,14 +61,22 @@ internal sealed class LifecycleTools(LvaiConnection connection)
             human dismisses it. Only ever cleared when this tool starts LabVIEW itself.
             """)]
         bool keepAutoSave = false,
-        [Description("""
-            Start the Nigel chat once when LabVIEW has run for over 90 s and its service still does
-            not answer - a remedy for a service that does not come up; normally it comes up with
-            LabVIEW alone. Never touches a running chat or the
-            NI.NigelLocalService process.
+        CancellationToken ct = default,
+        [Description(AixmlBackend.ParameterDescription + """
+             On pylabview READY means LabVIEW answers over its ActiveX server - what that backend
+            uses - not that NI's gRPC service answers: a LabVIEW older than 2026 has no such
+            service, and on pylabview nothing waits for Nigel.
             """)]
-        bool startNigelChat = true,
-        CancellationToken ct = default) =>
+        string? backend = null)
+    {
+        if (!AixmlBackend.TryResolve(backend, "lvai_ensure_labview", out var choice, out var bad))
+            return AixmlBackend.Refusal(bad);
+        return AixmlTools.WithBackend(await EnsureCoreAsync(waitSeconds, keepAutoSave,
+            choice.Name == AixmlBackend.PyLabview, ct), choice);
+    }
+
+    private async Task<string> EnsureCoreAsync(int waitSeconds, bool keepAutoSave, bool overCom,
+                                               CancellationToken ct) =>
         await Rpc.GuardAsync(async () =>
         {
             var budget = TimeSpan.FromSeconds(Rpc.ClampToolWait(waitSeconds));
@@ -144,25 +142,76 @@ internal sealed class LifecycleTools(LvaiConnection connection)
 
             // Poll until the service answers. A cold LabVIEW start is far slower than this
             // budget, hence the explicit "call again" outcome rather than a failure.
-            var (config, last, nigel) = await PollServiceAsync(token, ct, startNigelChat,
-                () => budget - stopwatch.Elapsed);
+            Exception? last = null;
 
-            if (config is not null)
-                return new JsonObject
+            while (!token.IsCancellationRequested)
+            {
+                if (overCom)
                 {
-                    ["ok"] = true,
-                    ["state"] = "ready",
-                    ["startedByThisCall"] = startedNow,
-                    ["launched"] = launched,
-                    ["launchMethod"] = launch?.Method,
+                    // ready = a running LabVIEW with a window answers over ActiveX; NotReady keeps
+                    // COM away from a LabVIEW still starting, which would launch a second one
+                    if (LabViewCom.NotReady() is { } notYet)
+                        last = new InvalidOperationException(notYet);
+                    else
+                    {
+                        try
+                        {
+                            var version = await LabViewCom.WithLabViewAsync(app =>
+                                app.GetType().InvokeMember("Version", System.Reflection.BindingFlags.GetProperty,
+                                    null, app, null, System.Globalization.CultureInfo.InvariantCulture)?.ToString(),
+                                10, token);
+                            return new JsonObject
+                            {
+                                ["ok"] = true,
+                                ["state"] = "ready",
+                                ["readyMeans"] = "LabVIEW answers over ActiveX (the pylabview backend's route); NI's gRPC service was not asked",
+                                ["startedByThisCall"] = startedNow,
+                                ["launched"] = launched,
+                                ["launchMethod"] = launch?.Method,
+                                ["autoSaveCleared"] = autoSave?.Describe(),
+                                ["labviewVersion"] = version,
+                                ["waitedMs"] = stopwatch.ElapsedMilliseconds,
+                            }.ToJsonString(Indented);
+                        }
+                        catch (Exception e) when (!ct.IsCancellationRequested)
+                        {
+                            last = e;
+                        }
+                    }
+                    try { await Task.Delay(2000, token); }
+                    catch (OperationCanceledException) { /* budget spent */ }
+                    continue;
+                }
+                try
+                {
+                    connection.Invalidate();   // the port changes with every LabVIEW start
+                    var client = await connection.GetClientAsync(token);
+                    var config = await client.GetApplicationConfigurationAsync(
+                        new GetApplicationConfigurationRequest(),
+                        deadline: Rpc.Deadline(10), cancellationToken: token);
+
+                    return new JsonObject
+                    {
+                        ["ok"] = true,
+                        ["state"] = "ready",
+                        ["startedByThisCall"] = startedNow,
+                        ["launched"] = launched,
+                        ["launchMethod"] = launch?.Method,
                     ["autoSaveCleared"] = autoSave?.Describe(),
-                    ["port"] = connection.Port,
-                    ["discoveredVia"] = connection.DiscoveredVia,
-                    ["applicationLanguage"] = config.Language,
-                    ["waitedMs"] = stopwatch.ElapsedMilliseconds,
-                    ["ownedByThisServer"] = OwnedJson(),
-                    ["nigelChat"] = nigel,
-                }.ToJsonString(Indented);
+                        ["port"] = connection.Port,
+                        ["discoveredVia"] = connection.DiscoveredVia,
+                        ["applicationLanguage"] = config.Language,
+                        ["waitedMs"] = stopwatch.ElapsedMilliseconds,
+                    }.ToJsonString(Indented);
+                }
+                // The caller's own cancellation must still escape; only the budget is absorbed.
+                catch (Exception e) when (!ct.IsCancellationRequested)
+                {
+                    last = e;
+                    try { await Task.Delay(2000, token); }
+                    catch (OperationCanceledException) { /* budget spent - the loop ends below */ }
+                }
+            }
 
             ct.ThrowIfCancellationRequested();
 
@@ -186,8 +235,6 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                 ["waitSecondsRequested"] = waitSeconds,
                 ["waitSecondsUsed"] = (int)budget.TotalSeconds,
                 ["lastError"] = last?.Message,
-                ["ownedByThisServer"] = OwnedJson(),
-                ["nigelChat"] = nigel,
                 // "LabVIEW is up" was asserted unconditionally here, and it was wrong exactly when
                 // it mattered: with runningProcesses 0 the advice sent the reader after the AI
                 // service while the IDE itself was gone.
@@ -201,12 +248,14 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                       "the first call spent its whole 45 s budget and the second answered ready in " +
                       "1.2 s, 12.1 s, 27.7 s and 1.2 s. Do NOT read `lastError: \"The operation " +
                       "was canceled.\"` as a failure; it is this call's own budget expiring. Only " +
-                      "if a SECOND call also comes back `starting` is something wrong - then the " +
-                      "service has not come up with LabVIEW - lvai_labview_state shows whether " +
-                      "NI.NigelLocalService runs; opening the Nigel chat has helped - or use the CLI " +
-                      "--ensure-labview for an unattended long wait.",
+                      "if a SECOND call also comes back `starting` is something wrong - the service " +
+                      "comes up with LabVIEW itself, about 45 s after a cold start (measured " +
+                      "2026-10-17); if it is still missing after about two minutes, ask the user to " +
+                      "open Nigel, or use the CLI --ensure-labview for an unattended long wait.",
             }.ToJsonString(Indented);
         });
+
+    // ---- for lvai_restart_labview (fork-only: upstream did not port the restart) ----
 
     /// <summary>
     /// Poll the service until it answers or <paramref name="token"/> (the budget) runs out. On the
@@ -275,16 +324,6 @@ internal sealed class LifecycleTools(LvaiConnection connection)
             ct);
     }
 
-    /// <summary>Record the LabVIEW this server just started, with its start time (pids are reused).</summary>
-    private static void RecordOwnership(int? pid)
-    {
-        if (pid is not { } id) return;
-        var process = Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess)
-            .FirstOrDefault(p => p.Id == id);
-        if (process is not null) LabViewOwnership.Record(id, process.StartTime);
-    }
-
-    private static JsonObject? OwnedJson() => LabViewOwnership.ToJson();
 
     /// <summary>
     /// Can the service be reached now, with a short deadline - the restart's service guard. Through a
@@ -415,5 +454,18 @@ internal sealed class LifecycleTools(LvaiConnection connection)
             ["rule"] = "newest release first, 32-bit preferred within a release, NXG excluded",
             ["installations"] = list,
         }.ToJsonString(Indented);
+    }
+
+    /// <summary>
+    /// Record the LabVIEW this server just started, with its start time (pids are reused), so
+    /// lvai_labview_state can say `startedByThisServer`. From the colleague's fork, where the
+    /// restart's ownership rule reads it; here only the state tool does.
+    /// </summary>
+    private static void RecordOwnership(int? pid)
+    {
+        if (pid is not { } id) return;
+        var process = Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess)
+            .FirstOrDefault(p => p.Id == id);
+        if (process is not null) LabViewOwnership.Record(id, process.StartTime);
     }
 }

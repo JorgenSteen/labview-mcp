@@ -23,6 +23,20 @@ namespace LabVIEWMcp.Tools;
 /// </summary>
 internal sealed class HousekeepingHelpers(LvaiConnection connection)
 {
+    /// <summary>
+    /// The `checkUnsaved` parameter the four housekeeping tools share. The user's rule of
+    /// 2026-10-17: the unsaved-changes refusals guard an EXISTING project where someone may have VIs
+    /// open with edits of their own; in a build this session made itself there is nobody else's
+    /// work to protect, and the refusal only gets in the way.
+    /// </summary>
+    internal const string CheckUnsavedDescription = """
+        Refuse when the target (or, for lvai_add_to_class, any VI in the project's instance) already
+        carries UNSAVED changes, because this call's save would write them too. Default true - keep
+        it for any EXISTING project, where someone may have VIs open with edits of their own. Pass
+        false only in a project this session is building itself: the save then writes whatever is
+        unsaved, which is what a build wants. The user's rule of 2026-10-17.
+        """;
+
     /// <summary>A helper VI ready to run, or the error answer that stopped it.</summary>
     internal async Task<(string? HelperVi, bool Generated, string? Failure)> EnsureAsync(
         string helperName, int timeoutSeconds, CancellationToken ct)
@@ -35,6 +49,18 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
         var aixml = Path.Combine(scripts, helperName + ".xml");
         if (!File.Exists(aixml))
             return (null, false, Json.Error("scriptsMissing", $"No helper AIXML at '{aixml}'."));
+
+        // ON pylabview THE HELPER IS COMPOSED, not built by NI's converter, and runs over ActiveX
+        // (RunAsync below routes the same way) - so none of these tools needs NI's service there.
+        if (DqmhTools.OnPyLabview)
+        {
+            var (composed, problem) = await ComposedHelpers.EnsureAsync(helperName + ".xml", timeoutSeconds, ct);
+            return composed is not null
+                ? (composed, false, null)
+                : (null, false, Json.Error("helperNotComposable",
+                    $"The helper {helperName}.xml could not be composed for the pylabview backend: {problem}",
+                    new { aiXmlPath = aixml }));
+        }
 
         var helperVi = Path.Combine(DqmhTools.HelperDirectory(), helperName + ".vi");
         if (!HelperCache.NeedsRebuild(aixml, helperVi)) return (helperVi, false, null);
@@ -123,22 +149,21 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
     internal async Task<JsonArray> OpenThroughProjectAsync(
         IEnumerable<string> viPaths, string projectPath, int timeoutSeconds, CancellationToken ct)
     {
+        // THROUGH lvai_open_file, which follows the calling tool's backend: NI's OpenFile on grpc,
+        // the composed lvai_open_vi_in_project over ActiveX on pylabview.
         var opened = new JsonArray();
+        var actions = new ActionTools(connection);
         foreach (var vi in viPaths)
         {
-            var response = await connection.InvokeAsync((c, t) =>
-                c.OpenFileAsync(new OpenFileRequest
-                {
-                    ViPath = vi,
-                    ViName = Path.GetFileName(vi),
-                    ProjectPath = projectPath,
-                    ProjectName = Path.GetFileName(projectPath),
-                }, deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
+            var answer = Parse(await actions.OpenFileAsync(viPath: vi, viName: Path.GetFileName(vi),
+                projectPath: projectPath, projectName: Path.GetFileName(projectPath), checkActive: false,
+                timeoutSeconds, ct: ct)) as JsonObject;
+            var code = answer?["errorCode"] is JsonValue c && c.TryGetValue<int>(out var n) ? n : -1;
             opened.Add(new JsonObject
             {
                 ["viPath"] = vi,
-                ["errorCode"] = response.ErrorCode,
-                ["errorMessage"] = response.ErrorMessage,
+                ["errorCode"] = code,
+                ["errorMessage"] = answer?["errorMessage"]?.DeepClone() ?? answer?["error"]?.DeepClone(),
             });
         }
         return opened;

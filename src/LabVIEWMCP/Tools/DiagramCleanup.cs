@@ -6,16 +6,18 @@ using LabVIEWMcp.Lvai;
 namespace LabVIEWMcp.Tools;
 
 /// <summary>
-/// LabVIEW's own Clean Up Diagram on a VI this server has just written, and the save in place -
-/// the user's recommendation of 2026-10-12 for every VI we create, on both backends: neither NI's
-/// converter nor our composer lays a diagram out the way LabVIEW's clean-up does, and a person
-/// opening the VI should not have to press Ctrl+U first.
+/// The clean-up every VI this server has just written goes through, and the save in place - the
+/// user's recommendation of 2026-10-12, on both backends: neither NI's converter nor our composer
+/// lays a diagram out, and a person opening the VI should not have to press Ctrl+U first.
 ///
-/// THE CALL IS NI's OWN. <c>{LV.VI}</c> <c>BD.CleanUp</c> followed by <c>Save.Instrument</c> with
-/// the path unwired is exactly what Message Maker does on every VI it scripts (Build Do.vi, Build
-/// Send.vi, Build Concrete Do.vi), read off their exports. The helper is
-/// <c>scripts\lvai_cleanup_diagram.xml</c>: built by NI's converter and run in the add-on's instance
-/// on grpc, COMPOSED and run over ActiveX on pylabview - the composer has the part.
+/// THE DIAGRAM IS LAID OUT BY OUR OWN ENGINE since 2026-10-16, the user's decision: the pipeline of
+/// <c>lvai_layout_diagram</c> (<see cref="DiagramLayoutTools.LayoutCoreAsync"/>), without its verify
+/// pass. Until then it was LabVIEW's <c>{LV.VI}</c> <c>BD.CleanUp</c>, which spread a DQMH Main.vi
+/// from 1344 x 805 to 3805 x 1692 px and tore comments off their nodes (docs/diagram-layout.md).
+/// The step keeps its name, `cleanUpDiagram`, and says which ran in `engine`. A layout that does not
+/// finish puts the VI back as it was generated, from the copy the pipeline keeps.
+///
+/// THE FRONT PANEL is still LabVIEW's own algorithm (`cleanUpPanel`, below).
 ///
 /// A SAVE BY LabVIEW CAN WRITE COMPILED CODE, which the VIs we write must never carry. So the file
 /// is checked afterwards: a VI that had no VICD before and has one now is stripped back to source
@@ -24,7 +26,8 @@ namespace LabVIEWMcp.Tools;
 /// </summary>
 internal sealed class DiagramCleanup(LvaiConnection connection)
 {
-    internal const string HelperFileName = "lvai_cleanup_diagram.xml";
+    /// <summary>What the `engine` field of a `cleanUpDiagram` step names.</summary>
+    internal const string Engine = "lvai_layout_diagram";
 
     /// <summary>
     /// THE FRONT PANEL'S counterpart, the user's request of 2026-10-12 for every VI that is not a
@@ -39,17 +42,61 @@ internal sealed class DiagramCleanup(LvaiConnection connection)
 
     private sealed record Kind(string Step, string Helper, string What, string Done);
 
-    private static readonly Kind Diagram = new("cleanUpDiagram", HelperFileName, "diagram",
-        "LabVIEW's Clean Up Diagram ran and the VI was saved in place");
-
     private static readonly Kind Panel = new("cleanUpPanel", PanelHelperFileName, "front panel",
         "LabVIEW's Clean Up Panel algorithm (Arrange FP) ran and the VI was saved in place");
 
-    /// <summary>The `cleanUpDiagram` step for one VI. Never throws for a LabVIEW refusal: the
-    /// answer's `ok` says whether the diagram was cleaned and saved.</summary>
-    public Task<JsonObject> RunAsync(string viPath, string backend, int timeoutSeconds,
-                                     CancellationToken ct) =>
-        RunAsync(Diagram, viPath, backend, timeoutSeconds, ct);
+    /// <summary>The `cleanUpDiagram` step for one VI: our layout, saved in place. Never throws
+    /// for a LabVIEW refusal: the answer's `ok` says whether the diagram was laid out and saved.</summary>
+    public async Task<JsonObject> RunAsync(string viPath, string backend, int timeoutSeconds,
+                                           CancellationToken ct)
+    {
+        var full = Path.GetFullPath(viPath);
+        var step = new JsonObject { ["step"] = "cleanUpDiagram", ["backend"] = backend, ["engine"] = Engine };
+        if (!File.Exists(full)) return Fail(step, "There is no VI at " + full + " to clean up.");
+        if (IsDqmhMain(full)) return DqmhSkipped(step);
+
+        var compiledBefore = BulkTools.ContainsCompiledCode(full);
+        var answer = JsonNode.Parse(await BackendRoute.WithBackendAsync(backend, "cleanUpDiagram",
+            () => new DiagramLayoutTools(connection).LayoutCoreAsync(full, dryRun: false, verify: false,
+                                                                     render: false, renderDirectory: null,
+                                                                     timeoutSeconds, ct))) as JsonObject;
+        foreach (var key in new[] { "before", "planned", "moves", "structuresSized", "tunnelsMoved",
+                                    "structuresKeptAsTheyAre", "heldInMemory", "moveErrors", "sizeErrors",
+                                    "tunnelErrors", "compiledCodeStripped" })
+            if (answer?[key] is { } value) step[key] = value.DeepClone();
+
+        if (answer?["ok"]?.GetValue<bool>() != true)
+        {
+            // a layout that stopped half way may have saved a half-arranged diagram: the copy the
+            // pipeline took before applying is the VI as it was generated
+            if (answer?["backupPath"]?.GetValue<string>() is { } backup && File.Exists(backup))
+            {
+                try { File.Copy(backup, full, overwrite: true); step["restored"] = true; }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { step["restored"] = false; }
+            }
+            step["layout"] = answer?.DeepClone();
+            var why = answer?["note"]?.GetValue<string>() ?? answer?["error"]?.GetValue<string>() ?? "no answer";
+            return Fail(step, "Our layout did not finish (" + why + "). The VI is as it was generated" +
+                              (step["restored"]?.GetValue<bool>() == false ? ", unless putting it back failed - read restored." : "."));
+        }
+        if (!compiledBefore && BulkTools.ContainsCompiledCode(full))
+            return Fail(step, "The diagram was laid out and saved, and LabVIEW's save wrote COMPILED CODE " +
+                              "into a VI that had none; stripping it again failed. Read compiledCodeStripped.");
+        step["ok"] = true;
+        step["note"] = "Our block diagram layout (lvai_layout_diagram) ran and the VI was saved in place" +
+                       (compiledBefore ? " (it carried compiled code before, and still does)." : ", source only.");
+        return step;
+    }
+
+    private static JsonObject DqmhSkipped(JsonObject step)
+    {
+        step["ok"] = true;
+        step["skipped"] = true;
+        step["note"] = "This is a DQMH module's Main.vi, which the automatic clean-up never touches - its " +
+                       "layout is Delacor's, and the DQMH tools rely on it (the user's rule of 2026-10-13). " +
+                       "lvai_layout_diagram named directly does lay it out.";
+        return step;
+    }
 
     /// <summary>The `cleanUpPanel` step for one VI; `skipped` when its panel holds a tab control
     /// or a splitter, which the algorithm would answer with a modal dialog.</summary>
@@ -63,14 +110,7 @@ internal sealed class DiagramCleanup(LvaiConnection connection)
         var full = Path.GetFullPath(viPath);
         var step = new JsonObject { ["step"] = kind.Step, ["backend"] = backend };
         if (!File.Exists(full)) return Fail(step, "There is no VI at " + full + " to clean up.");
-        if (IsDqmhMain(full))
-        {
-            step["ok"] = true;
-            step["skipped"] = true;
-            step["note"] = "This is a DQMH module's Main.vi, which is never cleaned up - its layout is " +
-                           "Delacor's, and the DQMH tools rely on it (the user's rule of 2026-10-13).";
-            return step;
-        }
+        if (IsDqmhMain(full)) return DqmhSkipped(step);
 
         var compiledBefore = BulkTools.ContainsCompiledCode(full);
         var writtenBefore = File.GetLastWriteTimeUtc(full);
@@ -181,7 +221,7 @@ internal sealed class DiagramCleanup(LvaiConnection connection)
     }
 
     /// <summary>Extract, pylv-strip-compiled.py, rebuild - the same three steps pylv_apply ends with.</summary>
-    private async Task<JsonObject> StripCompiledAsync(string viPath, int timeoutSeconds, CancellationToken ct)
+    internal async Task<JsonObject> StripCompiledAsync(string viPath, int timeoutSeconds, CancellationToken ct)
     {
         var answer = new JsonObject();
         if (PyLabview.Locate() is not { } bundle || StatusTools.ScriptsDirectory() is not { } scripts)
@@ -219,6 +259,94 @@ internal sealed class DiagramCleanup(LvaiConnection connection)
         {
             try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    internal const string FanRouteScript = "lvbd_fan_route.py";
+
+    /// <summary>
+    /// Extract, lvbd_fan_route.py, rebuild: each constant fan's wires get staggered geometry of our
+    /// own - two or more constants into one node, which LabVIEW's Clean Up Wire lays out one wire
+    /// at a time and may cross (Find Account's column constants, 2026-10-18). Runs AFTER the
+    /// layout's save, whose Clean Up Wire would replace it, on a VI LabVIEW does not hold; the
+    /// VI is rebuilt only when a table changed. A VI carrying compiled code is left alone, as every
+    /// pylabview edit in this repository leaves it (CLAUDE.md, "close the project").
+    /// </summary>
+    internal async Task<JsonObject> FanRouteAsync(string viPath, int timeoutSeconds, CancellationToken ct)
+    {
+        var answer = new JsonObject();
+        if (BulkTools.ContainsCompiledCode(viPath))
+        {
+            answer["ok"] = true;
+            answer["skipped"] = "The VI carries compiled code; its wires are left as LabVIEW routed them.";
+            return answer;
+        }
+        if (PyLabview.Locate() is not { } bundle || StatusTools.ScriptsDirectory() is not { } scripts)
+        {
+            answer["ok"] = false;
+            answer["note"] = "pylabview or the scripts folder is not available.";
+            return answer;
+        }
+        var directory = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "fanroute", Path.GetRandomFileName());
+        try
+        {
+            var pylv = new PyLabviewTools(connection);
+            var extract = JsonNode.Parse(await pylv.ExtractAsync(viPath, directory, annotate: false,
+                                                                 timeoutSeconds, ct: ct));
+            if (extract?["mainXml"]?.GetValue<string>() is not { } mainXml)
+            {
+                answer["ok"] = false;
+                answer["extract"] = extract?.DeepClone();
+                return answer;
+            }
+            var heap = Path.Combine(directory, Path.GetFileNameWithoutExtension(mainXml) + "_BDHb.xml");
+            if (!File.Exists(heap))
+            {
+                answer["ok"] = true;
+                answer["wiresRewritten"] = 0;
+                answer["note"] = "No block-diagram heap in the file.";
+                return answer;
+            }
+            var run = await EventStructureTools.RunScriptAsync(bundle, scripts, FanRouteScript, [heap], "fanRoute",
+                                                               timeoutSeconds, ct);
+            if (run["exitCode"]?.GetValue<int>() != 0)
+            {
+                answer["ok"] = false;
+                answer["fanRoute"] = run;
+                return answer;
+            }
+            var (fans, rewritten) = ParseFanRoute(run["stdout"]?.GetValue<string>());
+            answer["fans"] = fans;
+            answer["wiresRewritten"] = rewritten;
+            // wires LabVIEW drew the long way, given the plain step (docs/diagram-layout.md 6m)
+            answer["detours"] = ParseDetours(run["stdout"]?.GetValue<string>());
+            if (rewritten == 0)
+            {
+                answer["ok"] = true;
+                return answer;
+            }
+            var rebuild = JsonNode.Parse(await pylv.RebuildAsync(mainXml, viPath, timeoutSeconds, ct: ct));
+            answer["ok"] = rebuild?["ok"]?.GetValue<bool>() == true && !BulkTools.ContainsCompiledCode(viPath);
+            if (answer["ok"]?.GetValue<bool>() != true) answer["rebuild"] = rebuild?.DeepClone();
+            return answer;
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>The script's first line: "fans N, wires rewritten M".</summary>
+    internal static (int Fans, int Rewritten) ParseFanRoute(string? stdout)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(stdout ?? "", @"fans (\d+), wires rewritten (\d+)");
+        return m.Success ? (int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) : (0, 0);
+    }
+
+    /// <summary>The script's "detours N" line: wires drawn the long way that got the plain step.</summary>
+    internal static int ParseDetours(string? stdout)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(stdout ?? "", @"detours (\d+)");
+        return m.Success ? int.Parse(m.Groups[1].Value) : 0;
     }
 
     private static JsonObject Fail(JsonObject step, string note)

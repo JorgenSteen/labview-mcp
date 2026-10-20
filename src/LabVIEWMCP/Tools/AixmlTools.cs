@@ -38,6 +38,17 @@ internal sealed class AixmlTools(LvaiConnection connection)
         subVIs too, and user code changes one subVI at a time behind a caller whose own timestamp
         never moves. Every answer carries fromCache and a one-line cacheNote, so which of the two
         happened is visible rather than guessed. Pass refresh to re-export a cached VI anyway.
+        A VI INSIDE AN `.llb` CONTAINER FILE - every DAQmx VI - is read by its path THROUGH the
+        `.llb`, as LabVIEW writes it (`...\configure\task.llb\DAQmx Clear Task.vi`): NI's converter
+        takes it as it is, and its export is cached keyed on the `.llb`'s stat since 2026-10-15;
+        on pylabview the reader extracts the container into %USERPROFILE%\.labviewmcp\cache\llb
+        once and reads the member there.
+        ON pylabview THE CACHE IS USED TOO, since 2026-10-15, kept apart from NI's entries by its
+        key: a cached NI export of the VI is served first (higher fidelity, no NI service needed to
+        read it), then the reader's own earlier export, else a fresh read is cached under the
+        reader's key. A reader entry is never served to a grpc call, and the reader's code hash is
+        part of its key, so a fixed reader never serves an old reading. `exportBy` names whose
+        export came back.
         """)]
     public async Task<string> ConvertViToAixmlAsync(
         [Description(@"Absolute path to the source .vi")] string viPath,
@@ -54,7 +65,7 @@ internal sealed class AixmlTools(LvaiConnection connection)
             return AixmlBackend.Refusal(badBackend);
         return choice.Name == AixmlBackend.PyLabview
             ? await ReadWithComposerAsync(viPath, aiXmlFilePath, returnContent, maxContentChars,
-                                          timeoutSeconds, choice, ct)
+                                          timeoutSeconds, choice, ct, refresh)
             : WithBackend(await ConvertViToAixmlCoreAsync(viPath, aiXmlFilePath, returnContent,
                                                           maxContentChars, timeoutSeconds, refresh,
                                                           roots: null, ct), choice);
@@ -150,18 +161,32 @@ internal sealed class AixmlTools(LvaiConnection connection)
         int maxContentChars = 20000,
         [Description("Local budget in seconds, per VI")] int timeoutSeconds = 180,
         [Description("Ignore cached exports and ask LabVIEW again")] bool refresh = false,
-        CancellationToken ct = default) =>
-        await ConvertVisToAixmlCoreAsync(viPaths, outputDirectory, returnContent, maxContentChars,
-                                         timeoutSeconds, refresh, roots: null, ct);
+        CancellationToken ct = default,
+        [Description(AixmlBackend.ParameterDescription + """
+             On pylabview each VI is read by vi2aixml.py through the export cache, as
+            lvai_convert_vi_to_aixml reads one - NI's cached export first, then the reader's own -
+            and no LabVIEW is asked.
+            """)]
+        string? backend = null)
+    {
+        if (!AixmlBackend.TryResolve(backend, "lvai_convert_vis_to_aixml", out var choice, out var bad))
+            return AixmlBackend.Refusal(bad);
+        return WithBackend(await ConvertVisToAixmlCoreAsync(viPaths, outputDirectory, returnContent,
+            maxContentChars, timeoutSeconds, refresh, roots: null, ct,
+            composed: choice.Name == AixmlBackend.PyLabview), choice);
+    }
 
     /// <summary>The body of <see cref="ConvertVisToAixmlAsync"/>; see the single-VI core for why
     /// the installation roots are a parameter here and not on the tool method.</summary>
     internal async Task<string> ConvertVisToAixmlCoreAsync(
         string viPaths, string outputDirectory, bool returnContent, int maxContentChars,
         int timeoutSeconds, bool refresh, IReadOnlyList<string>? roots,
-        CancellationToken ct = default) =>
+        CancellationToken ct = default, bool composed = false) =>
         await Rpc.GuardAsync(async () =>
         {
+            AixmlComposer.Setup? setup = null;
+            if (composed && (setup = AixmlComposer.Locate(out var missing)) is null)
+                return Json.Error("backendNotAvailable", missing);
             // NEWLINE separated, deliberately not Rpc.SplitList. That helper also splits on commas
             // and semicolons, and both are legal characters in a Windows path - a VI under
             // `C:\Data\Rev 2, final\` would arrive as two nonexistent paths and be reported as two
@@ -185,6 +210,42 @@ internal sealed class AixmlTools(LvaiConnection connection)
             // Phase 1, CONCURRENT: everything already cached. No connection is touched, so this
             // also answers while LabVIEW is closed or still starting.
             var served = new bool[paths.Count];
+            if (setup is not null)
+            {
+                // the reader: each VI through the export cache, NI's cached export first - the
+                // single-VI tool's route; reads run in the resident Python workers, four at once
+                var rowsRead = new JsonNode?[paths.Count];
+                int fromCache = 0, readFresh = 0, readFailed = 0;
+                await Parallel.ForEachAsync(Enumerable.Range(0, paths.Count),
+                    new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+                    async (i, token) =>
+                    {
+                        var outcome = await CachedReader.ReadAsync(setup, paths[i], outputs[i],
+                            timeoutSeconds, token, refresh, roots);
+                        var ok = outcome.Result.Written;
+                        if (!ok) Interlocked.Increment(ref readFailed);
+                        else if (outcome.ServedFrom is not null) Interlocked.Increment(ref fromCache);
+                        else Interlocked.Increment(ref readFresh);
+                        var row = await RowAsync(i, outcome.ServedFrom is not null, ok ? 0 : -1,
+                                                 ok ? "No Error" : outcome.Result.Message);
+                        row["exportBy"] = outcome.ServedFrom == AixmlBackend.Grpc ? "NI's converter (cached)" : "vi2aixml.py";
+                        row["cacheNote"] = outcome.Note;
+                        rowsRead[i] = row;
+                    });
+                stopwatch.Stop();
+                return Json.Document(new JsonObject
+                {
+                    ["requested"] = paths.Count,
+                    ["fromCache"] = fromCache,
+                    ["exported"] = readFresh,
+                    ["failed"] = readFailed,
+                    ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
+                    ["outputDirectory"] = folder,
+                    ["note"] = "Read by the pylabview backend's reader through the export cache - " +
+                               "no LabVIEW asked. " + CachedReader.ReaderProvenance,
+                    ["results"] = new JsonArray([.. rowsRead]),
+                });
+            }
             if (!refresh)
                 Parallel.For(0, paths.Count,
                     new ParallelOptions { MaxDegreeOfParallelism = ParallelScan.Degree },
@@ -1088,20 +1149,26 @@ internal sealed class AixmlTools(LvaiConnection connection)
 
     private static async Task<string> ReadWithComposerAsync(
         string viPath, string aixmlPath, bool returnContent, int maxContentChars, int timeoutSeconds,
-        AixmlBackend.Choice choice, CancellationToken ct)
+        AixmlBackend.Choice choice, CancellationToken ct, bool refresh = false,
+        IReadOnlyList<string>? roots = null)
     {
         if (AixmlComposer.Locate(out var missing) is not { } setup)
             return BackendNotAvailable(missing, choice);
 
-        var result = await AixmlComposer.ReadAsync(setup, viPath, aixmlPath, timeoutSeconds, ct);
-        return ComposerAnswer(result, choice,
+        // Through the export cache since 2026-10-15: NI's cached export first, then the reader's
+        // own, then a fresh read that is cached under the reader's key (CachedReader).
+        var read = await CachedReader.ReadAsync(setup, viPath, aixmlPath, timeoutSeconds, ct,
+                                                refresh, roots);
+        return ComposerAnswer(read.Result, choice,
             [.. await FileFactsAsync(aixmlPath, returnContent, maxContentChars, ct),
-             ("fromCache", JsonValue.Create(false)),
-             ("cacheNote", JsonValue.Create(
-                 "not cached: the export cache holds NI's converter output, and a reader's output " +
-                 "stored there would later be served as NI's")),
-             ("readerNote", JsonValue.Create(
-                 "Read by vi2aixml.py, NOT by NI's converter. Measured 2026-10-12 against NI's own " +
+             ("fromCache", JsonValue.Create(read.ServedFrom is not null)),
+             ("exportBy", JsonValue.Create(read.ServedFrom == AixmlBackend.Grpc
+                 ? "NI's converter (from the cache)" : "vi2aixml.py, the pylabview reader")),
+             ("cacheNote", JsonValue.Create(read.Note)),
+             ("readerNote", JsonValue.Create(read.ServedFrom == AixmlBackend.Grpc
+                 ? "This export is NI's own, served from the cache - not the reader's. Pass refresh " +
+                   "to read the VI with vi2aixml.py."
+                 : "Read by vi2aixml.py, NOT by NI's converter. Measured 2026-10-12 against NI's own " +
                  "exports of 747 VIs (locked VIs and stale cache entries left out): 392 identical in " +
                  "every fact; elements 97.7 %, constant values 96.4 %, wires 93.5 %, attributes " +
                  "95.5 %. Read back and recomposed, 129 of the composer's 130 tests still compute " +

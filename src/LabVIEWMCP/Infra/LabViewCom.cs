@@ -84,19 +84,72 @@ internal static class LabViewCom
         // anyway, so waiting here costs nothing but the race.
         var budget = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600));
         var clock = Stopwatch.StartNew();
-        if (!await ComGate.WaitAsync(budget, ct))
-            throw new ComException("comCallTimedOut",
-                $"Another ActiveX call to LabVIEW was still running after {timeoutSeconds} s, so this " +
-                "one never started. Call again when it has finished.");
+        var timedOut = new ComException("comCallTimedOut",
+            $"Another ActiveX call to LabVIEW was still running after {timeoutSeconds} s, so this " +
+            "one never started. Call again when it has finished.");
+        TimeSpan Left() => budget - clock.Elapsed > TimeSpan.Zero ? budget - clock.Elapsed : TimeSpan.Zero;
+        if (!await ComGate.WaitAsync(budget, ct)) throw timedOut;
+        if (Lane.Value is not { } lane)
+        {
+            // the default: alone - after every lane operation still running has finished
+            try
+            {
+                Task idle;
+                lock (LaneCount) idle = LanesIdle.Task;
+                if (!await idle.WaitAsync(Left(), ct).ContinueWith(t => t.IsCompletedSuccessfully,
+                        TaskScheduler.Default))
+                    throw timedOut;
+                return await RunOnLabViewAsync(body, Left(), timeoutSeconds, ct);
+            }
+            finally { ComGate.Release(); }
+        }
+        // a LANE: alone within its lane, beside the other lanes. Only lvai_layout_diagrams opens
+        // lanes, one per worker, each on VIs of its own and with helper VIs of its own
+        // (ComposedHelpers): what the race above needs - two operations on ONE VI, or one helper
+        // VI's controls written by two callers - cannot happen between two lanes. Measured
+        // 2026-10-18 with four server processes over ATM_DQMH_Cold's 76 VIs: 76 of 76 laid out where
+        // planned and executable, 46 s against 73 s for one, while the same four sharing one set of
+        // helper VIs read each other's dumps (49 of 76 failed or landed off)
+        var gate = LaneGates.GetOrAdd(lane, _ => new SemaphoreSlim(1, 1));
+        lock (LaneCount)
+        {
+            if (LaneCount.Value++ == 0) LanesIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        ComGate.Release();
         try
         {
-            return await RunOnLabViewAsync(body, budget - clock.Elapsed, timeoutSeconds, ct);
+            if (!await gate.WaitAsync(Left(), ct)) throw timedOut;
+            try { return await RunOnLabViewAsync(body, Left(), timeoutSeconds, ct); }
+            finally { gate.Release(); }
         }
-        finally { ComGate.Release(); }
+        finally
+        {
+            lock (LaneCount)
+            {
+                if (--LaneCount.Value == 0) LanesIdle.TrySetResult();
+            }
+        }
     }
 
     /// <summary>The gate <see cref="WithLabViewAsync{T}"/> holds for the length of one operation.</summary>
     private static readonly SemaphoreSlim ComGate = new(1, 1);
+
+    /// <summary>
+    /// The ActiveX lane of the current async flow: null for everything but the workers of
+    /// lvai_layout_diagrams. An operation in a lane runs beside the other lanes, never beside a
+    /// default one; ComposedHelpers names the helper VIs after it.
+    /// </summary>
+    internal static readonly AsyncLocal<string?> Lane = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> LaneGates = new();
+    private sealed class Counter { public int Value; }
+    private static readonly Counter LaneCount = new();
+    private static TaskCompletionSource LanesIdle = Completed();
+    private static TaskCompletionSource Completed()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        done.SetResult();
+        return done;
+    }
 
     private static async Task<T> RunOnLabViewAsync<T>(Func<object, T> body, TimeSpan remaining,
                                                       int timeoutSeconds, CancellationToken ct)
@@ -107,24 +160,7 @@ internal static class LabViewCom
             // where the platform analyzer looks (CA1416), and NotReady above cannot vouch for it
             if (!OperatingSystem.IsWindows())
                 throw new ComException("notWindows", "LabVIEW's ActiveX server is reachable on Windows only.");
-            var type = Type.GetTypeFromProgID(ProgId)
-                ?? throw new ComException("activeXNotRegistered",
-                    $"{ProgId} is not registered, so LabVIEW's ActiveX server cannot be reached. " +
-                    "It is registered by LabVIEW's installer; a repair install restores it.");
-            var before = LabViewPids();
-            var app = Create(type.GUID, ServerBitness(RunningLabViews()))
-                ?? throw new ComException("activeXNotRegistered", $"{ProgId} gave no object.");
-            // RULE 1 CHECKED, NOT ASSUMED: a LabVIEW that appeared during the activation was
-            // started BY it. Released at once - with nothing loaded it quits on its own.
-            if (LabViewPids().Except(before).ToList() is { Count: > 0 } started)
-            {
-                Release(app);
-                throw new ComException("comStartedLabView",
-                    $"Asking COM for {ProgId} STARTED a LabVIEW (pid {string.Join(", ", started)}) " +
-                    "instead of attaching to the running one, so nothing was done in it. Each " +
-                    "bitness has its own registration of the ActiveX server; the one asked for " +
-                    "points at a LabVIEW that is not running.");
-            }
+            var app = Attach();
             try { return body(app); }
             finally { Release(app); }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
@@ -152,6 +188,63 @@ internal static class LabViewCom
         catch (COMException e)
         {
             throw new ComException("comCallFailed", e.Message);
+        }
+    }
+
+    /// <summary>
+    /// Keep a VI LOADED until the answer is disposed: a reference held on a thread of its own, so
+    /// helpers that open the VI by path one after the other reach the copy in memory instead of
+    /// loading it again. Measured 2026-10-16: a Caraya test VI takes 1.6-2.5 s to load cold, and
+    /// lvai_layout_diagram loaded each one twice, once for its dump and once for its apply.
+    /// Null when nothing could be held - an optimisation, never a precondition: the caller goes on
+    /// without it. A pylabview edit of the file must not run while a hold stands, or LabVIEW keeps
+    /// serving the copy it holds.
+    /// </summary>
+    public static async Task<IAsyncDisposable?> HoldAsync(string viPath, int timeoutSeconds, CancellationToken ct)
+    {
+        if (NotReady() is not null || !OperatingSystem.IsWindows()) return null;
+        var opened = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new ManualResetEventSlim(false);
+        var thread = new Thread(() =>
+        {
+            object? app = null, vi = null;
+            try
+            {
+                if (!OperatingSystem.IsWindows()) { opened.TrySetResult(false); return; }
+                app = Attach();
+                vi = Call(app, "GetVIReference", Path.GetFullPath(viPath));
+                opened.TrySetResult(vi is not null);
+                if (vi is not null) release.Wait();
+            }
+            catch (Exception e) when (e is TargetInvocationException or COMException or ArgumentException
+                                          or ComException)
+            {
+                opened.TrySetResult(false);
+            }
+            finally
+            {
+                if (vi is not null) Release(vi);
+                if (app is not null) Release(app);
+            }
+        }) { IsBackground = true, Name = "LabVIEW VI hold" };
+        thread.Start();
+        bool held;
+        try { held = await opened.Task.WaitAsync(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600)), ct); }
+        catch (Exception e) when (e is TimeoutException or OperationCanceledException) { held = false; }
+        if (held) return new Hold(release, thread);
+        release.Set();
+        return null;
+    }
+
+    private sealed class Hold(ManualResetEventSlim release, Thread thread) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync()
+        {
+            release.Set();
+            // the reference is released on its own thread; a COM call that hangs there must not
+            // hang the caller, so it gets a few seconds and is left behind after that
+            thread.Join(TimeSpan.FromSeconds(5));
+            return ValueTask.CompletedTask;
         }
     }
 
@@ -197,6 +290,48 @@ internal static class LabViewCom
 
     /// <summary>Print.VI To HTML's Format: {Custom, Standard, Using Panel, Using SubVI, Complete}.</summary>
     internal const int PrintFormatStandard = 1;
+
+    /// <summary>
+    /// LabVIEW's Application object - of the LabVIEW that RUNS, never a new one. LabVIEW does not
+    /// register in the running-object table (GetActiveObject answers MK_E_UNAVAILABLE on an IDE
+    /// started by hand), so the object is CREATED, which reaches the running instance - unless that
+    /// instance does not answer, hung after a crash: COM then STARTS a second LabVIEW with
+    /// /Automation -Embedding. Such a LabVIEW quits as soon as the call releases it, and with JKI's
+    /// SDP running it asks first, "Quitting aborts all running VIs" - a modal on the user's screen;
+    /// the next call started the next one, four in fifteen minutes (2026-10-16). So the processes
+    /// are compared around the creation, and a LabVIEW this call started is ended at once.
+    ///
+    /// AND THE BITNESS IS THE RUNNING LABVIEW'S, not this server's. This server is 64-bit, and a
+    /// plain creation activates the registration of the CLIENT's bitness - on a station with
+    /// LabVIEW 2026 32-bit running and LabVIEW 2024 64-bit installed every call started LabVIEW 2024
+    /// (measured in a colleague's fork, 2026-10-12). So the server context names the bitness of the
+    /// newest running LabVIEW (CLSCTX_ACTIVATE_32/64_BIT_SERVER), and the started-LabVIEW guard above
+    /// stays as the backstop.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static object Attach()
+    {
+        var type = Type.GetTypeFromProgID(ProgId)
+            ?? throw new ComException("activeXNotRegistered",
+                $"{ProgId} is not registered, so LabVIEW's ActiveX server cannot be reached. " +
+                "It is registered by LabVIEW's installer; a repair install restores it.");
+        var before = RunningPids();
+        var app = Create(type.GUID, ServerBitness(RunningLabViews()))
+            ?? throw new ComException("activeXNotRegistered", $"{ProgId} gave no object.");
+        var started = RunningPids().Except(before).ToList();
+        if (started.Count == 0) return app;
+        Release(app);
+        foreach (var id in started)
+        {
+            try { using var p = System.Diagnostics.Process.GetProcessById(id); p.Kill(); }
+            catch (Exception e) when (e is ArgumentException or InvalidOperationException
+                                          or System.ComponentModel.Win32Exception) { }
+        }
+        throw new ComException("labviewNotAnswering",
+            "The running LabVIEW did not answer over ActiveX, so COM started a second LabVIEW for " +
+            "this call; it was ended again. The running one is probably hung - after a crash, or " +
+            "behind a dialog. Close the dialog, or restart LabVIEW (lvai_ensure_labview starts it).");
+    }
 
     /// <summary>The ids of every running LabVIEW - taken before a call that may kill one.</summary>
     public static IReadOnlySet<int> RunningPids()
@@ -431,9 +566,6 @@ internal static class LabViewCom
         }
         return found;
     }
-
-    private static HashSet<int> LabViewPids() =>
-        [.. Win32LabViewMachine.Instance.Processes(LabViewState.LabViewProcess).Select(p => p.Id)];
 
     /// <summary>CoCreateInstance for IDispatch with an explicit server context.</summary>
     private static object? Create(Guid clsid, int? bits)

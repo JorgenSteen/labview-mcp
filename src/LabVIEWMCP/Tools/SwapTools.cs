@@ -61,8 +61,10 @@ internal sealed class SwapTools(LvaiConnection connection)
         the VI saved - matching is by label, so two constants with one label cannot say which one
         is meant. A label no constant carries is `constantsNotOnDiagram`. `constantMatches` gives
         every label's count; `constantsSeen` is how many constants the traversal returned, and
-        zero there means the helper's class name matched nothing - whether a diagram constant
-        answers to `Constant` in that traversal is NOT MEASURED yet.
+        zero there means the helper's class name matched nothing. Measured 2026-10-17 on both
+        backends: `Constant` matched all five constants of a probe (path, bool), a path seed
+        inside a Case frame inside a While Loop became a class constant, and a label two
+        constants carried was refused with both left as they were.
         A CALL INSIDE A LOOP OR A CASE FRAME IS REACHED, and that is new as of 2026-09-16. The
         helper collected from {LV.Diagram} SubVIs[], which lists the diagram it is asked about and
         does NOT descend into structures, so a nested call came back under `socketsNotOnDiagram`
@@ -177,29 +179,30 @@ internal sealed class SwapTools(LvaiConnection connection)
             """)]
         string? editsJson = null,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 300,
+        CancellationToken ct = default,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
+        [Description("""
+            Lay out each VI's block diagram with our layout engine (lvai_layout_diagram's) after a
+            successful swap and save it in place (the cleanUpDiagram field) - a Replace keeps each
+            node's position while its size and terminals change. Reported, never gating; a DQMH
+            module's Main.vi is never touched.
+            """)]
+        bool cleanUpDiagram = true,
         [Description("""
             After a saved swap, clear the BROKEN wires left on the diagram (BD.Remove Bad Wires, in
             the IDE's instance) and report each removed wire under `badWireCleanup`. Default true -
             the user's rule of 2026-10-11. A sink that had a wire from a source before and none
             after is a LOST CONNECTION: it is named in `inputsLeftUnwired` and `ok` is false
             (`errorKind: badWireCleanupLostConnection`). A VI with no broken wire is not touched.
+            Runs before the layout, so the layout sees the cleaned diagram.
             """)]
-        bool removeBadWires = true,
-        CancellationToken ct = default,
-        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
-        [Description("""
-            Run LabVIEW's own Clean Up Diagram on each VI after a successful swap and save it in
-            place (the cleanUpDiagram field) - a Replace keeps each node's position while its size
-            and terminals change. Reported, never gating; a DQMH module's Main.vi is never touched.
-            """)]
-        bool cleanUpDiagram = true)
+        bool removeBadWires = true)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_swap_subvis", out _, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
         if (editsJson is { Length: > 0 })
             return await ManyAsync(editsJson, verify, verbose, helperViPath, helperAixmlPath,
-                                   regenerateHelper, timeoutSeconds, removeBadWires, cleanUpDiagram,
-                                   ct: ct);
+                                   regenerateHelper, timeoutSeconds, cleanUpDiagram, removeBadWires, ct: ct);
 
         // Now that `viPath` is optional in the schema, its absence has to be caught here - and
         // named, rather than arriving as a null-reference somewhere further down.
@@ -210,19 +213,19 @@ internal sealed class SwapTools(LvaiConnection connection)
 
         return await OneAndCleanAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
                                       helperAixmlPath, regenerateHelper, timeoutSeconds,
-                                      removeBadWires, cleanUpDiagram, ct: ct);
+                                      cleanUpDiagram, removeBadWires, ct: ct);
     }
 
     /// <summary>
-    /// One swap, then LabVIEW's Clean Up Diagram on the saved VI when the swap was ok. The clean-up
-    /// is added to the answer as `cleanUpDiagram` and never changes its `ok`.
+    /// One swap - which ends with Remove Bad Wires when asked - then our layout of the saved VI
+    /// when the swap was ok. The clean-up is added to the answer as `cleanUpDiagram` and never
+    /// changes its `ok`.
     /// </summary>
     private async Task<string> OneAndCleanAsync(string viPath, string? swapsJson, string? constantsJson,
                                                 bool verify, bool verbose, string? helperViPath,
                                                 string? helperAixmlPath, bool regenerateHelper,
-                                                int timeoutSeconds, bool removeBadWires,
-                                                bool cleanUpDiagram,
-                                                CancellationToken ct)
+                                                int timeoutSeconds, bool cleanUpDiagram,
+                                                bool removeBadWires, CancellationToken ct)
     {
         var answer = await OneAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
                                     helperAixmlPath, regenerateHelper, timeoutSeconds, removeBadWires,
@@ -246,7 +249,7 @@ internal sealed class SwapTools(LvaiConnection connection)
     private async Task<string> ManyAsync(string editsJson, bool verify, bool verbose,
                                          string? helperViPath, string? helperAixmlPath,
                                          bool regenerateHelper, int timeoutSeconds,
-                                         bool removeBadWires, bool cleanUpDiagram, CancellationToken ct)
+                                         bool cleanUpDiagram, bool removeBadWires, CancellationToken ct)
     {
         JsonNode? parsed;
         try { parsed = JsonNode.Parse(editsJson); }
@@ -286,7 +289,7 @@ internal sealed class SwapTools(LvaiConnection connection)
         {
             var one = await OneAndCleanAsync(edit.Vi, edit.Swaps, edit.Constants, verify, verbose,
                                              helperViPath, helperAixmlPath, regenerateHelper,
-                                             timeoutSeconds, removeBadWires, cleanUpDiagram, ct: ct);
+                                             timeoutSeconds, cleanUpDiagram, removeBadWires, ct: ct);
             var node = Read(one);
             answers.Add(new JsonObject { ["vi"] = edit.Vi, ["answer"] = node });
 

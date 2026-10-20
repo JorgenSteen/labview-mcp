@@ -64,7 +64,7 @@ because the render decides. Fixture: `Fixtures/diagram-size/Browser History v2.x
 | when | tool | field |
 |---|---|---|
 | before generating | `lvai_check_aixml` | `diagramChain`: `longestChainStages`, `withinBudget` (10), `longestChain` - the elements along the chain, with `inside` for the structure it runs through |
-| after generating | `lvai_generate_vi`, `lvai_generate_vis`, `lvai_generate_vi_with_events` | `diagramSize` at top level (`width`, `height`, `withinBudget`, `longestChainStages`), the full step with the PNG path under `steps` |
+| after generating | `lvai_generate_vi`, `lvai_generate_vis`, `lvai_generate_vi_with_events`, and `lvai_wire_dynamic_events` for a user-event VI (no `longestChainStages` there: it never sees the AIXML) | `diagramSize` at top level (`width`, `height`, `withinBudget`, `longestChainStages`), the full step with the PNG path under `steps` |
 | after generating a TEST | `lvai_generate_test`, `lvai_generate_class_test`, `lvai_generate_method_test`, `lvai_generate_caraya_test_runner` | `diagramSize` of the test VI at top level, and a note to split it when it is over (section 5) |
 
 The render costs 90-460 ms (measured). It is ON by default for these tools and for the test VIs
@@ -123,6 +123,13 @@ whose class seed is still a path is BROKEN at that point by design - so the call
 the size step, and the class method of the same build came back with no size at all. It measures
 before returning there now; the answer is still `failedAtStep: execState`, with `diagramSize`
 beside it.
+
+**And on the grpc direct route the class and method test generators measured BEFORE the last
+layout** (found 2026-10-17). The generate step rendered the test VI. Then the swap or seeds step
+ran `lvai_swap_subvis`, whose own clean-up lays the diagram out again. So `diagramSize` read
+758 x 462 and 668 x 527 for diagrams that were planned at 876 x 509 and 1080 x 264. When a later
+step laid the diagram out, the generators now render once more and report that size, as the
+`diagramSize` step.
 
 ## 6. Found on the way
 

@@ -81,9 +81,11 @@ internal sealed class OwnerDescriptionTools(LvaiConnection connection)
             open and active. This file is not edited.
             """)]
         string? projectPath = null,
+        [Description(HousekeepingHelpers.CheckUnsavedDescription)] bool checkUnsaved = true,
         [Description("Local budget in seconds")] int timeoutSeconds = 120,
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(backend, "lvai_set_class_description", async () =>
         {
             if (Precheck(ownerPath, text) is { } refusal) return refusal;
             var owner = Path.GetFullPath(ownerPath);
@@ -109,12 +111,13 @@ internal sealed class OwnerDescriptionTools(LvaiConnection connection)
             {
                 [isClass ? "class path" : "library path"] = owner,
                 ["description"] = wanted,
+                ["check unsaved"] = checkUnsaved ? "true" : "false",
             }, timeoutSeconds, ct);
             var after = FileStamps.Take([folder]);
 
             return Classify(owner, isClass, wanted, values, helperError, before, after,
                             helperVi!, generated, steps);
-        });
+        }));
 
     /// <summary>
     /// Every refusal that needs no LabVIEW, in the order a caller would fix them. Null when the

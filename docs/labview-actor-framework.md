@@ -33,6 +33,8 @@ and each one cost a session. To build an actor today:
    do this; `af-override-tools.md` has their shapes, panes and refusals.
 6. **Launching and checking:** §9's launcher, and its note on launchers that must stop what they
    launch; §19c for proving that a tree stopped.
+7. **How an actor behaves at run time** - lifecycle, Handle Error's stop codes, error propagation,
+   helper loops, design choices: §20, upstream's section, added with the 2026-10-20 merge.
 
 | passage | superseded or qualified by |
 |---|---|
@@ -111,8 +113,6 @@ All of this worked first time and is in `C:\temp\ActorFW_first`:
   pointing into `vi.lib`. `inheritsFrom` came back `Actor Framework.lvlib:Actor.lvclass` and
   `Actor Framework.lvlib:Message.lvclass`, `parentKindsAreComplete: true`.
 - **Accessors** via `lvai_create_accessors` — dynamic dispatch, `execState 1`.
-  > Qualified by §19d (2026-09): a PRIVATE dynamic-dispatch member is broken ("error of type
-  > 2000000"), so accessors that will be private need `dynamicDispatch: false`.
 - **An ordinary class method** authored in AIXML with `path` stand-ins, made a member with
   `lvai_add_class_method` (`dispatchTerminals` for dynamic dispatch), then pointed at its own
   accessors with `lvai_placeholder_subvi` + `lvai_swap_subvis`. `Counter.lvclass:Increment.vi`
@@ -128,11 +128,6 @@ And **one socket on three nodes costs three swap calls**: `socketsLeft` counts `
 still in the export, so it read 1, 1, 0 across the three while three, two and one nodes remained.
 
 ## 4. THE GAP: a generated OVERRIDE of `Message.lvclass:Do.vi` is `eBad`
-
-> Superseded by this section's own second half (2026-09-17): the message half IS generated now, by
-> `lvai_create_message_class` ("The complete pipeline" below). Everything from here down to "The
-> right answer is NI's Message Maker" is the history of the dead end, kept because each refuted
-> hypothesis looks right.
 
 **This is the finding.** `lvai_add_class_method` produces a member VI that LabVIEW does not accept
 as an override of its parent's method, and the resulting VI is not executable **whatever is on its
@@ -205,9 +200,6 @@ So a `Message` child has exactly two states available to this toolchain today, a
 with a generated `Do.vi`, and without one. That is why `C:\temp\ActorFW_first` ships no message class
 at all rather than a half-built one.
 
-> Superseded (2026-09-17, below): there is a third state, NI's own message template driven by the
-> Message Maker, and `lvai_create_message_class` builds it.
-
 ### The route to closing it
 
 `resource\Framework\Providers\LVClassLibrary\NewAccessors\**CLSUIP_CreateOverride.vi**` — the IDE's
@@ -262,12 +254,6 @@ block diagram into an existing VI.** `ConvertAIXMLToVI` always writes a whole ne
 already exist, and pylabview cannot compose a diagram from nothing. An override mode on
 `lvai_add_class_method` therefore cannot be finished by re-ordering the existing steps.
 
-> Superseded by §19a (2026-09-25): VI Server scripting (`New VI Object` + `Connect Wire`) places and
-> wires nodes in an existing override, measured on the AF lifecycle overrides; that is how an
-> override gets a body. `lvai_graft_diagram` (1.9.x) also puts a generated diagram into an existing
-> VI, but it writes a copy of that VI and is meant for a top-level panel; it has not been tried on a
-> class member or an override.
-
 ### The right answer is NI's Message Maker — do not author `Do.vi` at all
 
 The premise above ("we must generate the body") is wrong, and the IDE says so: right-clicking an
@@ -279,7 +265,7 @@ The provider landscape, measured 2026-09-17:
 
 | provider | entry point | usable? |
 |---|---|---|
-| `AddActor` — "New → Actor" | `Add Actor.lvlib:Add Actor.vi` | **no — it is a DIALOG.** `OK Button`, `Cancel Button`, `Name of Actor` and `Inherit from:` are front-panel controls that are NOT on the connector pane. `lvai_create_class` with `parentClassPath` = `Actor.lvclass` already does this job. **Superseded by §8 (2026-09-17):** the dialog is not drivable, but its `Support\` worker VIs are (`scripts/lvai_create_actor_library.xml`) |
+| `AddActor` — "New → Actor" | `Add Actor.lvlib:Add Actor.vi` | **no — it is a DIALOG.** `OK Button`, `Cancel Button`, `Name of Actor` and `Inherit from:` are front-panel controls that are NOT on the connector pane. `lvai_create_class` with `parentClassPath` = `Actor.lvclass` already does this job |
 | `ActorMessageMaker` — "Create Messages for Actor" | `Create Message Classes for Actor.vi` | takes `Object` (uint64), the IDE's own item handle |
 | `MessageMakerProvider` | `Create Message Class for Method.vi` | clean pane — `Item Refnum` + `Target` → `New Class Path`, `New Send Method` |
 | `Message Maker.lvlib` | `Copy Class.vi`, `Build Concrete Do.vi`, `Build Send.vi`, … | **path-based and public — this is the layer to drive** |
@@ -325,15 +311,12 @@ instance from there is refused. This is the same application-instance boundary t
 already records for `FP.Close` and `Front Panel Window:Open`, in the one form where it errors
 instead of silently doing nothing.
 
-> Retracted the same day ("Two corrections" below, 2026-09-17): the Error 2 was a stale in-memory
-> path, not the application-instance boundary, and `FP.Open` went through once the state was clean.
-
 ### NI's recipe, so the next step is mechanical
 
 `Build Concrete Do.vi`'s No Error frame, in order, all of them public `Message Maker.lvlib` VIs:
 
 1. `Open VI Reference` (AppInst, Do Method path)
-2. **`FP.Open`** (Activate, State = Standard) ← the blocker (retracted: see "Two corrections" below)
+2. **`FP.Open`** (Activate, State = Standard) ← the blocker
 3. `Find and Replace GObj.vi` — `GObj Class Name` = `LabVIEWClassConstant`, `Traverse Target` = BD,
    `Class Path` = the actor class: swaps the template's class constant for the actor's
 4. `Replace Actor if Using PPL.vi`
@@ -348,11 +331,6 @@ instead of silently doing nothing.
 11. `Save.Instrument` to the Do Method path
 
 ### It works — `scripts/lvai_build_message_do.xml`, measured 2026-09-17
-
-> Superseded by "The complete pipeline" below (2026-09-17): this is the `Concrete Message Template` /
-> `Build Concrete Do` route. `lvai_create_message_class` clones `Message Template.lvclass` and follows
-> `Build Do`'s steps instead, and mixing the two answers 1055. `scripts/lvai_build_message_do.xml` is
-> kept as history; no tool calls it.
 
 Running steps 3-11 ourselves and omitting step 2 produces a **working override with a generated
 body**. On `Increment Msg` against `Counter.lvclass:Increment.vi`, every stage reported 0 and the
@@ -384,8 +362,7 @@ PPL.vi`, Error 1055** — its `Target` input is a `ref{LV.TargetItem}` we cannot
 the only public route to one is `mxLvGetItem.vi` and its `NIIM` is a typedef. Our reimplementation
 omits that step, which is sound here: it only matters when the actor lives in a packed library.
 
-**The first working recipe (`Build Concrete Do`; superseded by the pipeline below)**, all of it
-public `Message Maker.lvlib`:
+**The recipe that works**, all of it public `Message Maker.lvlib`:
 
 1. `Copy Class.vi` — clone `Concrete Message Template.lvclass`, parent `Message.lvclass`.
    **Give it its own subfolder**: the class lands directly in `Destination Directory`.
@@ -532,9 +509,6 @@ cycle that used to leave both `eBad` with the class on disk still listing `Send 
 existing `Increment` example ran unchanged afterwards (`Count = 1 / 6 / 16`, `error out` 0), so a
 second message class in the same folder disturbs neither the first nor the actor.
 
-> Corrected by §15d (2026-09-18): the two message classes sat in sibling folders, one
-> `<Method> Msg` folder each. Two message classes in ONE folder answer Error 1055.
-
 **THE GAP: the new class is NOT written into the `.lvproj`, and `projectPath` does not mean what it
 means on the sibling tools.** Measured on the same run — the project's item list was identical before
 and after, and `lvai_close_active_project`'s sweep answered `strayVisRemoved: 0`, so nothing added the
@@ -544,11 +518,6 @@ LabVIEW through `Project:Active Project`. One name, two meanings, across tools a
 same breath — which is the shape CLAUDE.md records as costing eighteen days when a description
 explains a mechanism that is not the one in play. Until it writes an entry, add the message class to
 the project by hand, with the project CLOSED.
-
-> Superseded by §10 and §16b (2026-09-17/18): put the message class into the actor's library with
-> `lvai_add_to_library`, folder `Messages for this Actor`; through a library it needs no `.lvproj`
-> entry. Only a message class that belongs to no library needs a hand-written entry, with the project
-> closed. The point about `projectPath` meaning two things stands.
 
 ## 8. The AddActor provider: how to create an actor INSIDE a library, 2026-09-17
 
@@ -606,19 +575,7 @@ classes to a library that already exists, instead of rebuilding it.
 `lvai_create_message_class` per method. Result: `Aquarium.lvlib` holding the actor and three message
 classes, every VI `execState 1` after a project close.
 
-**The hand edit of the `.lvproj` is still needed on this route** (measured 2026-10-10). A class made by
-`lvai_create_class` with no `projectPath`, then put into a new library by the same chain
-(`Library.Create` + folder + `AddItem` class + `Save`) with the project open and active: the library
-came out right (it lists the folder and the class; the class carries `NI.Lib.ContainingLib`), but the
-`.lvproj` named no `.lvlib` while open, and after `lvai_close_active_project` the `.lvproj` was
-byte-for-byte unchanged. §16b and §18a saw LabVIEW write the library entry itself only where it
-REPLACED a class entry the project already had.
-
 ### 8a. RETRACTED — see 8b. The claim below did not survive a clean probe
-
-> Superseded by §8b (2026-09-17, same day), directly below. Only its observation that `Bellen.vi`
-> was `eBad` cold and a forced resave repaired it survives; the mechanism, the `grep` check and the
-> remedy do not.
 
 Measured on `Hund.lvclass:Bellen.vi`, and it is the reason the section above insists on a resave.
 The file `lvai_swap_subvis` leaves behind was missing its `LIvi` block, the one carrying subVI
@@ -647,44 +604,6 @@ last step of every generation route here.
 
 n = 1, and that VI had also been through an unrelated library experiment, so the attribution is
 strong rather than clean; a minimal probe is queued.
-
-### 8b. The `LIvi` claim is REFUTED — probed 2026-09-17, same day
-
-§8a said `lvai_swap_subvis` leaves a VI without its `LIvi` block, warm-green and cold-broken, and
-that a forced LabVIEW save is what repairs it. **A clean probe does not reproduce any of it**, and
-the section is wrong. It is left standing above, struck through, because the observations in it are
-real — it is the CONCLUSION that does not follow.
-
-The probe, on `Aquarium.lvclass:Licht Schalten.vi` — a VI built from scratch the same day, whose
-whole history is known, and which had never been near the library experiment:
-
-| step | `LIvi` | bytes |
-|---|---|---|
-| after `lvai_add_class_method` | **present** | 9 502 |
-| after `lvai_swap_subvis` | **present** | 8 758 |
-| project closed, read back cold | — | `execState 1`, and its message `Do.vi` too |
-
-So the swap neither strips the block nor leaves a VI that fails a cold load, and **no forced resave
-was needed**. `lvai_swap_subvis` needs no fix, and none was made.
-
-**What the two VIs differ in is what they CALL**, which is the likeliest reason `Bellen.vi` had no
-`LIvi` and `Licht Schalten.vi` does: Bellen calls only members of its OWN class, whose links live in
-the `LIbd`/`LIfp` UDClass-API blocks, while Licht Schalten also calls `Append To Log.vi`, an ordinary
-subVI. On that reading the missing block was NORMAL for that VI and never a defect at all. Not
-established — `Counter.lvclass:Increment.vi` also calls only class members and does carry `LIvi`,
-though its own parse warning names `VIPI`, which may be a different kind of link. Nobody has decoded
-these blocks and this file should not pretend otherwise.
-
-**What survives from §8a is only this**: `Hund.lvclass:Bellen.vi` was `eBad` after a LabVIEW restart
-with every file-level check green, and `lvai_set_vi_icon`'s forced resave made it executable again.
-That is a real measurement. Its CAUSE is unknown, and the library round trip that VI had been through
-remains the only candidate that the `Licht Schalten` probe does not rule out.
-
-**The process lesson is the one this file keeps paying for.** A correlation found while chasing a
-failure — the block appeared in the same step that fixed the VI — was written up as a mechanism, with
-a remedy, a `grep` recipe and a queued tool change, on n = 1, on a VI whose history was already known
-to be contaminated. §8a said so itself in its last line and recommended a probe; the probe took four
-tool calls and refuted it. **Run the probe before writing the mechanism down, not after.**
 
 ## 9. The launcher, and two things it re-measured — 2026-09-17
 
@@ -727,15 +646,6 @@ kind of change twice — hand-edited property: broken; NI's AddItem: sound.**
 Its standalone `.lvproj` entry was removed first, with the project closed: a library member belongs
 to the project through its library, not beside it.
 
-**A launcher must stop what it launched before it returns** (added 2026-10-10 from later
-measurements). `lvai_run_vi_and_read_values` with `runForMs` aborts its VI with no cleanup, so it is
-never a way to stop an actor tree; the actors a launcher started run on as VIs of their own
-(reasoned). `lvai_run_vi_as_top_level` on a launcher that never returns answered `errorCode 91` and
-blocked the service although the tree had started (1.8.0). And a hung helper loop cannot be aborted
-by VI Server at all (§19c). So every launcher sends Normal Stop to what it launched, as this one
-does, and a launcher that waits on its tree is started asynchronously (Run VI with Wait Until Done =
-FALSE).
-
 ### Helpers
 
 `scripts/lvai_create_actor_library.xml` creates the library and puts one existing class in it
@@ -744,6 +654,44 @@ FALSE).
 (`Library.Open` → `AddItem` → `Save All This Library`), with `Type` as an input so it serves
 `LVClass` and `VI` alike. Both need a project open and ACTIVE, because they reach LabVIEW through
 `Project:Active Project`. Neither is wrapped in an `lvai_*` tool yet.
+
+### 8b. The `LIvi` claim is REFUTED — probed 2026-09-17, same day
+
+§8a said `lvai_swap_subvis` leaves a VI without its `LIvi` block, warm-green and cold-broken, and
+that a forced LabVIEW save is what repairs it. **A clean probe does not reproduce any of it**, and
+the section is wrong. It is left standing above, struck through, because the observations in it are
+real — it is the CONCLUSION that does not follow.
+
+The probe, on `Aquarium.lvclass:Licht Schalten.vi` — a VI built from scratch the same day, whose
+whole history is known, and which had never been near the library experiment:
+
+| step | `LIvi` | bytes |
+|---|---|---|
+| after `lvai_add_class_method` | **present** | 9 502 |
+| after `lvai_swap_subvis` | **present** | 8 758 |
+| project closed, read back cold | — | `execState 1`, and its message `Do.vi` too |
+
+So the swap neither strips the block nor leaves a VI that fails a cold load, and **no forced resave
+was needed**. `lvai_swap_subvis` needs no fix, and none was made.
+
+**What the two VIs differ in is what they CALL**, which is the likeliest reason `Bellen.vi` had no
+`LIvi` and `Licht Schalten.vi` does: Bellen calls only members of its OWN class, whose links live in
+the `LIbd`/`LIfp` UDClass-API blocks, while Licht Schalten also calls `Append To Log.vi`, an ordinary
+subVI. On that reading the missing block was NORMAL for that VI and never a defect at all. Not
+established — `Counter.lvclass:Increment.vi` also calls only class members and does carry `LIvi`,
+though its own parse warning names `VIPI`, which may be a different kind of link. Nobody has decoded
+these blocks and this file should not pretend otherwise.
+
+**What survives from §8a is only this**: `Hund.lvclass:Bellen.vi` was `eBad` after a LabVIEW restart
+with every file-level check green, and `lvai_set_vi_icon`'s forced resave made it executable again.
+That is a real measurement. Its CAUSE is unknown, and the library round trip that VI had been through
+remains the only candidate that the `Licht Schalten` probe does not rule out.
+
+**The process lesson is the one this file keeps paying for.** A correlation found while chasing a
+failure — the block appeared in the same step that fixed the VI — was written up as a mechanism, with
+a remedy, a `grep` recipe and a queued tool change, on n = 1, on a VI whose history was already known
+to be contaminated. §8a said so itself in its last line and recommended a probe; the probe took four
+tool calls and refuted it. **Run the probe before writing the mechanism down, not after.**
 
 ## 10. A message class belongs IN the folder, and `{LV.Library}` `AddItem` cannot put it there
 
@@ -825,9 +773,6 @@ three under `Messages for this Actor` with the actor class at the root.
 
 ### 11a. A message carries TWO payload fields, and the order is the pane's
 
-> Superseded by §12 and §13a (2026-09-17): the order is DESCENDING conIdx. On 4815 that happens to
-> read top to bottom, which is why this build saw pane order.
-
 `payloadControlCount` had been `1` on every message ever built here, so a multi-field payload was
 untested. `Dimmen.vi` takes `Helligkeit` (I32) and `Rampe ms` (I32) besides the class wire and the
 error cluster:
@@ -838,10 +783,9 @@ error cluster:
 | `Dimmen Msg` | **2** | `Helligkeit` NumInt32, `Rampe ms` NumInt32 |
 | `Schalten Msg` | 1 | `An` Boolean |
 
-So the Message Maker takes every non-class, non-error input **in connector-pane order** (superseded:
-descending conIdx, §13a) and makes one private data field each; a String payload works like any
-other. Nothing special had to be done for either case - which is worth writing down precisely
-because both were being planned around.
+So the Message Maker takes every non-class, non-error input **in connector-pane order** and makes
+one private data field each; a String payload works like any other. Nothing special had to be done
+for either case - which is worth writing down precisely because both were being planned around.
 
 ### 11b. THE FOLDER PARAMETER BROKE THE LIBRARY ROOT, which is the DEFAULT path
 
@@ -1047,9 +991,7 @@ sequence that works, end to end:
 1. `lvai_create_class` - project closed, scratch project, no `projectPath`
 2. generate `Append To Log.vi` - before anything can adopt it loose
 3. open the project -> `scripts/lvai_create_actor_library.xml` -> `lvai_add_to_library` at the ROOT
-4. **close, write the `<Item ... Type="Library">` line, reopen**. *Superseded by §18a (2026-09-18):
-   close; LabVIEW writes the library entry itself on its save, so check that it is there and add it
-   only if it is not; reopen.*
+4. **close, write the `<Item ... Type="Library">` line, reopen**
 5. `lvai_add_class_field` for anything the class still needs
 6. `lvai_create_accessors` with an explicit `fromField 0` and the full field count
 7. placeholders -> author -> `lvai_add_class_method` -> `lvai_swap_subvis` -> icons
@@ -1057,10 +999,6 @@ sequence that works, end to end:
 9. close with `projectPath` (the sweep runs here) -> `lvai_exec_state` cold
 
 Steps 4 and 5 are the two this file learned the hard way, in that order.
-
-> Amended by §18a (2026-09-18): the library's entry must still be in the `.lvproj` before
-> `lvai_create_accessors` runs (§13d), but LabVIEW writes it on the close in step 4; a hand edit is
-> needed only when it is missing.
 
 ## 15. Ofen - an actor whose private data carries a TYPEDEF, 2026-09-18
 
@@ -1729,3 +1667,144 @@ restart. One claim keeps the status it has above:
 - Register For Events with an incoming error: the loop never registers and the actor hangs at stop
   (§19c, "Registration" and "Do not create it in a series body on `Actor Core`": reasoned). The early
   stop shows the same end state, a loop waiting on a registration that never sees its stop.
+
+## 20. How an actor BEHAVES at run time
+
+Sections 1-18 are about BUILDING an actor with this toolchain. This one is about what the code then
+DOES - the lifecycle, the overrides, helper loops and errors - so that an agent designing an actor
+gets the shape right before it generates anything. Adopted on 2026-10-17 from a colleague's
+`labview` skill (`github.com/JorgenSteen/labview-mcp-skills`, `knowledge/actor-framework.md`),
+condensed, and checked where it becomes a rule. Every entry says where its evidence comes from:
+
+- **NI source** - read on 2026-10-17 from NI's own AF VIs in `vi.lib\ActorFramework`, NI's export.
+- **measured here** - run on this station on 2026-10-17.
+- **documented** - NI's help, AF whitepaper or AF designers (AristosQueue) on the NI forum, as cited
+  by the source; not re-checked here.
+- **reported** - measured in the colleague's pilot project, NOT re-measured here. Treat it as a
+  strong hypothesis, and measure it before building a tool or a hard rule on it.
+
+### 20a. Lifecycle and call order
+
+- **Launch.** `Launch Root Actor.vi` starts the top of the tree from a plain VI; `Launch Nested
+  Actor.vi` starts a child, and the two sides get each other's enqueuer. *documented*
+- **Pre Launch Init (PLI) runs inside the launch call**, before Launch returns; an error from it
+  aborts the launch, and the launcher sees it. **PLI must not launch actors** - Launch Root or
+  Launch Nested from PLI hangs. Launch from Actor Core or from a message. *documented*
+- **Actor Core is the message loop.** An override runs its own code in parallel with Call Parent,
+  and Call Parent returns only once the loop has ended and Stop Core has run. *documented*
+- **Order, as reported:** PLI -> Actor Core -> (Normal Stop arrives) -> Handle Error -> Stop Core ->
+  Call Parent returns -> code after Call Parent. So **Stop Core runs INSIDE Actor Core's Call
+  Parent**, before anything placed after it. *reported; the Stop-Core-inside part also documented*
+- **Stop Core runs only if Actor Core started** - not after a failed PLI. A PLI that fails must
+  release what it already created itself. *documented, and reported*
+- **Handle Last Ack Core** runs in the caller when a nested actor stops; the base version returns
+  the child's error, so by default a child's error stops its caller and the stop travels up the
+  tree. *documented*
+
+### 20b. The overrides and their panes
+
+- **Panes, reported** (conIdx): Pre Launch Init `<C> in` 11, `<C> out` 3, `error out` 0, **no
+  `error in`**; Actor Core `error in` 8, `<C> in` 11, `Actor out` 3, `error out` 0; Stop Core
+  `<C> in` 11, `<C> out` 3, `final error code` 10, **no error terminals**; Handle Error
+  `error in (no error)` 8, `<C> in` 11, `<C> out` 3, `error out` 0, `stop actor?` 2 - the last
+  read from NI's own `Actor.lvclass:Handle Error.vi` here and matching.
+- **Actor Core's `Actor out` is typed `Actor`**, on the Call Parent node too; a child-typed VI fed
+  from it needs `To More Specific Class`. *reported*
+- **Every lifecycle override MUST call its parent** - Actor Core's Call Parent IS the message loop,
+  Stop Core's stops the nested actors. AIXML cannot author `Call Parent Class Method` (CLAUDE.md),
+  and `lvai_add_class_method` must not be used for these; no tool here creates them yet. The
+  colleague's fork has `lvai_create_override` (NI's provider places the node) and
+  `lvai_af_add_hook`.
+- **Scope:** `Read Self Enqueuer.vi` is protected - a non-member caller is broken (*reported*). A
+  **private dynamic-dispatch member is broken**, and every caller with it (*measured here*,
+  `docs/lvlib-lvclass-structure.md`); so private members are static.
+
+### 20c. Handle Error and the stop codes - read from NI's source
+
+- **`Stop Msg:Do.vi` returns error 43** for a normal stop and **1608** for an emergency stop (the
+  message's `is emergency?`). *NI source*
+- **The base `Actor.lvclass:Handle Error.vi` always returns `stop actor?` = TRUE**, a constant.
+  Its case structure on the error code CLEARS 43 (NI's own comment in that frame: *"Cancel Error"
+  means stop, but "No Error" to caller*) and passes EVERY other code through - **1608 included**,
+  which the source listed as an open question. *NI source*
+- Consequences: Handle Error runs on every normal stop, with 43 on its `error in`; a VI chained on
+  that incoming error is SKIPPED at every stop, so side work there (logging, file I/O) needs a
+  fresh error chain. Only code AFTER Call Parent can turn `stop actor?` back to FALSE. An override
+  that does not call the parent must clear 43 itself. *follows from the source; the skip also
+  reported*
+
+### 20d. Helper loops and user events
+
+- **Destroy before Generate: the event never arrives.** `Generate User Event` on a destroyed
+  refnum answers **error 1**, with `Destroy User Event` itself answering 0. *measured here* (plain
+  VI: Create -> Destroy -> Generate). In an actor this is a hang: if Stop Core destroys the stop
+  event and code after Call Parent then generates it, the helper loop never gets its stop and
+  Actor Core never returns. *the hang reported*
+- **Generate, then Destroy, does not lose the event** - already-queued events still fire. *reported
+  (4 of 4) and documented by NI R&D; the LabVIEW 2020 help says the opposite*
+- **Events generated before `Register For Events` are not seen.** Registration queues from the
+  moment it runs. With Register inside the helper-loop VI, a Call Parent that returns at once (an
+  error wired into it) lets the stop be generated before the loop has registered - the loop never
+  exits and the TREE stays in memory until LabVIEW restarts. **Register in an `init` member in
+  series BEFORE Call Parent.** *documented; the hang and the fix reported.* A probe here could not
+  settle it: a composed single-shot user-event handler never fired even in its control arm, and
+  the gRPC route refused to register it (`no dIdx on this event structure`) - a toolchain gap, not
+  evidence either way.
+- **`Register For Events` skips on an upstream error** - nothing is registered, and a loop whose
+  only exit is the stop event hangs the actor. Generating an event nobody registered for does
+  nothing, with no error. `Destroy User Event` and `Unregister For Events` run even with an error
+  in, so both are safe at the end of a chain. *documented*
+- **A hung helper loop cannot be freed through VI Server** (`Abort VI` answers 1000). Only a
+  LabVIEW restart frees it. *reported*
+- **A failed `Send` does not stop a helper loop** - the actor's queue lives until the Actor Core
+  override returns. The loop needs its own stop signal (user event, notifier, queue element, or a
+  local in the same VI); never abort it. *reported*
+- **`Value` written through VI Server fires no Value Change; only `Value (Signaling)` does**, and a
+  latched Boolean cannot be written at all (`Error 1193`). *reported; CLAUDE.md records the same*
+
+### 20e. Errors in an actor tree
+
+- **Default propagation:** an error from a message stops the actor (Handle Error answers TRUE), its
+  Last Ack carries the error to the caller, the caller's Handle Last Ack Core returns it, and the
+  caller stops too. *documented; reported 0.56-0.64 s for a three-level tree*
+- **Errors in Actor Core's own diagram and in helper loops never reach Handle Error** unless sent
+  with `Send Error Report.vi`. *documented*
+- **An error wired into Actor Core's Call Parent skips Handle Error**, but Stop Core runs and the
+  actor stops by itself; the launcher sees error 0 at Launch, and its next `Send` fails with 1556.
+  *documented, and reported*
+- **`Clear Errors.vi` in LabVIEW 2026 takes `specific error code to clear (0: all)`.** *reported*
+
+### 20f. Messages and libraries
+
+- A message's payload is its private data; `Do.vi` calls one actor method; never author `Do.vi` -
+  use `lvai_create_message_class` (section 4). *documented, and measured in this file*
+- **`Drop Message Core.vi`** runs on a message discarded because its actor is stopping - the place
+  to release a reference the message owns. **`Time-Delayed Send Message.vi`** sends once or
+  periodically; NI's template stops it in Stop Core. *documented*
+- **`Flatten To JSON` refuses an enum**, even inside a cluster. *reported*
+- **A library is a load unit.** Loading any member loads the whole `.lvlib` with every class in
+  it, so an abstract parent sharing a library with its concrete children drags every child's
+  toolkit into any caller. Pluggable children each get their own library. *documented*
+
+### 20g. Design choices - a menu, not rules
+
+The source lists patterns a project CHOOSES between; none is required by AF, and the choice is the
+user's: tree shape (root, managers, leaves; three or four levels), deferred start (`init` before
+Call Parent launches the children), a base actor carrying shared overrides, talking UP through an
+interface rather than an abstract message (NI's preference since LabVIEW 2020), periodic work
+(time-delayed message, timed helper loop, or Timeout frame - the last starves under event load),
+where the stop is sent (generate-then-destroy in Stop Core, or after Call Parent with the release
+after it), supervision through Handle Last Ack Core, and a `Receive Message.vi` override for
+tracing. The colleague's `conventions/defaults/af-shapes.md` turns these into 22 default rules; that
+convention system is not adopted here.
+
+### 20h. Proving an actor runs
+
+- Any member VI can be run directly, without launching the actor. *documented*
+- `Execution:State` read from inside a launcher is not a stop detector. Prove a stop with
+  timestamped log lines, `error out`, and a Normal Stop that succeeds. *reported*
+- A tree can be proved without a throwaway caller class: launch the top actor with `Launch
+  Actor.vi` and a proof-owned queue as its caller; the queue receives the top actor's Last Ack.
+  *reported*
+- Two VIs appending to one log file at the same moment overwrite each other's line; give each
+  writer its own file in a run that proves an order. *reported*

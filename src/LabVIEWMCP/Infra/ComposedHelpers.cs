@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using LabVIEWMcp.Tools;
 
 namespace LabVIEWMcp.Infra;
@@ -45,15 +46,19 @@ internal static class ComposedHelpers
             return (null, missing);
         var scripts = StatusTools.ScriptsDirectory() ?? Path.GetDirectoryName(aixml)!;
 
-        var vi = Path.Combine(Folder, viName ?? Path.ChangeExtension(Path.GetFileName(aixml), ".vi"));
+        // in an ActiveX lane (lvai_layout_diagrams' workers) the helper is the lane's own copy: one
+        // helper VI in memory, its controls written by two workers at once, read the other's answers
+        var lane = LabViewCom.Lane.Value;
+        var vi = Path.Combine(Folder, viName ?? (lane is null
+            ? Path.ChangeExtension(Path.GetFileName(aixml), ".vi")
+            : $"{Path.GetFileNameWithoutExtension(aixml)} {lane}.vi"));
         var stamp = vi + ".parts";
         // a helper composed for one LabVIEW release is not one for another (Error 1125 in 2025)
-        var partsInUse = PartsStamp(setup.PartsDirectory) + "|" +
-                         AixmlComposer.TargetRelease(AixmlBackend.LabViewInUse(),
-                                                     AixmlComposer.PartsRelease(setup.PartsDirectory));
-        var stale = !File.Exists(vi) || HelperCache.NeedsRebuild(aixml, vi)
-                    || !File.Exists(stamp) || File.ReadAllText(stamp) != partsInUse;
-        if (!stale) return (vi, null);
+        var partsInUse = ExpectedStamp(PartsStamp(setup.PartsDirectory) + "|" +
+                                       AixmlComposer.TargetRelease(AixmlBackend.LabViewInUse(),
+                                                                   AixmlComposer.PartsRelease(setup.PartsDirectory)),
+                                       aixml);
+        if (!IsStale(aixml, vi, stamp, partsInUse)) return (vi, null);
 
         Directory.CreateDirectory(Folder);
         var composed = await AixmlComposer.ComposeAsync(setup, aixml, vi, [Folder, scripts],
@@ -64,6 +69,22 @@ internal static class ComposedHelpers
         await File.WriteAllTextAsync(stamp, partsInUse, ct);
         return (vi, null);
     }
+
+    /// <summary>
+    /// The stamp a current helper carries: the parts and release it was composed for, and a hash of
+    /// its AIXML's CONTENT. By timestamp alone an older AIXML restored with its own older timestamp
+    /// - a copy that keeps it - left the helper composed from the newer one in place. Composing
+    /// carries none of the risk that keeps the gRPC route's rule narrow (HelperCache): no
+    /// ValidateAIXML runs, so a content change rebuilds whatever its timestamp says.
+    /// </summary>
+    internal static string ExpectedStamp(string partsAndRelease, string aixmlPath) =>
+        partsAndRelease + "|" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(aixmlPath)))[..16];
+
+    /// <summary>Rebuild when the VI is missing or too small, its AIXML is newer, or the stamp it was
+    /// composed under is not <paramref name="expected"/>.</summary>
+    internal static bool IsStale(string aixmlPath, string viPath, string stampPath, string expected) =>
+        !File.Exists(viPath) || HelperCache.NeedsRebuild(aixmlPath, viPath)
+        || !File.Exists(stampPath) || File.ReadAllText(stampPath) != expected;
 
     /// <summary>Which parts, and of when - a changed table or a different folder rebuilds the helper.</summary>
     private static string PartsStamp(string partsDirectory)

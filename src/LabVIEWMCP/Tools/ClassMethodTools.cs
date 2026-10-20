@@ -305,6 +305,29 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
         string? helperAixmlPath = null,
         [Description("Regenerate the helper VI even when it exists")] bool regenerateHelper = false,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 300,
+        CancellationToken ct = default,
+        [Description(AixmlBackend.ParameterDescription + """
+             On pylabview NO STEP touches NI's service: each method is COMPOSED from its AIXML (the
+            path stand-ins compose like any path), the pane repaired by pylabview as before, and the
+            retype-and-membership helper COMPOSED and run over LabVIEW's ActiveX server, where
+            {LV.Control} Replace, AddItemFromMemory and both saves work as in the add-on's instance.
+            A pylabview "validation" is a scratch compose, not NI's wiring check. helperViPath is
+            ignored there. LabVIEW must already be running.
+            """)]
+        string? backend = null,
+        [Description("""
+            Lay out each method's block diagram with our layout engine (lvai_layout_diagram's)
+            once it is a verified member, and save it in place (the cleanUpDiagram step). Reported,
+            never gating: a layout that does not finish leaves the method as converted and still ok.
+            """)]
+        bool cleanUpDiagram = true,
+        [Description("""
+            After each method is added and verified, clear the BROKEN wires left on its diagram
+            (BD.Remove Bad Wires, in the IDE's instance, project still open) and list each under the
+            method's `badWireCleanup`. Default true. A lost connection fails `ok`. Runs before the
+            layout, so the layout sees the cleaned diagram.
+            """)]
+        bool removeBadWires = true,
         [Description("""
             On a re-run, ask the project's instance first whether any LOADED VI calls a member
             about to be dropped, and refuse (`memberHasLoadedCallers`) before anything changes.
@@ -317,29 +340,7 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
             puts it at the class root as public. Default true; a project close/open cycle is added
             only when a member was non-public or in a folder.
             """)]
-        bool keepPlacement = true,
-        [Description("""
-            After each method is added and verified, clear the BROKEN wires left on its diagram
-            (BD.Remove Bad Wires, in the IDE's instance, project still open) and list each under the
-            method's `badWireCleanup`. Default true. A lost connection fails `ok`.
-            """)]
-        bool removeBadWires = true,
-        CancellationToken ct = default,
-        [Description(AixmlBackend.ParameterDescription + """
-             On pylabview NO STEP touches NI's service: each method is COMPOSED from its AIXML (the
-            path stand-ins compose like any path), the pane repaired by pylabview as before, and the
-            retype-and-membership helper COMPOSED and run over LabVIEW's ActiveX server, where
-            {LV.Control} Replace, AddItemFromMemory and both saves work as in the add-on's instance.
-            A pylabview "validation" is a scratch compose, not NI's wiring check. helperViPath is
-            ignored there. LabVIEW must already be running.
-            """)]
-        string? backend = null,
-        [Description("""
-            Run LabVIEW's own Clean Up Diagram on each method once it is a verified member, and
-            save it in place (the cleanUpDiagram step). Reported, never gating: a refused clean-up
-            leaves the method as converted and still ok.
-            """)]
-        bool cleanUpDiagram = true)
+        bool keepPlacement = true)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_add_class_method", out var choice, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
@@ -692,16 +693,23 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                         // refused the same document a second time.
                         var composerRefused = (Read(check) as JsonObject)?["errorKind"]?
                             .GetValue<string>() == "composerRefused";
-                        var classWire = Code(check) != 0 && !composerRefused
+                        var validatorFailed = Code(check) != 0 && !composerRefused
+                                              && IsValidatorInternalError(message);
+                        var classWire = Code(check) != 0 && !composerRefused && !validatorFailed
                                         && IsClassTypeComplaint(message);
                         steps.Add(new JsonObject
                         {
                             ["step"] = "preValidate",
                             ["answer"] = Read(check),
                             ["verdict"] = Code(check) == 0 ? "clean"
+                                : validatorFailed ? "validatorFailed"
                                 : classWire ? "classWireStrictness" : "realFault",
                             ["note"] = Code(check) == 0
                                 ? "The AIXML validates on its own, so nothing here is being waved through."
+                                : validatorFailed
+                                    ? "NI's validator failed INSIDE itself (an error from its own Get Errors " +
+                                      "call) and gave no verdict on the document. Converting anyway, so " +
+                                      "nothing has checked this method's wiring: run lvai_exec_state on it."
                                 : classWire
                                     ? "Refused for a CLASS-TYPED wire, which is the documented case " +
                                       "where ValidateAIXML is stricter than ConvertAIXMLToVI. " +
@@ -712,7 +720,7 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                                       "Error 1003 at run time with every file-level check green.",
                         });
 
-                        if (Code(check) != 0 && !classWire)
+                        if (Code(check) != 0 && !classWire && !validatorFailed)
                         {
                             results.Add(Failed(method, viPath, "preValidate", steps, new JsonObject
                             {
@@ -915,16 +923,16 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                 }
 
                 // THE PROJECT IS STILL OPEN AND ACTIVE HERE - phase two opened it for the member
-                // step and nothing closes it before the placement restore below - which is the
-                // only window in which Remove Bad Wires reaches the copy the project holds. The
-                // member and its class are already saved, so a cleanup that cannot run loses
-                // nothing that was there before it.
+                // step - which is the only window in which Remove Bad Wires reaches the copy the
+                // project holds. The member and its class are already saved, so a cleanup that
+                // cannot run loses nothing that was there before it.
                 var cleanup = removeBadWires
                     ? await new BadWireCleanup(connection).RunAsync(viPath, timeoutSeconds, ct)
                     : BadWireCleanup.Skipped("removeBadWires was false.");
 
-                // AFTER the verify, so the file it read is the converted one; the clean-up's own
-                // save keeps the class typing, which the class save has already committed.
+                // AFTER the verify and the bad-wire cleanup, so the file it reads is the converted,
+                // cleaned one; the clean-up's own save keeps the class typing, which the class save
+                // has already committed.
                 bool? cleanedUp = null;
                 if (cleanUpDiagram)
                 {
@@ -935,6 +943,12 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                                 && cleaned["skipped"]?.GetValue<bool>() != true;
                 }
 
+                // THE ICON LAST - after membership, retype, cleanup and layout, every one a save that
+                // keeps it, and a convert over the path would destroy it. Never gating.
+                var iconStep = await DefaultIcon.ApplyAsync(connection, viPath, method.Icon,
+                    DefaultIcon.Kind.ClassMember, classPath, choice.Name, timeoutSeconds, ct);
+                steps.Add(iconStep);
+
                 added++;
                 var methodResult = new JsonObject
                 {
@@ -942,6 +956,7 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
                     ["vi"] = viPath,
                     ["ok"] = true,
                     ["diagramCleanedUp"] = cleanedUp,
+                    ["iconSet"] = iconStep["ok"]?.GetValue<bool>() == true && iconStep["skipped"] is null,
                     ["terminalsRetyped"] = retyped,
                     ["dynamicDispatchTerminals"] = new JsonArray([.. (indices ?? []).Select(i => (JsonNode)i)]),
                     ["verifiedOnDisk"] = verify,
@@ -975,8 +990,6 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
 
             return Json.Document(new JsonObject
             {
-                // NOT GATED on the placement: the methods ARE members, and a false `ok` invites
-                // exactly the re-run this whole path exists to make safe. The flag says it instead.
                 // A LOST CONNECTION IS NOT OK, although the member WAS added: the method's diagram
                 // is not the one its AIXML describes, and a green answer would send the caller on.
                 ["ok"] = added == methods.Count && lostConnections.Count == 0,
@@ -1392,10 +1405,29 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
     /// through is the failure this method was added to stop, and the caller has
     /// <c>validateFirst: false</c> when the classifier is wrong.
     /// </summary>
-    internal static bool IsClassTypeComplaint(string message) =>
-        message.Contains(".lvclass", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("UDClassInst", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("LabVIEW Object", StringComparison.OrdinalIgnoreCase);
+    internal static bool IsClassTypeComplaint(string message)
+    {
+        var text = WithoutCallChain(message);
+        return text.Contains(".lvclass", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("UDClassInst", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("LabVIEW Object", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The validator ITSELF failed and said nothing about the document. Measured 2026-10-17 on a
+    /// grpc build: <c>Error 1018 occurred at Invoke Node in LV AI gRPC
+    /// Service.lvlibp:...ValidateAIXML.vi-&gt;...LVAI.lvclass:Start Sync.vi ... Method Name: Get
+    /// Errors</c>. The classifier read the <c>.lvclass</c> of NI's own call chain as a class wire;
+    /// the convert then wrote a correct VI.
+    /// </summary>
+    internal static bool IsValidatorInternalError(string message) =>
+        message.Contains("Method Name: Get Errors", StringComparison.OrdinalIgnoreCase)
+        && message.Contains("ValidateAIXML.vi", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A LabVIEW error message names where it occurred - "occurred at &lt;VI&gt;-&gt;&lt;VI&gt;..."
+    /// up to the end of that line - and those are the SERVICE's VIs, never the document's.</summary>
+    internal static string WithoutCallChain(string message) =>
+        System.Text.RegularExpressions.Regex.Replace(message, @"occurred at [^\r\n]*", "occurred at <call chain>");
 
     private static JsonNode? Read(string answer)
     {
@@ -1525,8 +1557,8 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
         var typed = evidence["classTypedTerminals"]?.GetValue<int>() ?? -1;
         var left = evidence["pathStandInsLeft"]?.GetValue<int>() ?? -1;
         var want = evidence["expectedPathStandInsLeft"]?.GetValue<int?>();
-        var inside = evidence["pathsInsideClusters"]?.GetValue<int?>();
         var listed = evidence["listedInClassFile"]?.GetValue<bool>();
+        var inside = evidence["pathsInsideClusters"]?.GetValue<int?>();
         return new JsonObject
         {
             ["classTypedTerminals"] = typed,
@@ -1634,6 +1666,37 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
     }
 
     /// <summary>
+    /// Which of <paramref name="viPaths"/> the class file ALREADY lists as members, by file name.
+    ///
+    /// Read from the `.lvclass` rather than asked of LabVIEW, for the reason every other check in
+    /// this file is: the file is the authority and it costs nothing. It is deliberately the same
+    /// name-only comparison <see cref="RemoveMemberEntries"/> makes, so the two can never disagree
+    /// about what is about to be dropped.
+    /// </summary>
+    internal static IReadOnlyList<string> MembersAlreadyListed(
+        string classPath, IEnumerable<string> viPaths)
+    {
+        var wanted = new HashSet<string>(
+            viPaths.Select(p => Path.GetFileName(p)), StringComparer.OrdinalIgnoreCase);
+        if (wanted.Count == 0) return [];
+
+        string text;
+        try { text = File.ReadAllText(classPath); }
+        catch (IOException) { return []; }
+        catch (UnauthorizedAccessException) { return []; }
+
+        return [.. wanted
+            .Where(name => text.Contains($"<Item Name=\"{name}\"", StringComparison.Ordinal))
+            .OrderBy(n => n, StringComparer.Ordinal)];
+    }
+
+    /// <summary>The file names of methods given as `vi` only that the class already lists.</summary>
+    internal static List<string> ViOnlyReruns(IEnumerable<MethodRequest> methods, IReadOnlyList<string> alreadyListed) =>
+        [.. methods.Where(m => m.Aixml is null)
+            .Select(m => Path.GetFileName(m.Vi))
+            .Where(n => alreadyListed.Contains(n, StringComparer.OrdinalIgnoreCase))];
+
+    /// <summary>
     /// Delete the <c>&lt;Item … Type="VI"&gt;</c> blocks naming these VIs from a <c>.lvclass</c>,
     /// returning the names actually removed. Nothing is written when nothing matched.
     ///
@@ -1668,37 +1731,6 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
     /// it needs the project OPEN, which is the opposite of what the convert needs, so it would buy a
     /// second open/close cycle per call in exchange for replacing an edit already measured to work.
     /// </summary>
-    /// <summary>
-    /// Which of <paramref name="viPaths"/> the class file ALREADY lists as members, by file name.
-    ///
-    /// Read from the `.lvclass` rather than asked of LabVIEW, for the reason every other check in
-    /// this file is: the file is the authority and it costs nothing. It is deliberately the same
-    /// name-only comparison <see cref="RemoveMemberEntries"/> makes, so the two can never disagree
-    /// about what is about to be dropped.
-    /// </summary>
-    /// <summary>The file names of methods given as `vi` only that the class already lists.</summary>
-    internal static List<string> ViOnlyReruns(IEnumerable<MethodRequest> methods, IReadOnlyList<string> alreadyListed) =>
-        [.. methods.Where(m => m.Aixml is null)
-            .Select(m => Path.GetFileName(m.Vi))
-            .Where(n => alreadyListed.Contains(n, StringComparer.OrdinalIgnoreCase))];
-
-    internal static IReadOnlyList<string> MembersAlreadyListed(
-        string classPath, IEnumerable<string> viPaths)
-    {
-        var wanted = new HashSet<string>(
-            viPaths.Select(p => Path.GetFileName(p)), StringComparer.OrdinalIgnoreCase);
-        if (wanted.Count == 0) return [];
-
-        string text;
-        try { text = File.ReadAllText(classPath); }
-        catch (IOException) { return []; }
-        catch (UnauthorizedAccessException) { return []; }
-
-        return [.. wanted
-            .Where(name => text.Contains($"<Item Name=\"{name}\"", StringComparison.Ordinal))
-            .OrderBy(n => n, StringComparer.Ordinal)];
-    }
-
     internal static IReadOnlyList<string> RemoveMemberEntries(
         string classPath, IEnumerable<string> viPaths)
     {
@@ -1815,7 +1847,8 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
     internal sealed record MethodRequest(string Vi, string? Aixml,
                                          List<ClassTerminal> ClassTerminals,
                                          List<string>? DispatchTerminals,
-                                         List<int>? DispatchTerminalIndices)
+                                         List<int>? DispatchTerminalIndices,
+                                         string? Icon = null)
     {
         public static List<MethodRequest> ParseAll(string json)
         {
@@ -1871,7 +1904,8 @@ internal sealed class ClassMethodTools(LvaiConnection connection)
 
                 all.Add(new MethodRequest(Path.GetFullPath(vi),
                                           string.IsNullOrWhiteSpace(aixml) ? null : Path.GetFullPath(aixml),
-                                          terminals, dispatchNames, dispatchIndices));
+                                          terminals, dispatchNames, dispatchIndices,
+                                          o["icon"]?.GetValue<string>()));
             }
 
             if (all.Select(m => m.Vi).Distinct(StringComparer.OrdinalIgnoreCase).Count() != all.Count)

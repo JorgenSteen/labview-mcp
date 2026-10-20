@@ -1,6 +1,6 @@
 // =============================================================================
-// RestartTools.cs - lvai_labview_state, lvai_vis_in_memory and lvai_restart_labview:
-// looking at a running LabVIEW from outside, and closing or restarting it under guards.
+// RestartTools.cs - lvai_restart_labview and lvai_answer_dialog: closing or restarting
+// LabVIEW under guards. lvai_labview_state and lvai_vis_in_memory are in LabViewStateTools.
 // =============================================================================
 using System.ComponentModel;
 using System.Text.Json;
@@ -33,139 +33,6 @@ internal sealed class RestartTools(LvaiConnection connection)
 
     internal const string MemoryHelperAixmlFileName = "lvai_vis_modified.xml";
 
-    [McpServerTool(Name = "lvai_labview_state", ReadOnly = true,
-                   Title = "LabVIEW from outside: processes, windows, dialogs, CPU")]
-    [Description("""
-        Read-only and makes NO LabVIEW call, so it answers while the service is blocked. Lists the
-        LabVIEW processes (pid, start time, path) and whether THIS server started one (recorded by
-        lvai_ensure_labview), the Nigel processes (NI.NigelLocalService, LVNigelChat), the
-        LVAutoSave folder (resolved through the Documents known folder, which may be redirected)
-        and its file count, every LabVIEW window sorted into kinds, and one CPU sample.
-        `unsaved` = titles with `*`. Each possible dialog carries `screenshot`, a PNG path to READ:
-        LabVIEW draws its dialogs, so the picture is the only way to see which one it is.
-        `possibleDialogs` = VISIBLE titled windows that are not a VI,
-        project or frame window, and VISIBLE UNTITLED windows that a LabVIEW frame owns or that sit
-        beside a disabled frame or Project Explorer (measured 2026-10-10: LabVIEW's "has changed on
-        disk" prompt is untitled and owned by the frame, which it disables), each with a `reason`,
-        named with class, buttons and text where Windows exposes them (LabVIEW draws its own
-        dialogs, so their buttons usually cannot be read).
-        `hiddenUnrecognised` = HIDDEN titled windows nothing measured explains, named the same way:
-        measured 2026-10-06, LabVIEW dialogs on screen reported themselves invisible
-        (docs/scratch-vis-in-memory.md §2a). Hidden windows of measured system classes (IME, OLE,
-        DDE, GDI+) and LabVIEW's measured hidden windows are not listed there. A VI panel
-        with a custom window title is flagged too - look at it. CPU: quiet below 1 CPU s per 30 s,
-        the threshold the skill measured with; idle is not safe - a modal dialog leaves LabVIEW
-        idle. The window classes and titles come from measured listings; the port ran against
-        LabVIEW 2026 Q3 on 2026-10-10 (docs/labview-restart.md section 12).
-        """)]
-    public static async Task<string> LabViewStateAsync(
-        [Description("Seconds of CPU sampling, 0 to skip (capped at 30)")] int cpuSampleSeconds = 5,
-        [Description("Also list hidden system windows (normally left out)")] bool includeHiddenWindows = false,
-        [Description(@"A PNG of each VISIBLE possible dialog (PrintWindow: nothing is brought to the front), path under `screenshot`, in %TEMP%\LabVIEWMCP\dialogs. On by default: a few ms, and only when a dialog is up.")]
-        bool screenshots = true,
-        CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
-            (await StateAsync(Win32LabViewMachine.Instance, null, cpuSampleSeconds, includeHiddenWindows, ct,
-                              screenshots)).ToJsonString(Indented));
-
-    internal static async Task<JsonObject> StateAsync(ILabViewMachine machine, string? autoSaveDirectory,
-        int cpuSampleSeconds, bool includeHiddenWindows, CancellationToken ct, bool screenshots = true)
-    {
-        var s = LabViewState.Take(machine, autoSaveDirectory);
-        var now = machine.Now;
-
-        var labview = new JsonArray();
-        foreach (var p in s.LabView)
-        {
-            var row = LabViewState.ProcessJson(p, now);
-            row["startedByThisServer"] = LabViewOwnership.IsServerStarted(p);
-            labview.Add(row);
-        }
-
-        var counts = new JsonObject();
-        foreach (var group in s.Windows.GroupBy(w => w.Kind).OrderBy(g => g.Key, StringComparer.Ordinal))
-            counts[group.Key] = group.Count();
-
-        JsonObject? cpu = null;
-        var seconds = Math.Clamp(cpuSampleSeconds, 0, 30);
-        if (seconds > 0 && s.Single is { } one)
-            cpu = (await LabViewState.SampleCpuAsync(machine, one.Id, TimeSpan.FromSeconds(seconds), ct)).ToJson();
-
-        var visibleOrFlagged = s.Windows.Where(w => includeHiddenWindows || w.Kind != WindowKinds.HiddenSystem);
-        var processes = s.LabView.Count switch
-        {
-            0 => "notRunning",
-            1 => "one",
-            _ => "several: which one is meant is the user's call",
-        };
-
-        return new JsonObject
-        {
-            ["ok"] = true,
-            ["at"] = s.At.ToString("yyyy-MM-dd HH:mm:ss"),
-            ["labviewProcesses"] = processes,
-            ["labview"] = labview,
-            ["recordedAsThisServers"] = LabViewOwnership.ToJson(),
-            ["nigelLocalService"] = LabViewState.ProcessesJson(s.NigelService, now),
-            ["nigelChat"] = LabViewState.ProcessesJson(s.NigelChat, now),
-            ["nigelChatStartedByThisServer"] = s.Single is { } single ? NigelChat.AttemptFor(single.Id) : null,
-            ["autoSave"] = s.AutoSave.ToJson(),
-            ["windowCounts"] = counts,
-            ["unsaved"] = new JsonArray([.. s.Unsaved.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
-            ["possibleDialogs"] = new JsonArray([.. s.Dialogs.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, screenshots))]),
-            ["hiddenUnrecognised"] = new JsonArray([.. s.HiddenUnrecognised.Select(d => (JsonNode)LabViewState.DescribeDialog(machine, d, false))]),
-            ["windows"] = new JsonArray([.. visibleOrFlagged.Select(w => (JsonNode)LabViewState.WindowJson(w))]),
-            ["cpu"] = cpu,
-            ["note"] = "No LabVIEW call was made. A modified VI with no open window does not show here, " +
-                       "and nothing measured detects a running VI from outside: lvai_vis_in_memory reads " +
-                       "the modification bits through the service.",
-        };
-    }
-
-    [McpServerTool(Name = "lvai_vis_in_memory", ReadOnly = true, OpenWorld = true,
-                   Title = "VIs in memory, and which carry unsaved changes")]
-    [Description("""
-        Every VI in memory of the DEFAULT application instance - the one a generated helper runs
-        in - with its front-panel and block-diagram modification bitsets (nonzero = unsaved), each
-        sorted as service (NI's `LV AI …lvlibp`), labview (`GSW.lvlibp`, the start window),
-        helper (labview-mcp's own helpers and LVMCP scratch VIs) or other. Only the modified,
-        unreadable and `other` lines come back, not all 400: the measured instance holds 419 VIs.
-        DEFAULT INSTANCE ONLY, AND IT SAYS SO: an open project's VIs live in the project's
-        instance and are NOT listed, and classes and libraries never are. A probe run while a
-        project is open is adopted into that project, so call it with no project open.
-        Runs scripts\lvai_vis_modified.xml, generated once into %TEMP%\LabVIEWMCP\helpers. CALL
-        IT ONCE AT THE START OF A SESSION: generating a helper validates it, and validation leaves
-        an `LVMCP Validate` VI in memory, which can itself raise the save prompt at LabVIEW's exit;
-        lvai_restart_labview therefore never generates it and reports the memory check as not run
-        until it exists. The helper is ported unchanged from a skill kit helper measured
-        2026-10-07/08 (419 lines, none modified). This tool measured 2026-10-10: 419 lines, none
-        modified; NI's packed-library .ctl lines answer 1035 and do not count against "empty".
-        """)]
-    public async Task<string> VisInMemoryAsync(
-        [Description("Regenerate the helper VI even when it already exists")] bool regenerateHelper = false,
-        [Description("Local budget in seconds")] int timeoutSeconds = 60,
-        CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
-        {
-            var (reading, notRun, generated, helperVi) = await ReadMemoryAsync(
-                allowGenerate: true, regenerateHelper, timeoutSeconds, ct);
-            if (reading is null)
-                return Json.Error("memoryNotRead", notRun ?? "The helper answered nothing.",
-                    new { helperViPath = helperVi });
-
-            var answer = reading.ToJson();
-            answer["ok"] = true;
-            answer["instance"] = "default (helper) application instance only: an open project's VIs, " +
-                                 "classes and libraries are not listed";
-            answer["helperViPath"] = helperVi;
-            answer["helperGenerated"] = generated;
-            if (generated)
-                answer["note"] = "The helper was generated by this call; the validation that comes with " +
-                                 "it leaves an `LVMCP Validate` VI in memory. Generate at the start of a " +
-                                 "session, not right before a close.";
-            return answer.ToJsonString(Indented);
-        });
-
     /// <summary>
     /// Run the memory helper. With <paramref name="allowGenerate"/> false - the restart's case - a
     /// missing or stale helper is "not run", never generated: see the tool description for why.
@@ -186,7 +53,7 @@ internal sealed class RestartTools(LvaiConnection connection)
         {
             if (!allowGenerate)
                 return (null, "the memory helper is not generated yet (or is older than its AIXML). " +
-                              "Call lvai_vis_in_memory once at the session start; it is not generated " +
+                              "Call lvai_vis_in_memory (context addon) once at the session start; it is not generated " +
                               "here, because validating it leaves an LVMCP Validate VI in memory right " +
                               "before the close.", false, helperVi);
             Directory.CreateDirectory(helpersDir);

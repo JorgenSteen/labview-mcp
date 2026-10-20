@@ -91,6 +91,18 @@ internal sealed class WireEventTools(LvaiConnection connection)
         performs. Afterwards it sticks, so the spec is written AGAIN here and the VI rebuilt:
         measured 2026-09-11 on two VIs, both eBad -> eIdle on exactly that step. Read
         userEventStep; `changed` says whether there was anything to do.
+        THE BUNDLE STEP CLOSES THE ACTIVE PROJECT, saving it, because pylabview writes the file
+        while LabVIEW keeps serving its own copy - so without the release the verification reads
+        the VI it replaced. It is ONE round trip for both jobs (user-event specs, use-default
+        flags), and it is skipped entirely, project included, when neither has anything to do.
+        projectClosed says whether it happened and projectClosedFor why. finishUserEvents: false
+        turns off the user-event half.
+        SEVERAL USER-EVENT FRAMES ARE FINISHED TOO (since 2026-10-10): dynIndex is the event's
+        position among the registration's items, lvai_generate_vi_with_events writes it per frame,
+        and this tool reads it off the VI BEFORE its wiring save destroys it, then writes each
+        frame back. A VI generated before that date wrote dynIndex 1 on every frame and is refused
+        rather than guessed - a wrong dynIndex gives a VI that loads, compiles and fires the WRONG
+        event; generate it again.
         IT ALSO WIRES THE RIGHT SIDE (wireRightSide, default true): the structure's SOURCE-side
         Event Registration Refnum terminal to the event registration refnum input of Unregister
         For Events, found at any depth by Traverse (class Function, exact, with a sink of that
@@ -105,18 +117,6 @@ internal sealed class WireEventTools(LvaiConnection connection)
         the VI is extracted BEFORE the helper runs and only selTun uids absent from that baseline
         are touched; if any baseline tunnel is missing afterwards the uids are not comparable and
         nothing is patched. useDefaultSet names the tunnels.
-        THE BUNDLE STEP CLOSES THE ACTIVE PROJECT, saving it, because pylabview writes the file
-        while LabVIEW keeps serving its own copy - so without the release the verification reads
-        the VI it replaced. It is ONE round trip for both jobs (user-event specs, use-default
-        flags), and it is skipped entirely, project included, when neither has anything to do.
-        projectClosed says whether it happened and projectClosedFor why. finishUserEvents: false
-        turns off the user-event half.
-        SEVERAL USER-EVENT FRAMES ARE FINISHED TOO (since 2026-10-10): dynIndex is the event's
-        position among the registration's items, lvai_generate_vi_with_events writes it per frame,
-        and this tool reads it off the VI BEFORE its wiring save destroys it, then writes each
-        frame back. A VI generated before that date wrote dynIndex 1 on every frame and is refused
-        rather than guessed - a wrong dynIndex gives a VI that loads, compiles and fires the WRONG
-        event; generate it again.
         """)]
     public async Task<string> WireDynamicEventsAsync(
         [Description("Absolute path of the .vi to wire. It is SAVED in place on success.")]
@@ -152,8 +152,14 @@ internal sealed class WireEventTools(LvaiConnection connection)
         bool wireRightSide = true,
         [Description("Local budget in seconds")]
         int timeoutSeconds = 300,
-        CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        CancellationToken ct = default,
+        [Description(AixmlBackend.RouteParameterDescription + """
+             On pylabview the helper is COMPOSED and run over ActiveX, and every later step
+            inherits the backend. A VI the composer wrote needs none of this - it is wired and its
+            user events registered in the compose - and is answered as already wired.
+            """)]
+        string? backend = null) =>
+        await BackendRoute.WithBackendAsync(backend, "lvai_wire_dynamic_events", () => Rpc.GuardAsync(async () =>
         {
             if (!File.Exists(viPath))
                 throw new FileNotFoundException($"No file at '{viPath}'.", viPath);
@@ -178,7 +184,10 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
             var stale = IsStale(aixml, helperVi);
             var helperGenerated = false;
-            if (regenerateHelper || stale || !File.Exists(helperVi))
+            if (BackendRoute.OnPyLabview)
+                helperVi = await BackendRoute.ComposedHelperAsync(aixml, timeoutSeconds, ct,
+                                                                  Path.GetFileName(helperVi));
+            else if (regenerateHelper || stale || !File.Exists(helperVi))
             {
                 if (await GenerateHelperAsync(aixml, helperVi, timeoutSeconds, ct)
                     is { } generationFailure) return generationFailure;
@@ -187,29 +196,57 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
             var bytesBefore = new FileInfo(viPath).Length;
 
-            // THE VI AS IT IS BEFORE THE HELPER SAVES OVER IT - one extract, two readers. It is
-            // the baseline for "created by this call": Use Default if Unwired may only go onto a
-            // tunnel the right-side wire made, never onto one the user already had. And it still
-            // carries each user-event frame's dynIndex as generated, which the wiring save destroys
-            // - several user-event frames are finished from it. Taken while LabVIEW holds the VI,
-            // which is fine for a READ.
-            (Baseline? baseline, JsonObject baselineStep) = wireRightSide || finishUserEvents
-                ? await ExtractBaselineAsync(viPath, timeoutSeconds, ct)
-                : ((Baseline?)null, new JsonObject { ["skipped"] = "wireRightSideAndFinishUserEventsFalse" });
+            // The VI AS GENERATED, read before the wiring save below - that save is the load at
+            // which LabVIEW discards every user-event spec, and with it which frame handles which
+            // user event. Several user-event frames are finished from this record (step 3).
+            var before = finishUserEvents ? await ExtractBeforeWiringAsync(viPath, timeoutSeconds, ct) : null;
 
-            var request = new RunVIAsTopLevelRequest { ViPath = helperVi };
-            request.Inputs["VI Path"] = Path.GetFullPath(viPath);
-            // Text, because the runner's inputs are strings; the helper wires the right side
-            // unless this reads FALSE.
-            request.Inputs["wire right side"] = wireRightSide ? "TRUE" : "FALSE";
+            // THE BASELINE FOR "CREATED BY THIS CALL". Use Default if Unwired may only go onto a
+            // tunnel the right-side wire made, never onto one the user already had - and the only
+            // record of "already had" is the file before the helper saves over it. Taken while
+            // LabVIEW holds the VI, which is fine for a READ.
+            (Baseline? baseline, JsonObject baselineStep) = wireRightSide
+                ? await ExtractBaselineAsync(viPath, timeoutSeconds, ct)
+                : ((Baseline?)null, new JsonObject { ["skipped"] = "wireRightSideFalse" });
 
             var stopwatch = Stopwatch.StartNew();
-            var response = await connection.InvokeAsync((c, t) =>
-                c.RunVIAsTopLevelAsync(request,
-                    deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
-            stopwatch.Stop();
-
-            var outputs = response.Outputs;
+            IDictionary<string, string> outputs;
+            JsonObject payload;
+            if (BackendRoute.OnPyLabview)
+            {
+                // over ActiveX: the run answers typed values; the indicators are read back into
+                // the same name -> text map NI's RunVIAsTopLevel gives - a scalar's text, an
+                // array's or cluster's flattened XML, which is what the parsers below read
+                var run = await new RunTools(connection).RunViAndReadValuesAsync(helperVi,
+                    new JsonObject
+                    {
+                        ["VI Path"] = Path.GetFullPath(viPath),
+                        // text, as on grpc; the helper wires the right side unless this reads FALSE
+                        ["wire right side"] = wireRightSide ? "TRUE" : "FALSE",
+                    }.ToJsonString(),
+                    timeoutSeconds: timeoutSeconds, backend: AixmlBackend.PyLabview, ct: ct);
+                stopwatch.Stop();
+                if (BackendRoute.RunRefusal(run) is { } refusal)
+                    return Json.Error(refusal, "The composed wiring helper did not run over ActiveX.",
+                        new { helperViPath = helperVi, answer = JsonNode.Parse(run) });
+                outputs = OutputsOf(JsonNode.Parse(run) as JsonObject);
+                payload = new JsonObject { ["errorCode"] = 0, ["errorMessage"] = "No Error", ["via"] = "ActiveX" };
+            }
+            else
+            {
+                var request = new RunVIAsTopLevelRequest { ViPath = helperVi };
+                request.Inputs["VI Path"] = Path.GetFullPath(viPath);
+                // Text, because the runner's inputs are strings; the helper wires the right side
+                // unless this reads FALSE.
+                request.Inputs["wire right side"] = wireRightSide ? "TRUE" : "FALSE";
+                var response = await connection.InvokeAsync((c, t) =>
+                    c.RunVIAsTopLevelAsync(request,
+                        deadline: Rpc.Deadline(timeoutSeconds), cancellationToken: t).ResponseAsync, ct);
+                stopwatch.Stop();
+                outputs = response.Outputs;
+                payload = Json.Node(response).AsObject();
+                payload.Remove("outputs");
+            }
             var found = Flag(outputs, "found");
             var chainCode = Number(outputs, "code");
             var chainSource = Text(outputs, "source");
@@ -222,7 +259,13 @@ internal sealed class WireEventTools(LvaiConnection connection)
             var registrationNodes = Dimsize(Text(outputs, "registration nodes"));
             var eventStructures = Number(outputs, "event structures");
 
-            var outcome = Classify(found, chainCode, sourceFrom, wiredBefore, endsAfter, broken,
+            // Over ActiveX the helper's code IS read back - the 1055 of the Project:Active Project
+            // read with no project open, everything after it skipped and the class list empty -
+            // where NI's run reads none (Error 91). Given as NI's shape, it gets NI's verdict,
+            // noActiveProject, not noRefnumSourceFound about a diagram nobody read (2026-10-16).
+            var classifiedCode = BackendRoute.OnPyLabview && chainCode == 1055
+                                 && topClasses.All(string.IsNullOrWhiteSpace) ? null : chainCode;
+            var outcome = Classify(found, classifiedCode, sourceFrom, wiredBefore, endsAfter, broken,
                                    chainSource, topClasses, eventStructures);
 
             var right = ClassifyRightSide(wireRightSide,
@@ -235,16 +278,12 @@ internal sealed class WireEventTools(LvaiConnection connection)
                 broken: Flag(outputs, "right wire broken"),
                 reached: outcome.Kind is not ("noActiveProject" or "helperDidNotAnswer"));
 
-            var payload = Json.Node(response).AsObject();
-            payload.Remove("outputs");
-
             payload["ok"] = JsonValue.Create(outcome.Ok);
             payload["errorKind"] = outcome.Kind is null ? null : JsonValue.Create(outcome.Kind);
             payload["viPath"] = JsonValue.Create(Path.GetFullPath(viPath));
             payload["eventStructureFound"] = found is null ? null : JsonValue.Create(found);
             payload["eventStructuresFound"] =
                 eventStructures is null ? null : JsonValue.Create(eventStructures);
-            payload["readBeforeWiring"] = JsonValue.Create(finishUserEvents && baseline is not null);
             payload["alreadyWired"] = JsonValue.Create(outcome.AlreadyWired);
             payload["sourceFrom"] = sourceFrom is null ? null : JsonValue.Create(sourceFrom);
             payload["registrationNodesOnDiagram"] =
@@ -264,6 +303,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
             payload["helperGenerated"] = JsonValue.Create(helperGenerated);
             payload["helperWasStale"] = JsonValue.Create(stale);
             payload["elapsedMs"] = JsonValue.Create(stopwatch.ElapsedMilliseconds);
+            payload["readBeforeWiring"] = JsonValue.Create(before is not null);
             payload["note"] = JsonValue.Create(outcome.Note);
             payload["verifyBy"] = JsonValue.Create(VerifyHint);
 
@@ -299,13 +339,11 @@ internal sealed class WireEventTools(LvaiConnection connection)
             // pay for extract, strip, project close, rebuild and execState - and paying twice
             // would close the project twice and rebuild a file LabVIEW has not yet reloaded.
             var doUserEvents = finishUserEvents && wired;
-            var doUseDefault = wireRightSide && baseline is not null && wired
-                               && right.MayHaveCreatedTunnels;
+            var doUseDefault = baseline is not null && wired && right.MayHaveCreatedTunnels;
             if (doUserEvents || doUseDefault)
             {
                 var finish = await FinishInBundleAsync(viPath, doUserEvents,
-                    doUserEvents ? baseline : null, doUseDefault ? baseline : null,
-                    timeoutSeconds, ct);
+                    doUseDefault ? baseline : null, before, timeoutSeconds, ct);
                 payload["userEventStep"] = finish;
                 payload["useDefaultSet"] = finish["useDefaultSet"]?.DeepClone() ?? new JsonArray();
                 payload["projectClosed"] = JsonValue.Create(
@@ -353,7 +391,8 @@ internal sealed class WireEventTools(LvaiConnection connection)
             }
 
             // A right side that was ATTEMPTED and did not land is a failure of this call even when
-            // the left side is fine - a skipped or refused one is not, it is reported.
+            // the left side is fine - a skipped or refused one is not, it is reported. Decided
+            // BEFORE the clean-up, which runs only on a VI this call left good.
             if (right.Failed && payload["ok"]?.GetValue<bool>() is true)
             {
                 payload["ok"] = JsonValue.Create(false);
@@ -364,7 +403,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
                     $"{payload["note"]?.GetValue<string>()} " +
                     $"{(right.Failed ? "RIGHT SIDE" : "Right side")}: {right.Note}");
 
-            // THE CLEAN-UP, LabVIEW's own, on the finished VI - the end of the route that
+            // THE CLEAN-UP, our layout, on the finished VI - the end of the route that
             // lvai_generate_vi_with_events hands over to for user events, so the VI is cleaned up
             // whichever tool finishes it. After every pylabview rebuild above: it is a LabVIEW save.
             if (payload["ok"]?.GetValue<bool>() == true)
@@ -375,8 +414,21 @@ internal sealed class WireEventTools(LvaiConnection connection)
                 if (cleaned["ok"]?.GetValue<bool>() != true)
                     payload["note"] = JsonValue.Create($"{payload["note"]?.GetValue<string>()} The block " +
                         "diagram was NOT cleaned up: " + cleaned["note"]?.GetValue<string>());
+
+                // AND THE SIZE, since this is where a user-event VI is finished: the generator
+                // returns at its verify step for such a VI, before its own size step, so the main
+                // VI of every producer/consumer build came back unmeasured (the gRPC cold build of
+                // LayoutCheck, 2026-10-16). The chain needs the AIXML, which this tool never sees.
+                var size = await new BulkTools(connection).DiagramSizeStepAsync(
+                    null, viPath, timeoutSeconds, ct,
+                    overCom: AixmlBackend.Inherited.Value?.Name == AixmlBackend.PyLabview);
+                payload["diagramSize"] = size;
+                if (size["note"]?.GetValue<string>() is { Length: > 0 } sizeNote)
+                    payload["note"] = JsonValue.Create($"{payload["note"]?.GetValue<string>()}{sizeNote}");
             }
 
+            if (before is { } b)
+                try { Directory.Delete(b.Directory, recursive: true); } catch (IOException) { }
             if (baseline is not null)
             {
                 try { Directory.Delete(baseline.Directory, recursive: true); }
@@ -394,7 +446,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
             }
 
             return payload.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-        });
+        }));
 
     /// <summary>
     /// STEP 3 of the user-event route: write the spec again, onto the file that now carries the
@@ -433,8 +485,8 @@ internal sealed class WireEventTools(LvaiConnection connection)
     /// afterwards, because then the uids are not comparable.
     /// </summary>
     private async Task<JsonObject> FinishInBundleAsync(
-        string viPath, bool userEvents, Baseline? before, Baseline? baseline, int timeoutSeconds,
-        CancellationToken ct)
+        string viPath, bool userEvents, Baseline? baseline,
+        (string Directory, string BaseName)? before, int timeoutSeconds, CancellationToken ct)
     {
         var step = new JsonObject
         {
@@ -490,13 +542,13 @@ internal sealed class WireEventTools(LvaiConnection connection)
         var baseName = Path.GetFileNameWithoutExtension(mainXml);
         var closedFor = new JsonArray();
 
+        string[] userEventArguments = before is { } b
+            ? [directory, baseName, "--before", b.Directory, b.BaseName]
+            : [directory, baseName];
         if (userEvents)
         {
-            string[] arguments = before is not null
-                ? [directory, baseName, "--before", before.Directory, before.BaseName]
-                : [directory, baseName];
             var finish = await EventStructureTools.RunScriptAsync(bundle, scripts,
-                "pylv-finish-user-events.py", arguments, "finishUserEvents",
+                "pylv-finish-user-events.py", userEventArguments, "finishUserEvents",
                 timeoutSeconds, ct);
             steps.Add(finish);
             if (finish["exitCode"]?.GetValue<int>() != 0)
@@ -664,8 +716,7 @@ internal sealed class WireEventTools(LvaiConnection connection)
 
         step["note"] = "The baseline extract failed, so Use Default if Unwired will NOT be set "
             + "on any tunnel: without it a tunnel this call made cannot be told from one the "
-            + "user already had - and a VI with several user-event frames is refused rather than "
-            + "guessed, because their dynIndex is only readable before the wiring save.";
+            + "user already had.";
         try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
         return (null, step);
     }
@@ -810,6 +861,28 @@ internal sealed class WireEventTools(LvaiConnection connection)
                 "there was nothing to wire from.");
         return new("skipped", "notAttempted", false, false,
             "the helper did not attempt the right side and its indicators do not say why.");
+    }
+
+    /// <summary>
+    /// The VI AS GENERATED, extracted before the wiring save: each user-event frame's
+    /// <c>dynIndex</c> is still the generation step's there, and the save destroys it. Reading a
+    /// file LabVIEW holds is fine. Null when pylabview is not provisioned or the extract fails -
+    /// the finishing step then refuses several frames as it always did, rather than guessing.
+    /// </summary>
+    private async Task<(string Directory, string BaseName)?> ExtractBeforeWiringAsync(
+        string viPath, int timeoutSeconds, CancellationToken ct)
+    {
+        if (PyLabview.Locate() is null) return null;
+        var directory = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "userevents",
+            Path.GetFileNameWithoutExtension(viPath) + "-before-" + Environment.ProcessId + "-"
+            + Guid.NewGuid().ToString("N")[..7]);
+        Directory.CreateDirectory(directory);
+        var json = await new PyLabviewTools(connection)
+            .ExtractAsync(viPath, directory, annotate: false, timeoutSeconds, ct);
+        if (JsonNode.Parse(json)?["mainXml"]?.GetValue<string>() is { Length: > 0 } mainXml)
+            return (directory, Path.GetFileNameWithoutExtension(mainXml));
+        try { Directory.Delete(directory, recursive: true); } catch (IOException) { }
+        return null;
     }
 
     /// <summary>
@@ -1010,6 +1083,24 @@ internal sealed class WireEventTools(LvaiConnection connection)
         var array = new JsonArray();
         foreach (var value in values) array.Add(JsonValue.Create(value));
         return array;
+    }
+
+    /// <summary>
+    /// A run over ActiveX as NI's RunVIAsTopLevel outputs: each indicator by name, a scalar as its
+    /// text, an array or cluster as LabVIEW's flattened XML - the shape the parsers here read.
+    /// </summary>
+    internal static Dictionary<string, string> OutputsOf(JsonObject? run)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (run?["values"] is not JsonObject values) return map;
+        foreach (var (name, node) in values)
+        {
+            if (node is not JsonObject v) continue;
+            var type = (string?)v["type"] ?? "";
+            var text = type is "Array" or "Cluster" ? (string?)v["xml"] : v["value"]?.ToString();
+            if (text is not null) map[name] = text;
+        }
+        return map;
     }
 
     private static string? Text(IDictionary<string, string> outputs, string name) =>

@@ -273,7 +273,7 @@ public class ModalDialogClassifierTests
     [Fact]
     public async Task The_state_tool_names_it_with_its_reason()
     {
-        var state = await RestartTools.StateAsync(Measured1215(), NoAutoSave, 0, includeHiddenWindows: false, default);
+        var state = await LabViewStateTools.StateAsync(Measured1215(), NoAutoSave, 0, includeHiddenWindows: false, default);
         var d = Assert.Single(state["possibleDialogs"]!.AsArray())!;
         Assert.Equal("", d["title"]!.GetValue<string>());
         Assert.Contains("owned by the LabVIEW frame", d["reason"]!.GetValue<string>());
@@ -412,7 +412,7 @@ public class LabViewOwnershipTests
         m.AddWindow(10, "LVDChild", "B.vi Block Diagram *", true);
         m.CpuRate[10] = 0.0;
 
-        var state = await RestartTools.StateAsync(m, @"X:\none", 5, includeHiddenWindows: false, default);
+        var state = await LabViewStateTools.StateAsync(m, @"X:\none", 5, includeHiddenWindows: false, default);
 
         Assert.Equal("one", state["labviewProcesses"]!.GetValue<string>());
         Assert.Empty(state["possibleDialogs"]!.AsArray());

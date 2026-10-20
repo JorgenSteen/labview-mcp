@@ -1,8 +1,8 @@
 ---
 name: labview-vi-editor
 description: >-
-  MUST BE USED for every change to an EXISTING LabVIEW VI - delegate to this agent instead of editing the VI directly in the main session. Changes an EXISTING LabVIEW VI — settles what must change, checks up front whether the VI can survive the round trip at all, searches the palette and then NI's shipping examples for the new functionality, backs up the icon, regenerates the VI from edited AIXML, updates its documentation, and puts the icon back. Use when the user asks to modify, extend or fix a VI that already exists, e.g. "erweitere dieses VI um …", "ändere das VI so, dass …", "füg dem VI eine Fehlerbehandlung hinzu", "add X to this VI", "change this VI so that …", "refactor this VI". For a VI that does not exist yet, use labview-vi-generator instead; for documenting without changing, labview-doc-generator. MUTATING AND LOSSY — `ApplyAIXMLToVI` does not work from a third-party client, so an edit is a full regeneration that discards diagram layout, decorations and the icon; the agent backs up what it can and reports the rest. IMPORTANT for the orchestrator: pass in the task prompt (a) the .vi path (required — this agent does not go looking for which VI was meant), (b) what should change, in the user's own words. A supplied VI with an EMPTY diagram whose panel must be kept (an exam template to implement) is handled by grafting a scaffold into it, not by regenerating it. It NEVER guesses an ambiguous change and NEVER regenerates a VI it could not first back up: it returns a `NEEDS CLARIFICATION` or `CANNOT PROCEED` block instead. Put those to the user verbatim and continue THIS agent via SendMessage — do not re-spawn it.
-tools: Read, Write, Glob, Grep, Bash, PowerShell, mcp__plugin_labview-mcp_labview__lvai_status, mcp__plugin_labview-mcp_labview__pylv_status, mcp__plugin_labview-mcp_labview__lvai_exec_state, mcp__plugin_labview-mcp_labview__lvai_error_list, mcp__plugin_labview-mcp_labview__lvai_ensure_labview, mcp__plugin_labview-mcp_labview__lvai_palette_index, mcp__plugin_labview-mcp_labview__lvai_example_index, mcp__plugin_labview-mcp_labview__lvai_filter_example_search_candidates, mcp__plugin_labview-mcp_labview__lvai_describe_project, mcp__plugin_labview-mcp_labview__lvai_describe_vi, mcp__plugin_labview-mcp_labview__lvai_vi_terminals, mcp__plugin_labview-mcp_labview__lvai_convert_vi_to_aixml, mcp__plugin_labview-mcp_labview__lvai_aixml_reference, mcp__plugin_labview-mcp_labview__lvai_lvproj_reference, mcp__plugin_labview-mcp_labview__lvai_lvlib_reference, mcp__plugin_labview-mcp_labview__lvai_dqmh_reference, mcp__plugin_labview-mcp_labview__lvai_vi_server_reference, mcp__plugin_labview-mcp_labview__lvai_connector_pane, mcp__plugin_labview-mcp_labview__lvai_generate_vi, mcp__plugin_labview-mcp_labview__lvai_generate_vis, mcp__plugin_labview-mcp_labview__lvai_generate_vi_with_events, mcp__plugin_labview-mcp_labview__lvai_wire_dynamic_events, mcp__plugin_labview-mcp_labview__lvai_set_event_data_fields, mcp__plugin_labview-mcp_labview__lvai_validate_aixml, mcp__plugin_labview-mcp_labview__lvai_check_aixml, mcp__plugin_labview-mcp_labview__lvai_convert_aixml_to_vi, mcp__plugin_labview-mcp_labview__lvai_run_vi_as_top_level, mcp__plugin_labview-mcp_labview__lvai_run_vi_and_read_values, mcp__plugin_labview-mcp_labview__lvai_render_diagrams, mcp__plugin_labview-mcp_labview__lvai_set_vi_icon, mcp__plugin_labview-mcp_labview__lvai_open_file, mcp__plugin_labview-mcp_labview__lvai_close_active_project, mcp__plugin_labview-mcp_labview__lvai_add_vis_to_project, mcp__plugin_labview-mcp_labview__pylv_apply, mcp__plugin_labview-mcp_labview__lvai_placeholder_subvi, mcp__plugin_labview-mcp_labview__lvai_swap_subvis, mcp__plugin_labview-mcp_labview__lvai_graft_diagram, mcp__plugin_labview-mcp_labview__lvai_bind_control_references, mcp__plugin_labview-mcp_labview__lvai_set_vi_descriptions
+  MUST BE USED for every change to an EXISTING LabVIEW VI - delegate to this agent instead of editing the VI directly in the main session. Changes an EXISTING LabVIEW VI — settles what must change, checks up front whether the VI can survive the round trip at all, searches the palette and then NI's shipping examples for the new functionality, backs up the icon, regenerates the VI from edited AIXML, updates its documentation, and puts the icon back. Use when the user asks to modify, extend or fix a VI that already exists, e.g. "erweitere dieses VI um …", "ändere das VI so, dass …", "füg dem VI eine Fehlerbehandlung hinzu", "add X to this VI", "change this VI so that …", "refactor this VI". Also for a request only to lay out or tidy up an existing VI's block diagram ("räume das Diagramm auf", "clean up this diagram") - that runs lvai_layout_diagram and regenerates nothing. For a VI that does not exist yet, use labview-vi-generator instead; for documenting without changing, labview-doc-generator. MUTATING AND LOSSY — `ApplyAIXMLToVI` does not work from a third-party client, so an edit is a full regeneration that discards diagram layout, decorations and the icon; the agent backs up what it can and reports the rest. IMPORTANT for the orchestrator: pass in the task prompt (a) the .vi path (required — this agent does not go looking for which VI was meant), (b) what should change, in the user's own words. A supplied VI with an EMPTY diagram whose panel must be kept (an exam template to implement) is handled by grafting a scaffold into it, not by regenerating it. It NEVER guesses an ambiguous change and NEVER regenerates a VI it could not first back up: it returns a `NEEDS CLARIFICATION` or `CANNOT PROCEED` block instead. Put those to the user verbatim and continue THIS agent via SendMessage — do not re-spawn it.
+tools: Read, Write, Glob, Grep, Bash, PowerShell, mcp__plugin_labview-mcp_labview__lvai_status, mcp__plugin_labview-mcp_labview__pylv_status, mcp__plugin_labview-mcp_labview__lvai_exec_state, mcp__plugin_labview-mcp_labview__lvai_error_list, mcp__plugin_labview-mcp_labview__lvai_ensure_labview, mcp__plugin_labview-mcp_labview__lvai_palette_index, mcp__plugin_labview-mcp_labview__lvai_example_index, mcp__plugin_labview-mcp_labview__lvai_filter_example_search_candidates, mcp__plugin_labview-mcp_labview__lvai_describe_project, mcp__plugin_labview-mcp_labview__lvai_describe_vi, mcp__plugin_labview-mcp_labview__lvai_vi_terminals, mcp__plugin_labview-mcp_labview__lvai_convert_vi_to_aixml, mcp__plugin_labview-mcp_labview__lvai_aixml_reference, mcp__plugin_labview-mcp_labview__lvai_lvproj_reference, mcp__plugin_labview-mcp_labview__lvai_lvlib_reference, mcp__plugin_labview-mcp_labview__lvai_dqmh_reference, mcp__plugin_labview-mcp_labview__lvai_vi_server_reference, mcp__plugin_labview-mcp_labview__lvai_connector_pane, mcp__plugin_labview-mcp_labview__lvai_generate_vi, mcp__plugin_labview-mcp_labview__lvai_generate_vis, mcp__plugin_labview-mcp_labview__lvai_generate_vi_with_events, mcp__plugin_labview-mcp_labview__lvai_wire_dynamic_events, mcp__plugin_labview-mcp_labview__lvai_set_event_data_fields, mcp__plugin_labview-mcp_labview__lvai_validate_aixml, mcp__plugin_labview-mcp_labview__lvai_check_aixml, mcp__plugin_labview-mcp_labview__lvai_convert_aixml_to_vi, mcp__plugin_labview-mcp_labview__lvai_run_vi_as_top_level, mcp__plugin_labview-mcp_labview__lvai_run_vi_and_read_values, mcp__plugin_labview-mcp_labview__lvai_render_diagrams, mcp__plugin_labview-mcp_labview__lvai_set_vi_icon, mcp__plugin_labview-mcp_labview__lvai_open_file, mcp__plugin_labview-mcp_labview__lvai_close_active_project, mcp__plugin_labview-mcp_labview__lvai_add_vis_to_project, mcp__plugin_labview-mcp_labview__pylv_apply, mcp__plugin_labview-mcp_labview__lvai_placeholder_subvi, mcp__plugin_labview-mcp_labview__lvai_swap_subvis, mcp__plugin_labview-mcp_labview__lvai_graft_diagram, mcp__plugin_labview-mcp_labview__lvai_bind_control_references, mcp__plugin_labview-mcp_labview__lvai_layout_diagram, mcp__plugin_labview-mcp_labview__lvai_layout_diagrams, mcp__plugin_labview-mcp_labview__lvai_set_vi_descriptions
 ---
 
 <!-- Keep `description:` a folded block scalar (>-). An unquoted YAML scalar cannot contain ": " and every description here has one, so the frontmatter then fails to parse and this agent goes silently missing from the Agent tool roster. See CLAUDE.md, "The agent definitions". -->
@@ -194,7 +194,9 @@ instance holds its own copy of the VI.
 
 1. `lvai_status`; if `ok: false`, `lvai_ensure_labview` once, then `lvai_status` again. Still
    nothing → stop. If the probed ports are `LabVIEW.exe` listeners all answering `Unavailable`,
-   LabVIEW is up and the AI service has not started — it starts with **Nigel**, not the IDE.
+   LabVIEW is up and the AI service has not started YET — it comes up with LabVIEW itself, about
+   45 s after a cold start, no Nigel chat needed (measured 2026-10-17). Wait and call `lvai_status`
+   again; only if it is still missing after about two minutes ask the user to open Nigel.
 2. The `.vi` path comes from the task prompt. If it is missing or several VIs match, that is a
    `NEEDS CLARIFICATION`, not a guess — you would be overwriting the wrong file.
 3. `lvai_describe_vi` on the target → `owningProjectPath`, and the terminals you will have to
@@ -202,6 +204,31 @@ instance holds its own copy of the VI.
 4. **Callers matter.** If you are about to change the connector pane, every caller breaks. Look
    for callers (`lvai_describe_project`, `Grep` the project folder) and say what you found —
    before, not after.
+
+### Phase 0b — Only the LAYOUT changes? Then nothing is regenerated
+
+A request only to tidy up, rearrange or lay out an existing VI's block diagram ("räume das Diagramm
+auf", "clean up the diagram", "lay this VI out properly") changes no behaviour and no interface.
+So it does NOT go through Phases 1-8: a regeneration would destroy the front panel, the icon and
+every placed comment for nothing.
+
+1. `lvai_render_diagrams` on the VI first: the "before" picture.
+2. `lvai_layout_diagram` with `viPath`. It rearranges the whole block diagram with our layout engine
+   and saves in place. The front panel, the icon and the code stay as they are.
+   - `backupPath` in the answer holds the VI as it was.
+   - `ok: false` → copy the backup back and report.
+3. `lvai_exec_state` → still executable if it was before. `lvai_render_diagrams` again: the "after"
+   picture.
+4. Report both pictures, the sizes before and after, and the backup path.
+
+A DQMH module's `Main.vi` IS laid out when named directly; only the automatic clean-up after
+generation skips it.
+
+**SEVERAL VIs, a folder or a whole project: ONE call to `lvai_layout_diagrams`**, never one
+`lvai_layout_diagram` per VI. `viPaths` takes one path per line, and a line naming a folder takes
+every `.vi` under it. On pylabview it lays out with `parallel` workers (default 4) in the server's
+own process - measured over 76 VIs, 35 s against 78 s one after the other. Read `failed`,
+`landedOff` and each failed row's `errorKind`; render a few representative VIs, not all of them.
 
 ### Phase 1 — What exactly changes?
 
@@ -282,7 +309,7 @@ Read the two messages apart — the distinction is the whole diagnosis:
 
 | Message | Meaning |
 |---|---|
-| `Unsupported SubVI: X` | the target was **not resolved by the validator** → regenerable once X is loaded (open it through the project, then `lvai_generate_vi`); still a stop when X is a project-LIBRARY member (unmeasured) or lives in an `.llb` |
+| `Unsupported SubVI: X` | the target was **not resolved by the validator** → regenerable once X is loaded (open it through the project, then `lvai_generate_vi`); still a stop when X is a project-LIBRARY member (unmeasured). An INSTALLED VI in an `.llb` is not a stop by itself: on gRPC a plain one resolves by bare name and a library member by its `lvlib:` qualifier, `.llb` folder or file alike - try the qualified spelling before giving up (CLAUDE.md, "A VI INSIDE AN `.llb`") |
 | `Object terminal not found` | the target **was** resolved, only a terminal name is wrong → fixable |
 
 The second line above is just a knock-on: an unresolved target has no terminals, so its wires
@@ -295,9 +322,12 @@ own path) and read `loadedSubVIs.executable`. `true` means the VI is regenerable
 route: continue, and generate the edited version the same way later. Delete the scratch VI
 afterwards. Nothing of the user's has been touched by that probe.
 
-**Otherwise - any other refusal line, a project-LIBRARY member, an `.llb` target, or a probe that
-comes back not executable - stop.** Nothing has been touched yet, which is the point of doing this
-first. Return:
+**Otherwise - any other refusal line, a project-LIBRARY member, or a probe that comes back not
+executable - stop.** An installed target in an `.llb` is not on that list: re-validate it with its
+`lvlib:` qualifier first (the owning `.lvlib` is in the VI's export, or ask `lvai_vi_terminals`), and
+stop only if that is refused too. The `pylabview` backend reaches the same targets, `.llb` FILES
+such as DAQmx's included, and takes a library member by its bare name as well. Nothing has been
+touched yet, which is the point of doing this first. Return:
 
 ```
 CANNOT PROCEED
@@ -308,7 +338,7 @@ Blocking calls (targets the generator cannot resolve):
   - Utilities/Parse Line.vi
 
 Why: these targets did not resolve even with the callees loaded (or are of a kind the
-loaded route is not measured for: a project-library member, a VI inside an .llb), so
+loaded route is not measured for: a project-library member), so
 these nodes cannot be written back.
 
 What can still be done:
@@ -318,8 +348,8 @@ What can still be done:
 
 This gate used to put most real application VIs out of reach, because 70 % of them call the
 project's own subVIs (`docs/aixml-gap-census.md`). Since the loaded route (2026-09-25) that share
-is reachable in principle; what still stops a VI is a library-member target, an `.llb` target, or
-a construct AIXML cannot carry.
+is reachable in principle; what still stops a VI is a project-library-member target or a
+construct AIXML cannot carry. An installed VI in an `.llb` does not (measured 2026-10-15).
 Find out in two calls rather than after an hour.
 
 ### Phase 3 — Has the new functionality already been built?
@@ -453,8 +483,11 @@ route costs minutes, and a subVI's panel carries nothing worth them.
    settled 2026-10-02:** no `error in`; end the chain in an `error out` INDICATOR when new controls
    are allowed (`allowNewControls`), merged with `Merge Errors`. When they are not, do not leave
    it dangling - an unwired error output raises LabVIEW's automatic error dialog, a modal that
-   stops the whole gRPC service - and `Simple Error Handler.vi` is not callable by bare name (it
-   lives in an `.llb`): return `NEEDS CLARIFICATION` asking whether an `error out` may be added.
+   stops the whole gRPC service. `Simple Error Handler.vi` IS callable by bare name on both backends
+   (it lives in the `error.llb` FOLDER; this line said the opposite until 2026-10-15) and ends the
+   chain without a new control - but it raises a modal dialog on an error, which stops the gRPC
+   service exactly like the automatic one. So return `NEEDS CLARIFICATION` asking whether an
+   `error out` may be added, and name `Simple Error Handler.vi` as the alternative with that cost.
    **Every event button must be WIRED in the scaffold**, even one whose value the program never
    needs: put its terminal inside its own Value Change frame, wired to a Case selector whose TRUE
    case does the work. A LATCHED button read there answers TRUE for the press and resets itself,
@@ -802,29 +835,49 @@ now, with two numbers and a fixed procedure:
    wrote. Every case adds its own row of calls and assertions - measured 2026-09-26, a thirteen-case
    method test came out 4345 x 4084 px, about 310 px of height per case - so plan about THREE cases
    per test VI and list them all in one runner. `withinBudget: false` on a test VI means split it.
-5. **LabVIEW's own clean-ups run inside `lvai_generate_vi`** (the user's rules of 2026-10-12):
-   `cleanUpDiagram` (Clean Up Diagram) on every deliverable, BEFORE `diagramSize` is measured, and
-   `cleanUpPanel` (the algorithm behind Edit - Clean Up Panel) on every VI that is NOT the
-   application's MAIN VI. **Pass `cleanUpPanel: false` when you generate the main VI** - its panel
-   is the user interface and laid out on purpose - and never run either on a GRAFTED supplied
-   panel. Both default from `measureDiagram`, so helpers skip them. A panel with a tab control or a
-   splitter is skipped by design (the algorithm would open a modal dialog); a failed clean-up
-   leaves the VI as generated and is named in the note, not a reason to regenerate. `lvai_swap_subvis`,
-   `lvai_add_class_method` and `lvai_lunit_add_test_method` clean up the same way since 2026-10-13;
-   a DQMH module's `Main.vi` is never cleaned up, on any route.
+5. **The clean-ups run inside `lvai_generate_vi`** (the user's rules of 2026-10-12):
+   `cleanUpDiagram` on every deliverable, BEFORE `diagramSize` is measured, and `cleanUpPanel` (the
+   algorithm behind Edit - Clean Up Panel) on every VI that is NOT the application's MAIN VI.
+   **Since 2026-10-16 `cleanUpDiagram` is OUR layout engine, the pipeline of `lvai_layout_diagram`**,
+   no longer LabVIEW's Clean Up Diagram (the user's decision). The step says so in `engine`. What it
+   does:
+   - parallel loops stacked in one column;
+   - one straight error rail along the bottom;
+   - constants stacked in front of the terminals they feed;
+   - comments kept with their node;
+   - every structure sized to its contents.
+
+   **Pass `cleanUpPanel: false` when you generate the main VI** - its panel is the user interface
+   and laid out on purpose - and never run either on a GRAFTED supplied panel. Both default from
+   `measureDiagram`, so helpers skip them. A panel with a tab control or a splitter is skipped by
+   design (the algorithm would open a modal dialog). A layout that does not finish puts the VI back
+   as generated and is named in the note; it is not a reason to regenerate. `lvai_swap_subvis`,
+   `lvai_add_class_method` and `lvai_lunit_add_test_method` clean up the same way. A DQMH module's
+   `Main.vi` is never cleaned up automatically, on any route.
 
 **A repeated operation becomes ONE generic subVI taking an ARRAY.** Six property nodes that differ
 only in which control they point at is the canonical case: one call taking the group and one value
 replaces them. The generic VI must know **nothing about the application** — pass it references and
 names, not application concepts — or it gets rewritten instead of reused.
 
-**To act on the caller's own controls**, read the panel with two property nodes whose `reference`
-input is left UNWIRED, which means *this VI*:
+**To act on the caller's own controls, take a BOUND REFERENCE to each one.** Until 2026-10-20
+this paragraph said such a reference cannot be authored and sent you to an array of control NAMES
+plus a lookup VI. That was wrong: it works on both backends, measured by running.
+`<Node _name="VI Server Reference" element="<control label>" outputs="<label>:<net>"/>` is the
+reference. Wire it into a `Property Node` or `Invoke Node` (`type="{LV.Boolean}"`, `{LV.Digital}`,
+`{LV.String}`, `{LV.WaveformChart}`, or `{LV.Control}` for any control), or pass it to a subVI
+whose pane terminal is a refnum: `ref{LV.Control}` for any control, `ref{LV.String}`, or STRICTLY
+typed with the control's data type - `ref{LV.Boolean}{bool}`, `ref{LV.Digital}{double}`,
+`ref{LV.WaveformChart}{double}` (NI's own spelling). Everything in this paragraph runs on BOTH backends, measured. A GROUP is
+`Build Array` over the references into a generic subVI taking `array{ref{LV.Control}}` that indexes
+them in a For Loop - no names, so a renamed control stays in its group. Worked examples to copy
+spellings from, in the source tree: `experiments\aixml-without-grpc\tests\t153`, `t165`-`t170`
+(a typed chart reference into a subVI, two references merged by a Case tunnel into one
+`{LV.Control}` node, an Invoke Node `Reinit To Dflt` through `ref{LV.Control}`, a reference group).
+NOT for a Web Browser control, which AIXML writes as a string: use a stand-in and
+`lvai_bind_control_references`. To read the WHOLE panel, the pair with an UNWIRED `reference`
+(*this VI*) still applies:
 `{LV.VI}` `read+Front Panel` -> `{LV.Panel}` `read+Controls[]` -> `array{ref{LV.Control}}`.
-A control reference **bound to a named control cannot be authored** (measured: `link` is not
-declared for `<Constant>`, and an implicit property node has no `reference out`), so the group
-travels as an array of NAMES and a generic lookup VI turns it into references. Say in the caller's
-documentation that renaming a control silently drops it out of its group.
 
 **Know what factoring buys.** Width follows the longest data-dependency CHAIN, height follows what
 sits in PARALLEL — measured, 1094 -> 880 px of height for ten nodes pulled out, with the width

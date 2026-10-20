@@ -107,5 +107,6 @@ __pycache__/
 # Claude Code agent worktrees - local scratch checkouts, never committed
 .claude/worktrees/
 
-# Local improvement plans and their findings - working notes, never committed
-improvement-plans/
+# archify receipts (carry local paths) - only the .html and source .json are committed
+docs/diagrams/*.*.json
+.DS_Store

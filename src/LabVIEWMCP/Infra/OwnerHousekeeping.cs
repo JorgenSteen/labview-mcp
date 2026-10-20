@@ -229,7 +229,7 @@ internal sealed record OwnerFile(string Path, bool IsClass, string? Description,
 
 /// <summary>
 /// What a <c>.vi</c> or <c>.ctl</c> says about itself in its resource file, read without LabVIEW
-/// through the block table <see cref="ViIconLayers.Blocks"/> already walks.
+/// through the block table <see cref="RsrcMap.Blocks"/> already walks.
 ///
 /// - <c>STRG</c> holds the VI description: a big-endian 32-bit length, then the text in CP1252,
 ///   line breaks CRLF. Read off NI's examples (2026-10-12): e.g. 41 bytes, length 37, for
@@ -246,7 +246,7 @@ internal static class ViFile
 {
     internal static string Description(string viPath)
     {
-        var block = ViIconLayers.Blocks(File.ReadAllBytes(viPath), "STRG").FirstOrDefault();
+        var block = RsrcMap.Blocks(File.ReadAllBytes(viPath), "STRG").FirstOrDefault();
         if (block is null || block.Length < 4) return "";
         var length = (int)Math.Min(BinaryPrimitives.ReadUInt32BigEndian(block), (uint)(block.Length - 4));
         return AnsiText.Windows1252.GetString(block, 4, length);
@@ -254,7 +254,7 @@ internal static class ViFile
 
     internal static IReadOnlyList<string> Owners(string viPath)
     {
-        var block = ViIconLayers.Blocks(File.ReadAllBytes(viPath), "LIBN").FirstOrDefault();
+        var block = RsrcMap.Blocks(File.ReadAllBytes(viPath), "LIBN").FirstOrDefault();
         if (block is null || block.Length < 4) return [];
         var count = BinaryPrimitives.ReadUInt32BigEndian(block);
         var names = new List<string>();
@@ -281,7 +281,7 @@ internal static class ViFile
         var needle = Encoding.Latin1.GetBytes(fileName);
         if (needle.Length is 0 or > 255) return false;
         foreach (var type in new[] { "LIvi", "LIfp", "LIbd" })
-            foreach (var block in ViIconLayers.Blocks(file, type))
+            foreach (var block in RsrcMap.Blocks(file, type))
                 for (var from = 0; from < block.Length;)
                 {
                     var hit = block.AsSpan(from).IndexOf(needle);
@@ -299,7 +299,7 @@ internal static class ViFile
         var file = File.ReadAllBytes(viPath);
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var type in new[] { "icl8", "icl4", "ICON" })
-            foreach (var block in ViIconLayers.Blocks(file, type))
+            foreach (var block in RsrcMap.Blocks(file, type))
             {
                 sha.AppendData(Encoding.ASCII.GetBytes(type));
                 sha.AppendData(block);

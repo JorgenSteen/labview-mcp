@@ -120,14 +120,14 @@ internal sealed class BulkTools(LvaiConnection connection)
             """)]
         string? backend = null,
         [Description("""
-            Run LabVIEW's own Clean Up Diagram on the written VI and save it in place - {LV.VI}
-            BD.CleanUp then Save.Instrument, the two calls NI's Message Maker makes on every VI it
-            scripts - BEFORE the diagram is measured, so diagramSize is the diagram you get. Omit
-            it to clean up whenever the diagram is measured, which is every deliverable; helpers
-            and carriers skip it. Skipped with openVI, where the IDE holds its own copy. A VI that
-            had no compiled code comes back with none: a LabVIEW save that writes some is stripped
-            again. A failed clean-up does not fail the call - the VI is as generated, and the
-            cleanUpDiagram step says why.
+            Lay out the written VI's block diagram with OUR layout engine - the pipeline of
+            lvai_layout_diagram, since 2026-10-16 in place of LabVIEW's BD.CleanUp - and save it in
+            place, BEFORE the diagram is measured, so diagramSize is the diagram you get. Omit it
+            to clean up whenever the diagram is measured, which is every deliverable; helpers and
+            carriers skip it. Skipped with openVI, where the IDE holds its own copy, and for a DQMH
+            module's Main.vi. A VI that had no compiled code comes back with none. A failed layout
+            does not fail the call - the VI is put back as generated, and the cleanUpDiagram step
+            (engine: lvai_layout_diagram) says why.
             """)]
         bool? cleanUpDiagram = null,
         [Description("""
@@ -137,7 +137,12 @@ internal sealed class BulkTools(LvaiConnection connection)
             Omit it to follow cleanUpDiagram. A panel holding a tab control or a splitter is left
             alone (the algorithm answers it with a modal dialog), reported as skipped.
             """)]
-        bool? cleanUpPanel = null)
+        bool? cleanUpPanel = null,
+        [Description(DefaultIcon.ParameterDescription + """
+             Drawn on every deliverable (whenever the diagram is measured), after every other
+            step; helpers and carriers get none.
+            """)]
+        string? icon = null)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_generate_vi", out var choice, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
@@ -145,7 +150,42 @@ internal sealed class BulkTools(LvaiConnection connection)
         var answer = AixmlTools.WithBackend(await GenerateViCoreAsync(
             aiXmlFilePath, viPath, openVI, measurePane, panePattern, timeoutSeconds, measureDiagram,
             choice, cleanDiagram, cleanUpPanel ?? cleanDiagram, ct), choice);
-        return choice.Name == AixmlBackend.PyLabview ? WithUnmeasuredExecutability(answer) : answer;
+        answer = choice.Name == AixmlBackend.PyLabview ? WithUnmeasuredExecutability(answer) : answer;
+        return await WithIconAsync(answer, viPath, icon, measureDiagram && !openVI, choice.Name,
+                                   timeoutSeconds, ct);
+    }
+
+    /// <summary>
+    /// Whether a generate answer left a VI that will be KEPT: ok, stopped at execState (the gRPC
+    /// loaded-subVI route), or - on pylabview - written by the composer and only not executable yet.
+    /// That last one is the routine state of a class test whose seeds are still paths, and leaving it
+    /// out drew no icon on lvai_generate_class_test's test VI in the cold build of 2026-10-17.
+    /// </summary>
+    internal static bool IconWanted(JsonObject answer)
+    {
+        if (answer["ok"]?.GetValue<bool>() == true) return true;
+        var failedAt = answer["failedAtStep"]?.GetValue<string>();
+        if (failedAt == "execState") return true;
+        if (failedAt != "convert") return false;
+        var convert = answer["steps"]?.AsArray()
+            .LastOrDefault(s => s?["step"]?.GetValue<string>() == "convert")?["answer"];
+        return convert?["errorCode"]?.GetValue<int>() == 0
+               && convert["executable"]?.GetValue<bool>() == false;
+    }
+
+    /// <summary>
+    /// The `icon` step of lvai_generate_vi: on a written deliverable whose run got past the
+    /// diagram - ok, or stopped only at execState (the routine state of a class method or a caller
+    /// whose class seed is still a path, repaired later by a Replace that keeps the icon).
+    /// </summary>
+    internal async Task<string> WithIconAsync(string answer, string viPath, string? icon, bool wanted,
+                                              string backend, int timeoutSeconds, CancellationToken ct)
+    {
+        if (!wanted || !File.Exists(viPath) || Parsed(answer) is not JsonObject o) return answer;
+        if (!IconWanted(o)) return answer;
+        var step = await DefaultIcon.ApplyAsync(connection, viPath, icon, DefaultIcon.Kind.Plain,
+                                                owner: null, backend, timeoutSeconds, ct);
+        return DefaultIcon.AppendTo(answer, step);
     }
 
     /// <summary>
@@ -506,6 +546,31 @@ internal sealed class BulkTools(LvaiConnection connection)
                                  cleaned["note"]?.GetValue<string>();
             }
 
+            // A VI WE WRITE IS SOURCE-ONLY, whoever put compiled code into it. The clean-up strips
+            // what its own save brought in and leaves what was there before - so a VI NI's converter
+            // wrote WITH compiled code, as it does when the callees of a direct Call are loaded, kept
+            // it: Evaluate TDMS File in the gRPC cold build of LayoutCheck (2026-10-16), the one VI of
+            // nine with a VICD block. A pylabview edit of such a file runs the old compiled code
+            // (docs/pylabview-stale-compiled-code.md), so it goes here, before anything else reads it.
+            if (!openVI && ContainsCompiledCode(viPath))
+            {
+                var strip = await (StripCompiled?.Invoke(viPath, timeoutSeconds, ct)
+                    ?? new DiagramCleanup(connection).StripCompiledAsync(viPath, timeoutSeconds, ct));
+                var clean = !ContainsCompiledCode(viPath);
+                steps.Add(new JsonObject
+                {
+                    ["step"] = "stripCompiled",
+                    ["ok"] = clean,
+                    ["note"] = clean
+                        ? "The converter wrote compiled code into the VI; it is stripped - the file is source-only."
+                        : "The converter wrote compiled code into the VI and stripping it FAILED - a later " +
+                          "pylabview edit of this file would run the old compiled code. Read detail.",
+                    ["detail"] = strip,
+                });
+                if (!clean)
+                    cleanNote += " The VI still carries compiled code: read the stripCompiled step.";
+            }
+
             // THE SIZE, after any pane repair (a render loads the VI, and a pylabview rebuild
             // after that would write under LabVIEW's loaded copy) and before the pane measurement.
             JsonObject? size = null;
@@ -566,13 +631,15 @@ internal sealed class BulkTools(LvaiConnection connection)
     /// The `diagramSize` step: one render of the written VI plus the longest chain of its AIXML.
     /// Shared with lvai_generate_vi_with_events, which builds the main VIs that ran largest.
     /// </summary>
-    internal async Task<JsonObject> DiagramSizeStepAsync(string aixmlPath, string viPath,
+    internal async Task<JsonObject> DiagramSizeStepAsync(string? aixmlPath, string viPath,
                                                          int timeoutSeconds, CancellationToken ct,
                                                          bool overCom = false)
     {
         var watch = Stopwatch.StartNew();
         DiagramSize.ChainResult? chain = null;
-        try { chain = DiagramSize.Chain(await File.ReadAllTextAsync(aixmlPath, ct)); }
+        // no AIXML where the VI comes from another tool (lvai_wire_dynamic_events): no chain
+        if (aixmlPath is not null)
+            try { chain = DiagramSize.Chain(await File.ReadAllTextAsync(aixmlPath, ct)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
         var running = LabViewCom.RunningPids();
         var (measured, png) = await (MeasureDiagram?.Invoke(viPath, timeoutSeconds, ct)
@@ -603,8 +670,15 @@ internal sealed class BulkTools(LvaiConnection connection)
     }
 
     /// <summary>Test seam for the `cleanUpDiagram` step (viPath, backend); null in production, where
-    /// <see cref="DiagramCleanup"/> runs LabVIEW's own Clean Up Diagram.</summary>
+    /// <see cref="DiagramCleanup"/> runs our layout engine.</summary>
     internal Func<string, string, int, CancellationToken, Task<JsonObject>>? CleanUp
+    {
+        get; init;
+    }
+
+    /// <summary>Test seam for the `stripCompiled` step (viPath); null in production, where
+    /// <see cref="DiagramCleanup.StripCompiledAsync"/> strips the file through pylabview.</summary>
+    internal Func<string, int, CancellationToken, Task<JsonObject>>? StripCompiled
     {
         get; init;
     }

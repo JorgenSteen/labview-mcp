@@ -800,15 +800,16 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
     /// `required input 'X' is not wired` - an error naming the caller's document for a staleness in
     /// this cache. `refresh` was the only way out, and nothing pointed at it.
     ///
+    /// AND ONLY THE PANE IS IN IT - a front-panel object with no conIdx is not part of what binds,
+    /// and the stub no longer carries one (2026-10-12).
+    ///
     /// AND THE TARGET'S IDENTITY IS IN THE KEY, since 2026-10-11. Without it two subjects with the
     /// same pane shared one stub - two Actor Framework methods (`ROOT in`, `error in`, `ROOT out`,
     /// `error out`), or methods of two different classes, because the export writes every class as
     /// bare `ref{UDClassInst}` - and lvai_swap_subvis, which matches by VI name, could not tell
     /// their nodes apart. The identity is the export's library-qualified name when it has one
     /// (`Channel.lvclass:Write Config.vi`), else the subject's full path, else its bare name.
-    ///
-    /// AND ONLY THE PANE IS IN IT - a front-panel object with no conIdx is not part of what binds,
-    /// and the stub no longer carries one (2026-10-12).
+    /// Every stub cached under an older key stays in user.lib\LV_MCP\ and is simply no longer chosen.
     /// </summary>
     internal static string Signature(ViTerminals.Result subject, string? subjectPath = null) =>
         string.Join("|",

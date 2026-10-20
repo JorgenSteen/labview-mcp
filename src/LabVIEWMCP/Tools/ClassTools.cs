@@ -162,8 +162,8 @@ internal sealed class ClassTools(LvaiConnection connection)
         [Description(AixmlBackend.ParameterDescription + """
              On pylabview NO STEP touches NI's service: the throwaway project is opened and closed,
             the carrier composed, and NI's own class provider run, all through COMPOSED helpers over
-            LabVIEW's ActiveX server. LabVIEW must already be running. typedefFieldsJson is refused
-            there - the typedef binding has no such route yet.
+            LabVIEW's ActiveX server. LabVIEW must already be running. typedefFieldsJson binds on
+            the same route - lvai_bind_class_fields inherits the backend.
             """)]
         string? backend = null)
     {
@@ -189,10 +189,8 @@ internal sealed class ClassTools(LvaiConnection connection)
             // a `typedef.X` marker in fields decides where X's placeholder sits.
             var (typedefFields, typedefRefusal) = TypedefFieldRequest(typedefFieldsJson, parsed, projectPath);
             if (typedefRefusal is not null) return typedefRefusal;
-            if (typedefFields.Count > 0 && choice.Name == AixmlBackend.PyLabview)
-                return Json.Error("notAvailableOnBackend",
-                    "typedefFieldsJson needs the typedef binding, which runs only on the grpc backend " +
-                    "so far. Create the class with backend grpc, or without the typedef fields.");
+            // refused on pylabview until 2026-10-16, while lvai_bind_class_fields - the binding
+            // step - inherits the route's backend like every other inner call
             parsed = WithTypedefPlaceholders(parsed, typedefFields);
 
             // pylabview is NO LONGER a precondition here. It was, while the private data control
@@ -1310,8 +1308,12 @@ internal sealed class ClassTools(LvaiConnection connection)
         if (!File.Exists(full)) LvTextFile.WriteNew(full, LvClass.Project([], lvVersion));
 
         // The parent is listed for the READER's benefit - a hierarchy the project does not show is
-        // confusing - not because anything in the run needs it there.
-        if (parentClassPath is { Length: > 0 } && File.Exists(parentClassPath))
+        // confusing - not because anything in the run needs it there. NOT a parent from the
+        // LabVIEW installation: Actor.lvclass came out at target level with a URL running into
+        // Program Files (a grpc build of 2026-10-17), where LabVIEW itself keeps it under
+        // Dependencies and drops the entry on its next save.
+        if (parentClassPath is { Length: > 0 } && File.Exists(parentClassPath)
+            && !InLabViewInstallation(parentClassPath))
         {
             try
             {
@@ -1325,6 +1327,16 @@ internal sealed class ClassTools(LvaiConnection connection)
         }
 
         return full;
+    }
+
+    /// <summary>A file under a LabVIEW installation - some folder above it holds LabVIEW.exe:
+    /// vi.lib, user.lib, instr.lib, LVAddons, resource.</summary>
+    internal static bool InLabViewInstallation(string path)
+    {
+        for (var dir = Path.GetDirectoryName(Path.GetFullPath(path)); dir is { Length: > 0 };
+             dir = Path.GetDirectoryName(dir))
+            if (File.Exists(Path.Combine(dir, "LabVIEW.exe"))) return true;
+        return false;
     }
 
     private static (string Path, bool Scratch, JsonObject Step) PrepareProject(
@@ -2079,7 +2091,14 @@ internal sealed class ClassTools(LvaiConnection connection)
             wizard is the same VI either way. helperViPath is ignored there - composed helpers live
             in their own folder. LabVIEW must already be running.
             """)]
-        string? backend = null)
+        string? backend = null,
+        [Description("""
+            Draw an icon on every accessor this call creates - the class's first word as the
+            banner, READ or WRITE and the field under it - as the last step of each slice. Default
+            true; a class that has its OWN icon keeps the template the wizard laid on and is not
+            touched. Reported per VI under `icons`, never gating.
+            """)]
+        bool setIcons = true)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_create_accessors", out var choice, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
@@ -2358,6 +2377,18 @@ internal sealed class ClassTools(LvaiConnection connection)
                 // answer to use; these raw counts stay as they are and decode nothing.
                 final["memberNames"] = MemberNamesOnDisk(lvclassPath);
                 final["dispatchFlags"] = DispatchFlagsOnDisk(lvclassPath);
+
+                // THE ICONS, before the source-only read: the icon save brings compiled code in and
+                // the icon step strips it again, so the check below sees the final file.
+                if (setIcons)
+                {
+                    var icons = new JsonArray();
+                    foreach (var vi in createdPaths.Distinct(StringComparer.OrdinalIgnoreCase))
+                        icons.Add(await DefaultIcon.ApplyAsync(connection, vi, null,
+                            DefaultIcon.Kind.ClassMember, lvclassPath, choice.Name, timeoutSeconds, ct));
+                    final["icons"] = icons;
+                    final["iconsSet"] = icons.Count(i => i?["ok"]?.GetValue<bool>() == true && i["skipped"] is null);
+                }
 
                 // SOURCE-ONLY, READ FROM EACH SAVED FILE - the user's standing rule is that every
                 // VI this server writes is source-only, asserted rather than assumed.
