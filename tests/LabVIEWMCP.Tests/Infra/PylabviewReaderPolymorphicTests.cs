@@ -20,10 +20,12 @@ namespace LabVIEWMcp.Tests.Infra;
 public sealed class PylabviewReaderPolymorphicTests
 {
     /// <summary>A path under an installed LabVIEW - a plain file, or a member of an .llb container
-    /// file, which File.Exists cannot see, hence LlbPath.</summary>
+    /// file, which File.Exists cannot see, hence LlbPath. The NEWEST installation first: on a
+    /// station that also has LabVIEW 2020, its Trim Whitespace.vi names its instances differently.</summary>
     private static string? Installed(params string[] parts) =>
         Directory.Exists(@"C:\Program Files (x86)\National Instruments")
             ? Directory.EnumerateDirectories(@"C:\Program Files (x86)\National Instruments", "LabVIEW 20*")
+                .OrderByDescending(d => d, StringComparer.OrdinalIgnoreCase)
                 .Select(d => Path.Combine([d, .. parts]))
                 .FirstOrDefault(LlbPath.Exists)
             : null;
