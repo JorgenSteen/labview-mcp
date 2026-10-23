@@ -42,8 +42,14 @@ import time
 import xml.etree.ElementTree as ET
 
 ANCHORS = (("<vilib>", "vi.lib"), ("<userlib>", "user.lib"), ("<instrlib>", "instr.lib"),
-           ("<resource>", "resource"))
-OWNER_EXT = (".lvlib", ".lvclass")
+           ("<resource>", "resource"),
+           # the help folder: the 3D Graph's properties dialog calls <helpdir>\_LaunchHelpUrl.vi
+           ("<helpdir>", "help"))
+# an XControl is a library too: its members call each other by `X.xctl:Member.vi`, as NI's
+# exporter and the reader write them (the XControl sweep, 2026-10-22)
+OWNER_EXT = (".lvlib", ".lvclass", ".xctl")
+# the item types an .xctl lists its VIs under, beside a library's plain "VI"
+XCTL_VI_TYPES = ("VI", "Method VI", "Property VI", "Ability VI")
 
 
 def labview_root():
@@ -243,14 +249,82 @@ class Resolver:
         rel = os.path.relpath(os.path.abspath(path), best[1])
         return best[0], rel.split(os.sep)
 
+    def class_parents(self, cls_file, depth=8):
+        """The ancestor CLASS files of a .lvclass, nearest first - its `Parent` items' URLs, symbolic
+        (/<vilib>/...) or relative to the class file treated as a directory; interfaces skipped."""
+        out, cur = [], cls_file
+        for _ in range(depth):
+            try:
+                root = ET.parse(materialize(cur) or cur).getroot()
+            except (OSError, ET.ParseError):
+                break
+            nxt = None
+            for item in root.iter("Item"):
+                if item.get("Type") != "Parent" or not item.get("URL"):
+                    continue
+                url = item.get("URL")
+                if url.startswith("/<"):
+                    anchor, _, rest = url[1:].partition("/")
+                    cand = next((os.path.normpath(os.path.join(d, *rest.split("/"))) for a, d in self.roots
+                                 if a == anchor), None)
+                else:
+                    cand = os.path.normpath(os.path.join(cur, *url.split("/")))
+                if not cand or not exists(cand):
+                    continue
+                try:
+                    iface = any(p.get("Name") == "NI.LVClass.IsInterface" and (p.text or "").strip().lower() == "true"
+                                for p in ET.parse(materialize(cand) or cand).getroot().iter("Property"))
+                except (OSError, ET.ParseError):
+                    iface = False
+                if not iface:
+                    nxt = cand
+                    break
+            if nxt is None:
+                break
+            out.append(nxt)
+            cur = nxt
+        return out
+
+    def linked_file(self, tp, comps, caller_files):
+        """The file a link record's path ref names: TpVal 0 from one of the roots (`<vilib>`,
+        `<userlib>` ...), TpVal 1 relative to the caller FILE treated as a directory - each empty
+        component one level up. The first candidate caller that yields an existing file wins."""
+        if not comps:
+            return None
+        if str(tp) == "0":
+            for anchor, d in self.roots:
+                if comps[0] == anchor:
+                    p = os.path.join(d, *comps[1:])
+                    return p if exists(p) else None
+            return None
+        for cf in caller_files:
+            if not cf:
+                continue
+            p = os.path.abspath(cf)
+            for c in comps:
+                p = os.path.dirname(p) if c == "" else os.path.join(p, c)
+            if exists(p):
+                return p
+        return None
+
     def ref(self, path, caller_file):
         s = self.symbolic(path)
         if s:
             return ("0", [s[0]] + s[1])
         return ("1", relative_ref(caller_file, path))
 
+    def member_item(self, owner, name, kind=None):
+        """The <Item> an owner lists under `name`, at any folder depth, or None."""
+        real = materialize(owner)
+        if real is None:
+            return None
+        for item in ET.parse(real).getroot().iter("Item"):
+            if item.get("Name") == name and item.get("URL") and (not kind or item.get("Type") in kind):
+                return item
+        return None
+
     def member(self, owner, name, kind=("VI",)):
-        """The file an owner (.lvlib or .lvclass) lists under `name`, at any folder depth."""
+        """The file an owner (.lvlib, .lvclass or .xctl) lists under `name`, at any folder depth."""
         real = materialize(owner)
         if real is None:
             return None
@@ -301,12 +375,29 @@ class Resolver:
             if not candidates:
                 return {"error": "no %s in the installation or near the caller" % owners[-1]}
             for owner in candidates:
-                path = self.member(owner, vi_name)
+                path = self.member(owner, vi_name,
+                                   XCTL_VI_TYPES if owner.lower().endswith(".xctl") else ("VI",))
                 if path and exists(path):
                     kind = "class member" if owners[-1].lower().endswith(".lvclass") else "library member"
                     return {"path": path, "qual": owners + [vi_name], "kind": kind,
                             "path_ref": self.ref(path, caller_file),
                             "lib_ref": self.ref(owner, caller_file), "owner": owner}
+            # an INHERITED method: a dynamic-dispatch call through a child class names the child
+            # (`XY Plot Matrix.lvclass:Write Active Plot.vi`) where only its parent, 2D Plot.lvclass,
+            # lists the member - XY Plot Matrix's Active Plot Write.vi (the XControl sweep, 2026-10-23).
+            # The LINK still names the CHILD and its .lvclass, as LabVIEW writes it: NI's 2D Feather
+            # facade links `2D Feather.lvclass:Set Range.vi` at 2D Feather.lvclass though only 2D
+            # Plot has the VI - named after the parent, its calls were "Wire: Class conflict".
+            # `path` is the parent's VI, which the composer reads the pane from.
+            if owners[-1].lower().endswith(".lvclass"):
+                for owner in candidates:
+                    for parent in self.class_parents(owner):
+                        path = self.member(parent, vi_name)
+                        if path and exists(path):
+                            return {"path": path, "qual": owners + [vi_name], "kind": "class member",
+                                    "path_ref": self.ref(path, caller_file),
+                                    "lib_ref": self.ref(owner, caller_file), "owner": owner, "inherited": True,
+                                    "defined_in": parent}
             return {"error": "%s lists no member %r" % (owners[-1], vi_name)}
         for d in caller_dirs:
             p = os.path.join(d, target)

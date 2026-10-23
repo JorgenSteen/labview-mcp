@@ -2648,6 +2648,419 @@ The full suite on the grammar change, before the `out_key` fix: 131 PASS, 5 LOAD
 driven by window messages, which failed identically with the composer change stashed (same
 LabVIEW, restarted), so they are not this change's.
 
+### Every XControl of the installation, read and recomposed (2026-10-22)
+
+The user's question: are there more XControls than the Dual Mode Thermometer that we cannot read
+and write - pylabview only. The installation has **23** (`.xctl` under examples, `project\`,
+`resource\`, `user.lib` MGI, `vi.lib` FXP, 15 Math Plots, the Native 3D Graph, Configure User Def
+Prop). A sweep read every member (3 534 - an `.xctl` lists most by a SYMBOLIC URL,
+`/<vilib>/...`, which the first sweep skipped and counted 49) and 91 VIs around them with the
+reader, composed the reader's AIXML out of place, and loaded every composed VI over COM.
+
+| stage | composed | executable |
+|---|---|---|
+| first sweep, code as on `main` | 71 of 3 519 (49 members found, the rest counted as hosts) | 52 of 60 |
+| after the fixes below, before classes | 457 of 3 625 | 353 of 358 |
+| the 3 095 refused on `ref{UDClassInst}`, after the class fix | **2 809** | **2 764 of 2 809** |
+
+Reading never failed. NI's own export is no better here: for the 3D Picture Control's VIs
+(`make_axes_grids.vi`) it writes the pane and NOTHING of the diagram.
+
+What was wrong, each measured, each with its fix:
+
+- **Bundle/Unbundle By Name on a NESTED cluster.** The terminal's `<i>` counts every element
+  depth first, a nested cluster before its own fields (`Unflatten From JSON.vi`: `Description.Name`,
+  `Description.Time`, `Data`, `Error` are 1, 2, 3, 4 - 0 is `Description`), and NI's export names
+  a nested field by its dotted path. The reader indexed the top level only, so it picked the wrong
+  field - which is what the "wrong wire type" breaks of MCLB with Sort and the WebPublishingTool
+  were (a `u32[]` into a `bool`, a whole cluster into a `bool`) - and the composer knew no paths.
+  `aixml2vi.field_paths`; a typedef'd field is labelled on the type it wraps. Against NI's cached
+  exports: **217 of 221 VIs agree, against 175 before**, the 4 left differed before too. `t173`.
+- **A Conditional Disable Structure runs `activeDiag`, LabVIEW does NOT evaluate the conditions
+  on load.** `defaultDiag` names the Default frame, `activeDiag` the frame that runs, both absent
+  meaning 0 (NI's `ex_InitTabControl.vi`: Default second, `defaultDiag 01`; `Scale TDMS Data.vi`:
+  `TARGET_TYPE!=RT` second, `activeDiag 01`). The composer wrote neither, so a Default frame not
+  first was "an empty condition" and a true condition not first never ran (Default first and
+  `RUN_TIME_ENGINE==False` second ran Default). It evaluates the conditions now for My Computer
+  (`RUN_TIME_ENGINE` False, `TARGET_TYPE` Windows, `TARGET_BITNESS` 32 or
+  `LABVIEWMCP_TARGET_BITNESS`; a project symbol compares unequal). `t174`.
+- **Not every XControl member is its facade.** Every `X.xctl:` name was composed as a Facade -
+  window, events and all. NI's: Facade for the Ability VI the `.xctl` names Facade, **Method** for
+  a Method VI, Standard for the rest; all carry `LIBN`. The role is read from the `.xctl` now, and
+  `.xctl` counts as a library owner in `resolve.py`, so `X.xctl:Member.vi` calls resolve.
+- **A Method VI needs `VIMS`**, a block only methods carry - without it LabVIEW answers "Resource
+  not found". Read off all six methods of the installation: u16 the return value's conIdx (FFFF
+  none), u16 0, u16 the parameter count, then per parameter u16 conIdx and u16 FFFF (NI's
+  `Convert C to F.vi`: `0001 0000 0001 000A FFFF`). Parameters are written ascending; NI's
+  `Sort.vi` lists 7 before 5, an order the pane does not carry.
+- **The connector pane PATTERN is part of a subVI's link binding**, and AIXML has no attribute for
+  it: recomposed on the station default (4833), `C to F.vi` (4815) broke NI's facade, `Bad linkage
+  to subVI` six times. The reader writes `<?lvmcp pane="4815"?>` AFTER `</VI>` - the one place NI's
+  service ignores (`docs/aixml-frontpanel-extension.md`) - and the composer takes it.
+- **Types and nodes**: a queue of strictly typed scene refnums (`ref{X}{Y}` as an element), classes
+  the reader knew from NI's exports but the composer did not (`class-ids-learned.json` is now read
+  by `refnum_type` and by `harvest_parts.py`, whose property sweep had skipped those classes - five
+  classes, 76 properties and 8 methods more after `--props` over the XControl VIs), five classes
+  NI's exports name only as a CONTROL's type (`learn_ref_classes.py`: `0x003B` LV.LVObjectRefNum,
+  `0x0054` LV.SceneWindow, `0x004F` LV.FacadeVI, `0x4065` LV.XNode, `0x40A3`
+  LV.ExternalEditorWizard), Pi/2 as a fixed constant (code `06`, our spelling `PI/2` - no NI export
+  names one), `Index Array` and concatenating `Build Array` on a typedef'd array, and an Invoke
+  Node parameter labelled on its typedef.
+
+**The whole Dual Mode Thermometer recomposes except its two `.ctl`s**: facade, Init, the method,
+both property VIs and both subVIs from the reader, in place, callees first; the host with its panel
+open answers 212 for 100 C. `t140` does exactly that now (`recompose` in expect.json).
+
+**A CLASS-TYPED TERMINAL - the user's idea, and it holds.** AIXML writes `ref{UDClassInst}` with no
+class, NI's export as well, so 3 094 members (the Math Plots) were refused. The reader now writes
+the qualified class of each such terminal after `</VI>`, per element in its type's order
+(`<?lvmcp classes uid="187" names="3D Bar.lvclass"?>`); the composer makes a real class refnum
+(`Refnum UDClassInst`, `MultiItem 1`, one `Item` per qualifier, the front-panel `udClassDDO` parts)
+and gives Bundle/Unbundle By Name on the class wire only their field names. Without links the VI
+"refers to a missing LabVIEW class" and everything behind it fails; with `VIPI`, and in `LIfp` an
+`FPPI` naming the udClassDDOs and a `DDPI` naming the controls - NI's `Light Color Read.vi` has
+exactly these - **LabVIEW resolves the class nodes and the upcast to the parent class ON LOAD**, no
+`TCPI`, no open-and-save in the IDE: executable, no insanity, no DWarn on a fresh LabVIEW.
+
+**The 169 "Bundle By Name: a cluster input must be wired" were the READER's, not the composer's.**
+The Bundle sat in an In Place Element Structure on an `Array Index / Replace Elements` pair, which
+the reader did not read (`In Place pair not read`, 187 of them in the first sweep, and 368
+`decomposeArrayNode`s left out) - so the Bundle came out with no input and no output. Both In Place
+pairs with NAMED terminals are read and composed now, as NI's export writes them:
+`Array Index / Replace Elements` (`inputs="array:..,index:.." outputs="element:.."`, the right half
+`_id`-linked with the reverse) and `Unbundle / Bundle Elements` (`fields="a,b"`, `input cluster` /
+`output cluster`). In the heap two `decomposeArrayNode`s or `decomposeClusterNode`s joined by an
+`arrayPoserInterface` / `clusterPoserInterface`; the dcoAgg is the element (array) or the cluster;
+the array and index terms, or the cluster, reach outside through structure terms naming their DCO
+(array 0x800000/0x800001, index 0xE00000/0xE00001). A cluster field is `<index>` on its DCO - not
+`<i>`, which made two fields "element unbundled multiple times" - counted as a Bundle By Name's
+(`Increase Count.vi`: 5 and 4). Parts `inplacepair/<poser class>`, cut from NI's
+`Channel Probe_Background Updater.vi`. And the halves are as big as their terminals - NI's two-field
+cluster halves are (35, 0, 68, 113) and (35, 226, 68, 339) in a 339 px structure; the 12 x 16 box
+the in/out pair uses was `Insane {graphics}` on every term. A call's typedef'd terminal is labelled
+on the type it wraps (`Read Plot Array.vi`'s `Plot Property Array`, read as `?` until now).
+`t175` runs both: an element incremented in place, a field doubled and one negated. **Re-run on
+the 188 VIs refused this way: 184 compose, 184 of 184 load executable.**
+
+**An XControl instance on a HOST's panel is written as a plain indicator of its data type -
+by NI's export as well** (`Compass Plot.vi`: `array{ref{UDClassInst}.Data}`), so the 15 Math Plot
+host examples composed as an array of class refnums that "refers to a missing LabVIEW class":
+`_fp_class_links` looked for udClassDDOs as `SL__arrayElement`s and an array's element object is
+not one. With every udClassDDO under the control found, they get FPPI/DDPI and **38 of the 45
+broken VIs load executable**, the 15 hosts among them. That is the user's interim route of
+2026-10-22: executable, but the panel shows an ARRAY where NI's shows the XControl. The real
+instance is a pass of its own - an `xControl` ddo carrying `xCtlState` (the State control's type
+and data, flattened), `stateTD` and `libVersion`, plus `VIXC` in LIvi and `XCXI` in LIfp naming
+the xControl objects, `GILinkProp1` the `.xctl`'s major version and `GILinkProp5` a 1904-epoch
+timestamp that differs per `.xctl` - none of which AIXML carries.
+
+The other 7 are class MEMBERS with dynamic-dispatch terminals (MGI's Path Selector classes,
+`Native 3D Graph\classes\prep.vi`): "Only VIs owned by a LabVIEW class may use dynamic terminals".
+**All 7 load executable now, recomposed in place in a copy of their folder**, after four things:
+
+- `LIBN` for a `.lvclass` member (`X.lvclass:M.vi`, a class in a library `L.lvlib:X.lvclass:M.vi`),
+  the LVSR name bare, as for an XControl member.
+- **`VILB`**, the FIRST record of LIvi, naming the library FILE: `LinkSaveFlag 2`, an empty qualified
+  name, the path relative to the VI (NI's `Get Directory.vi`: `["", "MGI Path Selector.lvclass"]`).
+  `LIBN` alone left the error standing. NOT written for an XControl member: with it LabVIEW holds
+  the member to the XControl's abilities and wants `Display State` and `Data` typed by the `.xctl`'s
+  State and Data typedefs, which AIXML does not carry - `t140`'s facade went "Ability State is
+  missing" and "incorrect datatype"; without it the member stays loose and runs (A/B).
+- The pane's slot FLAGS, which `connection` carries only partly: a dynamic-dispatch input is
+  `0x9000` (it was written 0), and an output names its in-place partner, `0x0400` plus the partner's
+  slot (`error out 0x0D04` beside `error in` at 4). The reader writes them after `</VI>`,
+  `<?lvmcp paneflags="0:0D04,3:0D07,..."?>`, and the composer takes them; `dynamic` alone is 0x9000.
+- `0x1000` on a class-typed fPDCO marks a dynamic-dispatch terminal, an OUTPUT included - which NI's
+  export writes `recommended`, so AIXML cannot say it. A part cut from a dispatching accessor (the
+  udClassDDO indicator part, LMock's `Read.vi`) brought it along, and MGI's `Class Read.vi` got
+  "Cannot have dynamic outputs without a dynamic input" on its plain `Value` (NI 0x10201, composed
+  0x11201). The reader lists the terminals that carry it, `<?lvmcp dynamic uids="..."?>`, and the
+  composer sets the bit there and clears it elsewhere, on class-typed controls only.
+
+Suite after it: 141 PASS, 5 LOADS, none failing; round trip 146 of 146.
+
+**The Unbundle refusals ("input is UnitUInt16, not a cluster", "no output 'element'", "Array
+Index / Replace Elements on a NumInt") were four other defects, none of them Unbundle's.** Re-run
+on the 74 VIs that showed them: 0 composed before, **51 after, 49 of 51 load executable** (the 2
+are MGI class members composed out of place, executable in their folder):
+
+- **A queue's element took its PART DONOR's type.** A primitive's output adapts only to inputs that
+  shared its donor type, and the donor of `Preview Queue Element` queued an enum - so a cluster
+  queue's `element` came out UnitUInt16 (26 VIs). The queue tests had matched their donors by
+  chance. Now a terminal whose donor type is the donor refnum's ELEMENT takes the wired refnum's
+  element, and a wired input that is that element (Obtain Queue's `element data type`) makes the
+  refnum one of the wired type; error terminals excepted, because the notifier's donor shares its
+  element type with `error in`/`error out` (`t154` broke without that). `t176`.
+- **`Preview Queue Element` had no names for `error in` and `error out`** (`?parm3`, `?parm11`).
+  Learned with `learn_names_full.py --cache` from eleven NI exports of these VIs, made for it
+  (the whole cache is past the tool's time limit): 9112 3 and 11, plus six slots of four other
+  primitives. NI's export names them as Dequeue Element's.
+- **Unbundle and Bundle (not By Name) read a typedef'd field as `element`** - its label sits on
+  the type it wraps (`Control Ref Queue`) - in the reader and the composer alike (16 VIs).
+- **A 2D `Array Index / Replace Elements`**: `index (row)` 0xA00000 and `index (col)` 0xC00000 on
+  BOTH halves, each with its own outer terminal (NI's `Queue Stack Maze Solver.vi`); a right half
+  with the row alone was a FATAL insanity, "Out of bounds TypedObjList access (index: 1, nObj: 1)".
+  `t177`. Pairs with several elements (`element`, `element2`) stay refused. And `lv-com.ps1`'s 2D
+  array INPUT reads back empty - no test had used one - so `t177` takes its grid from a constant.
+
+Left: Unbundle By Name on a class wire (private data, 3), on an unknown source type (5), and on a
+number (4); the rest are single cases. Suite: 143 PASS, 5 LOADS, none failing; round trip 148 of
+148.
+
+**And those, the same day: 56 of the 74 compose, 52 load executable** (the 4 more MGI class
+members composed out of place, executable in their folder):
+
+- **Unbundle "on a number"** was arithmetic typing: `Multiply(cluster, cluster)` and `Divide(cluster,
+  single)` answered a number, where LabVIEW works element-wise and answers the cluster
+  (`find_angles_3d.vi`); the donor of Divide had x and x/y in different type groups. And
+  `To Double Precision Float` of a cluster of numbers is that cluster with double fields
+  (`make_axes_caption.vi`). A `SubArray` output (Reverse 1D Array) kept its donor's u8 element
+  (`ex_readDaqmxClass.vi`) and takes the wired array's now.
+- **Unbundle on a CLASS WIRE** reads the class's private data: `class_private_data` decodes
+  `NI.LVClass.FlattenedPrivateDataCTL` (scripts/pylv-class-privatedata.py) and takes the cluster
+  LabVIEW labels "Cluster of class private data" - NOT always TopLevel 1, a class whose fields are
+  typedefs lists those first. The reader names the fields by their PATHS from it, as NI's export
+  does (MGI's `Restore.vi`: `P.Style,P.Size,P.Font`, where it wrote the leaf names).
+- **An error case with no range list** (MGI's `Store.vi`) decides on the status, frame 0 No Error
+  and frame 1 Error, as NI's export of it says; its `dIdx` reads 11 for two frames.
+- **Call Parent Class Method is read and composed now** (2026-10-22). NI's export writes it as a
+  Node with no target, its terminals named by the call's own pane labels (`Base Datatype in`,
+  `Plot processed data In`). In the heap it is a call of the SAME method of the PARENT class, node
+  class `callParentDynIUse` instead of `dynIUse`, a `dynLink` child, and a DyOM link naming the
+  parent's method (`Base Datatype.lvclass`, `\x01\x07prep.vi`) with `APILinkCallParentNodes="2"`.
+  The composer finds the parent in the class file's `Parent` item (a class, not an interface),
+  composes the dynamic call of `Parent.lvclass:<this method>`, matches terminal names that differ
+  from the parent's by pane position, and types the CLASS output with the calling class - it
+  follows the dynamic input, and typed by the parent the Unbundle behind it found no field.
+  `Line\prep.vi` recomposed in a copy of its folder loads executable. No suite test yet: it needs
+  a parent/child class fixture.
+
+**The rest of the sweep's refusals, 2026-10-22/23** - 108 of 3 625 refused, re-run with each VI's
+own folder as `--search` (the sweep composed into C:\temp, so "neither near the caller" was partly
+its own artefact) and taken down to 45, every remaining one named below:
+
+- **FORMULA NODE** (`fBox`): the reader writes NI's `<Node _name="Formula Node">` - terminals named
+  by their variables, a variable both read and written in inputs AND outputs - plus the CODE as
+  `text=`, which NI's export leaves out (it is Expression Node's attribute, so the document stays
+  in NI's schema). The composer builds the node from a part cut off `Surface\prep.vi`: one fBoxDCO
+  per variable on the border, inputs typed by the wire, outputs as the code DECLARES them
+  (`uInt32 t0,t1;`), a read-and-written variable as its input, else double; `errOfst` the code's
+  length; `contRect` 8 px inside the bounds and moved WITH the node by the layout (it is
+  absolute). `t178`: `z = x*y + 1`, `int32 n`, `a = a*2` run 13, 7, 10. Both `prep.vi` load
+  executable in place.
+- **CALL BY REFERENCE** (`callByRefNode`): four own terminals (reference and error in/out) plus one
+  iUseDCO per used slot of the callee's pane, drawn 32 x 32 at (23, 5), `paramIdx` the slot. The
+  pane is NI's own literal `type="function{58,900,...{cluster{..}.error out,...}}"` - pattern and
+  slot flags in hex, then the slot types - which the reader writes from `connectorTM` and the
+  composer parses; without it the strictly typed VI refnum wired into `reference` carries it. A
+  strict VI refnum control is `ref{LV.VI}{function{..}}` (NI writes `ref{LV.VI}{function{78,d08,..}}`
+  in a cluster type, the same grammar). The callee's pane may be TURNED (Gaussian surface data.vi's
+  4811 rotated 180 degrees); the composer turns it so outputs sit right. `t180` calls Clear Errors
+  through a strict static reference; an error into the callee's `error in` comes back cleared, and
+  the same error into the node's OWN error in passes through - the control arm.
+- **AN XCONTROL-TYPED REFNUM** (`ItmIdent="LVXC"`, Item `3DPC_SurfacePlot.xctl`) is `ref{LV.Control}`
+  in AIXML, and a plain control refnum wired into a subVI's XControl-typed terminal is "Wire: Class
+  conflict". The reader writes the items after `</VI>` (`<?lvmcp xctlrefs uid= items=?>`), the
+  composer types the refnum and writes `VIXC` in LIvi plus `HXCI` in LIfp naming the stdRefNum
+  objects. `GILinkProp5` (a per-.xctl stamp no file of it carries) written 0 loaded executable too
+  - measured on an instance that had loaded the stamped copy first, so not yet a clean A/B.
+- **A PANE as event source and reference**: NI names it by its label (`"Pane": Mouse Up`). The 3D
+  Math Plots' facades handle the panel pane's `Shortcut Menu Activation?`, `Pane Size` was refused
+  for "a source no selector can name". The reader names panes and nested objects, the composer
+  binds them (`PaneRef`, a plain LV.Pane refnum). A NESTED object is named by its PATH from its
+  control, `"Customized Plot Legend.Color Pair Array": Mouse Down` (NI's export of the 2D Error Bar
+  facade); its `CtlRef` is the field's strictly typed reference.
+- **EVENT TYPE NUMBERS DEPEND ON THE SOURCE**: 0x40000013 on the VI (source 5) is `Panel Resize`
+  (VIRef FacadeVI 0x004F inside a facade, then OldBnds, NewBnds, Act, PrevState) - added to
+  static-events.json from NI's export of that facade.
+- **Typing rules that were wrong for every VI**: Multiply of an ARRAY and a scalar answered a
+  scalar; `To Long Integer` of a double answered an int32 ARRAY (its donor converted an array);
+  Array Size of a 2D array answered one int32; Release Queue's `remaining elements` kept its
+  donor's element; Build Array concatenated 1D only. All follow the wired types now (N-D
+  concatenation, rows stacked into one more dimension). `t179`/`t181`/`t182` cover Replace Array
+  Subset with three element groups, 2D Array Size and a three-group Index Array, whose later
+  outputs must NOT carry group 0's `termHotPoint` (`Insane ArrayIndexerDCO {graphics}`).
+- **Reader fixes**: Replace Array Subset named by DCO flags (it read three groups as a 5D array);
+  the COMPACT `Variant To Data` (prim 8003, slots 0..4: error in, error out, Variant, type, data);
+  a typedef'd array's dimensions; an empty or NUL label is "" on both sides; a callee inside an
+  .llb CONTAINER read for its pane labels; a Local named by `paramIdx` in the panel's ddoList
+  (oldest first - the zPlane order named the wrong control); Decimate 1D Array; `ref{Menu}`;
+  `ref{EventReg}{<user events>}`; a refnum control's reference `ref{LV.LVObjectRefNum}{...}`; a
+  Picture control's reference; an uninitialized shift register's type (`srtype` after `</VI>`);
+  the net on an Event Structure's dynamic terminal (`dynreg`); each call's link PATH (`calllink`),
+  so a bare name resolves to the file the original linked (MGI's own Compare Two Paths.vi, not
+  NI's); a dynamic-dispatch call through a child class to an INHERITED method; `<helpdir>`.
+- **Learned from NI's exports** (47 VIs exported through NI's service, then the learners):
+  class ids 0x006F SceneTexture, 0x0070 SceneGeometry, 0x007F MixedCheckbox, 0x0080
+  SceneDrawable, 0x0081 SceneText; primitives 1141 To Word Integer, 1207 Inverse Cosine, 1212
+  Power Of 10, 1512 Format Value; 27 property rows and 58 aliases. **Run learn_node_classes.py
+  BEFORE learn_ref_classes.py**: each rewrites class-ids-learned.json and the node learner dropped
+  five ids the ref learner had written.
+
+**Re-swept whole afterwards, each VI with its own folder as `--search`: 3 580 of 3 625 compose (3 517
+before), 3 535 of 3 580 load executable, NO regression** - every VI executable before still is. The
+one LabVIEW CRASH was a newly composed `colorarraytopixmap.vi`: a Replace Array Subset writing R, G
+and B from ONE index, its later groups with no index terminal at all. Every group now carries all of
+group 1's terminals, unwired where the document names none, typed like the others (`t183`). Of the 45
+broken, 16 were broken before (class and XControl members loaded outside their library) and 29 are
+newly composed: in a copy of their folder `Parametric`/`Surface\prep.vi` and `colorarraytopixmap.vi`
+load executable; the 3D Graph XControl's Init and properties-dialog members ("Wired refnums are of
+different types") and the 2D Math Plot facades ("LabVIEW Object 'Data': refers to a missing LabVIEW
+class", "Class conflict") do not - the members an XControl holds to its own State and Data typedefs,
+the same family as the instance below.
+
+Open after it, all named:
+
+- **The GUI pass you deferred** (15): a Sub Panel object (`stdSubPanel`, 12 of the Math Plot
+  facades reference it), a listbox composed as a numeric (3), and the XControl INSTANCE on a host
+  panel - implicit Property/Invoke nodes on an XControl's own properties and methods (`Fahrenheit
+  Mode?`, `Convert C to F.vi`) need the real xControl object there.
+- **LabVIEW 9.0 files** (6): MGI's Path Selector keeps its event registrations and string case
+  labels out of the heap (no EventNodeEvents, `selString` only the visible frame) - refused by name.
+- **MATLAB** (2): the script node needs an `NSCR` link (Node To Script, naming matscript.dll) that
+  pylabview neither reads nor writes - composed without it, "Script support DLL not found" on a
+  station where NI's file compiles; the reader writes it, the composer refuses it by name. The
+  MATLAB Node (`Class0193`) is not a class pylabview knows.
+- **Password-protected NI VIs** (about 8 under resource\PropertyPages, importtools, lvStorage): NI's
+  own export of them is 200 bytes, so nothing can be learned for them from NI.
+- Singles: a case structure on a double, an Index Array on a SubArray, a conditional OUTPUT indexing
+  tunnel, a pylabview `SL__multiLabel` AttributeError, TreeControl/MCListbox properties no NI VI here
+  uses, `LV.SceneGraphDisplay.Redraw`.
+
+Open, named by the sweep:
+
+- 286 of the 3 095 still refused (the 169 Bundle By Name since solved, above): 26 Unbundle By Name on
+  an enum, 15 Unbundle with no `element` output, 11 references to a refnum control, 10 + 7 others.
+- 45 of the 2 809 broken: 15 host examples whose XControl instance holds a class (`Data` "refers
+  to a missing LabVIEW class" - an XControl object is not a udClassDDO, so no FPPI is written for
+  it), MGI's `Class Read/Write.vi` ("dynamic outputs without a dynamic input" - the pane's dispatch
+  flags), and singles.
+- "How could we have read more bytes than the size of the thrall map?" (`TDFunction.cpp` 926),
+  logged dozens of times in a long COM session over these VIs. A class method's pane keeps
+  `HasThrall="13"` and NI's carries `<ThrallSources> 11</ThrallSources>` on its class output, which
+  `lvheap.Bundle._inline` drops. Carrying it through (A/B on 20 VIs, fresh LabVIEW) made NO thrall
+  warning in either arm and 20 "Wiring insanity found and fixed" in the carried one only, so it was
+  reverted; the warning is observed, not reproduced, and its cause is open.
+- The reader classes a `gRef` whose type is the VI's own pane as a Local Variable named `?`
+  (`make_plot_contour.vi`).
+
+Suite after all of it: 139 PASS, 5 LOADS, `t136` failing exactly as on `main` (it needs the panel
+activated); round trip 144 of 145, `t133`/`t138` passing alone after failing once in the long run.
+
+### The GUI pass: XControl instances, listboxes, sub panels and the members (2026-10-23)
+
+Every VI below was recomposed IN PLACE - a copy of its own folder, the member composed over the
+original, loaded there - because a member composed into another folder is broken by its library
+alone. Each fix was found from LabVIEW's Error List (`lvai_exec_state` `errors`) or, for a heap
+LabVIEW refused outright, by bisecting the AIXML until it loaded.
+
+- **AN XCONTROL INSTANCE ON A HOST PANEL** composes: an `xControl` object typed by the XControl's
+  data type (parts `fpdco/xControl/*`, cut off NI's Dual Mode Thermometer host), `xCtlState` and
+  `stateTD` left out (measured unnecessary), `libVersion` from the `.xctl`'s `NI.Lib.Version`. The
+  links: `VIXC` in LIvi (GILinkProp2 0 for an instance, 1 for a typed refnum), `XCXI` in LIfp naming
+  the xControl objects, `HXCI` in LIbd naming the implicit nodes. The XControl's OWN property and
+  method are implicit nodes (`node/xctl/prop`, `node/xctl/invoke`, cut by
+  `cut_xctl_node_parts.py`): code -1, the property named by its identifier and typed by its read
+  VI's `Value`, the method one row per parameter of its method VI, its one output the return value
+  named after the method. A property node may carry SEVERAL properties (NI's 3D Surface hosts).
+  The reader names the instance after `</VI>` - `<?lvmcp xcontrol uid= xctl=?>`, from LIfp's XCXI.
+  **Run, not just loaded**: NI's Run Dual Mode Thermometer XControl.vi composed this way answered
+  100 °C -> 212 °F through the method; `t189` is the same host in five nodes.
+- **A `.xctl` LISTS ITS MEMBERS BY SYMBOLIC URL TOO** (`/<vilib>/Math Plots/3D Math Plots/...` in
+  3D Surface.xctl), which the composer joined onto the `.xctl`'s own path - every property of that
+  XControl was unreadable. A `<anchor>` now starts at that installation folder.
+- **A LISTBOX AND A MULTICOLUMN LISTBOX ARE ONE ddo CLASS, `listbox`; the kind is the annex
+  rsrcID**, as a graph's is: 21791 and 21798 multicolumn (two and three column headers, NI's
+  dlgRenamedOnDisk.vi and the 3D Graph's prop_value_pair_main.vi, whose nodes are
+  LV.MulticolumnListbox), 21792 and 21805 single. A single-column part under a multicolumn
+  listbox's `Item Names` was `Property Node: Invalid property`. The reader writes the rsrcID and the
+  item strings and column headers (`<?lvmcp fpclass uid= class= rsrc= strings=?>`), which AIXML has
+  no place for - NI's own export loses them; the composer takes a part of that rsrcID, else of that
+  kind (`t185`, `t186`).
+- **A PART'S DONOR COUNTS SURVIVED INTO THE COMPOSED VI AND KILLED LabVIEW.** A panel object's
+  annex counts the implicit property and invoke nodes bound to it (`hGrowNodeListLength`: 1 on
+  Exporting VIs.vi's listbox for its one node, 4 on Add Actor.vi's combo box), and 28 parts kept
+  their donor's number. LabVIEW then found the list one short on load - `Fatal insanity ...
+  prop/invokeNodeList (607): n=1: null`, owner the listbox - and died, twice, on NI's 3D Graph
+  prop_axes_main.vi. Every annex is now set to the nodes the composed diagram really binds
+  (`count_bound_nodes`). The donor's one `[NULL]` column header was suspected first and was not it.
+- **A SUB PANEL** (`stdSubPanel`) is no fPDCO and has no data: a grouper in its pane's zPlaneList
+  holds it, typed by a plain LVObjCtl refnum (CtlFlags 0x0002) labelled like it, its annex counting
+  the nodes on it. AIXML has no element for one - NI's export writes only `link="Subpanel"` on its
+  nodes, so NI's converter cannot rebuild it either. The reader writes `<?lvmcp subpanel name=
+  bounds=?>`; the composer builds it from `fpobj/stdSubPanel` (cut off NI's Multiple VIs in a
+  Subpanel.vi by `cut_subpanel_part.py`). **An implicit INVOKE node** is new with it: the explicit
+  part, its reference terminals hidden (0x800000), a `<ddo>` after oMId and a label - NI's Insert
+  VI, read off that example. That example composed executable and ran with no error; the 3D
+  Graph's set_properties_dialog.vi (seven sub panels) loads executable (`t187`).
+- **AN IMPLICIT NODE ON THE PANE**: NI writes `link="Pane"` (its label, the default when it has
+  none); the reader dropped the link and `write+Origin` was "Contains unwired or bad terminal" in
+  three 3D Graph dialogs.
+- **A LABEL ON A TYPEDEF WRAPPER MAKES THE HEAP UNLOADABLE** - "Memory is full", nothing more,
+  found twice by bisection: a property typed by LVBoundsTypeDef (`Numeric Text.Size`,
+  ex_hanldeValueCellMouseDown.vi) and a Bundle field holding a typedef'd value (MGI Path
+  Selector's Restore.vi, which broke its whole class). LabVIEW labels the type INSIDE the wrapper;
+  `set_label` does that everywhere a name is given to a type (`t188`).
+- **COMPARE AGGREGATES** is the 0x80000 bit of a comparison prim's objFlags (Equal?, Not Equal?,
+  Less?, Greater?, ... and In Range and Coerce, whose two `aggregate="true"` nodes in NI's example
+  differ from the other four by exactly that bit). Neither side knew it: an Equal? of two clusters
+  answered a cluster of booleans into a Case selector (`t184`).
+- **`Value` IS THE OBJECT'S OWN TYPE**: behind a strictly typed reference
+  (`ref{LV.MulticolumnListbox}{array{int32}}`) or on an implicit node, a listbox's Value is an
+  array when it selects several - the catalogue's int32 indexed a scalar and broke a For Loop.
+- **A CALL'S CLASS TERMINALS CARRY THE CLASS WIRED IN.** NI's 2D Feather facade calls 2D Plot
+  methods with a 2D Feather object, and every such call is typed 2D Feather on its `2D Plot in` and
+  its `2D Plot out`, so the result is bundled back into a 2D Feather field; each STATIC one is
+  listed in a `TCPI` record of the wired class (LIbd, first, the class's ancestors inside). A
+  dynamic call to an INHERITED method links the CHILD it was called through
+  (`2D Feather.lvclass:Set Range.vi` at 2D Feather.lvclass), not the parent that defines it. An
+  array of class constants is linked like a panel control holding them (FPPI the class objects,
+  DDPI the constant) - it "refers to a missing LabVIEW class" before.
+- **Smaller**: a typedef'd RING is a typeDef object whose parts hold the stdRing - its items were
+  lost and `Strings []` on it was "Invalid property"; a Build Array input with the output's RANK is
+  concatenated even when its array is a typedef'd copy; a 3D picture control (`scenegraphdisplay`)
+  keeps its class, or its control reference is a plain refnum and the queue typed by it conflicts;
+  an XControl property node's `error out` gets its type.
+- **AN XNODE** (`xNode`, Error Ring.xnode in Gaussian surface with offset model.vi) was dropped by
+  the reader without a word, leaving the Select it fed unwired. It is read as NI writes it - `<Call
+  target="Error Ring.xnode">`, terminals named by the xTunnels' ids - and refused by name: its node
+  holds the code the XNode generated, which nothing composes yet.
+
+The groups of the sweep's 45 broken VIs, recomposed in place: Native 3D Graph (Init, axes_auto_range,
+four prep.vi, six properties dialogs) **all executable**; ex_EditUserDefinedProperties 6 of 6; MGI Path
+Selector's class hierarchy 12 of 13; the math examples hosting a 3D surface 3 of 4.
+
+Still open:
+
+- **The 2D Math Plot facades** (Error Bar, Compass, Feather): "Wire: Class conflict" is left after
+  everything above. The composed facade's call-terminal types, its wires' class types and its
+  link records now match NI's file count for count, except two: NI also writes a `TCPI` for
+  `2D Plot Datatype.lvclass` naming 12 diagram terminals of panel objects (not calls), and a `VILB`.
+  Which terminals belong in it is not established.
+- **LabVIEW 9.0 files**: MGI's Handle Event.vi keeps NO case range list in its heap - six frames
+  of an enum case, no SelectRangeArray anywhere, nothing in CNST - while NI's exporter, reading the
+  loaded VI, names every selector. pylabview's reading cannot recover them; the reader now says so
+  in its notes instead of writing empty selectors in silence.
+- **XNodes**, above. **webdoc.llb**'s members were not retested: a member of an `.llb` CONTAINER
+  cannot be recomposed in place by this procedure.
+
+**A NEW XCONTROL, BUILT WHOLE ON THIS BACKEND - the practice project, `C:\temp\XControlPractice`.**
+`Level Alarm.xctl` (written by hand after NI's, a Threshold property and a Percent Of Threshold
+method), its Facade, Init, the two property VIs and the method composed from AIXML authored for it,
+the Data and State typedefs from `lvai_create_typedef` (backend pylabview), and a host `Run Level
+Alarm.vi` holding an instance. Every member loads executable; the host ran over ActiveX with Level 40:
+Threshold 80 -> Percent 50, Threshold 50 -> Percent 80, error out clean - the property write reaches
+the instance's display state and the method reads it. Every file source-only. **One gap, found
+there**: a `.ctl` made by `lvai_create_typedef` names no owning library (no `LIBN` block, where NI's
+Data.ctl names its .xctl), and the host was "Missing VI for Ability Data / State" until a LIBN block
+naming `Level Alarm.xctl` was added through pylabview. The tool has no way to make a typedef a
+library member yet.
+
+Suite after it: 146 PASS of the existing cases and `t184`-`t189` PASS alone (they were added while
+the long run was going), 6 LOADS. `t133`, `t136` and `t138` FAIL: the three live keyboard and
+activation cases, which post to the panel and follow the desktop's active window - `t133` fails the
+same way with the COMMITTED composer exported to a temp tree, so the change is not the cause.
+
 ## 7b. Completing the parts from more sources (2026-10-13)
 
 The user's question: are all parts of the AIXML cache extracted yet, and what do the Project

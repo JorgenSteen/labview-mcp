@@ -1487,6 +1487,14 @@
   "xcontrol": {
    "from": "examples\\Controls and Indicators\\XControls\\Dual Mode Thermometer",
    "facade": "Simple Dual Mode Thermometer Facade.vi",
+   "recompose": [
+    "C to F.vi",
+    "F to C.vi",
+    "Simple Dual Mode Thermometer Init.vi",
+    "Convert C to F.vi",
+    "[Property] Fahrenheit Mode Read.vi",
+    "[Property] Fahrenheit Mode Write.vi"
+   ],
    "host": "Run Dual Mode Thermometer XControl.vi",
    "hostCases": [
     {
@@ -1925,6 +1933,202 @@
      "available": "0",
      "data out": "42.5",
      "error out": "[False,0,]"
+    }
+   }
+  ]
+ },
+ "t173_nested_by_name": {
+  "cases": [
+   {
+    "inputs": "new a=9",
+    "outputs": {
+     "b": "2.5",
+     "k": "7",
+     "s": "ab",
+     "a after": "9",
+     "k after": "7"
+    }
+   }
+  ]
+ },
+ "t174_conditional_default_last": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "conditional": 9,
+     "default second": 5
+    }
+   }
+  ]
+ },
+ "t175_inplace_array_cluster": {
+  "cases": [
+   {
+    "inputs": "values=[1,2,3];at=1;point={1.5,4,keep}",
+    "outputs": {
+     "values out": "[1,3,3]",
+     "a out": 3,
+     "b out": -4,
+     "s out": "keep"
+    }
+   }
+  ]
+ },
+ "t176_cluster_queue_preview": {
+  "cases": [
+   {
+    "inputs": "point={2.5,peek}",
+    "outputs": {
+     "a out": 2.5,
+     "s out": "peek",
+     "error out": "[False,0,]"
+    }
+   }
+  ]
+ },
+ "t177_inplace_array_2d": {
+  "cases": [
+   {
+    "inputs": "row=1;col=0",
+    "outputs": {
+     "grid out": "[[1,2],[4,4]]"
+    }
+   }
+  ]
+ },
+ "t178_formula_node": {
+  "cases": [
+   {
+    "inputs": "x=3;y=4;a=5",
+    "outputs": {
+     "z": 13,
+     "n": 7,
+     "a out": 10
+    }
+   }
+  ]
+ },
+ "t179_replace_subset_groups": {
+  "cases": [
+   {
+    "inputs": "a=[1,2,3,4];x=9",
+    "outputs": {
+     "b": "[9,9,9,4]"
+    }
+   }
+  ]
+ },
+ "t180_call_by_reference": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "error out": "[False,0,]",
+     "cleared": "[False,0,]"
+    }
+   }
+  ]
+ },
+ "t181_array_size_2d": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "sizes": "[2,3]"
+    }
+   }
+  ]
+ },
+ "t182_index_array_groups": {
+  "cases": [
+   {
+    "inputs": "a=[7,8,9]",
+    "outputs": {
+     "e0": 7,
+     "e1": 8,
+     "e2": 9
+    }
+   }
+  ]
+ },
+ "t183_replace_subset_one_index": {
+  "cases": [
+   {
+    "inputs": "a=[1,2,3,4,5];i=1",
+    "outputs": {
+     "out": "[1,7,8,9,5]"
+    }
+   }
+  ]
+ },
+ "t184_compare_aggregates": {
+  "cases": [
+   {
+    "inputs": "a=[1,2,3];b=[1,2,3]",
+    "outputs": {
+     "same": true,
+     "different": false
+    }
+   },
+   {
+    "inputs": "a=[1,2,3];b=[1,2,4]",
+    "outputs": {
+     "same": false,
+     "different": true
+    }
+   }
+  ]
+ },
+ "t185_listbox_items": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "count": 3
+    }
+   }
+  ]
+ },
+ "t186_multicolumn_listbox": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "sizes": "[3,2]"
+    }
+   }
+  ]
+ },
+ "t187_subpanel": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "error out": "[false,0,]"
+    }
+   }
+  ]
+ },
+ "t188_nested_typedef_property": {
+  "cases": [
+   {
+    "inputs": "",
+    "outputs": {
+     "error out": "[false,0,]"
+    }
+   }
+  ]
+ },
+ "t189_xcontrol_host": {
+  "search": [
+   "C:\\Program Files (x86)\\National Instruments\\LabVIEW 2026\\examples\\Controls and Indicators\\XControls\\Dual Mode Thermometer"
+  ],
+  "cases": [
+   {
+    "inputs": "Degrees Celsius=100",
+    "outputs": {
+     "Degrees Fahrenheit": 212
     }
    }
   ]
