@@ -1667,11 +1667,174 @@ LabVIEW 2020 f1 with no NI service involved. One step did not work there: Clean 
 **LabVIEW error 2** at `Block Diagram:Clean Up` (Clean Up Panel worked); the step is reported and
 never gating, so the VI is left as composed. Not investigated further.
 
+## A user-defined TAG refnum is CLASS-specific, and one class had no part (fixed 2026-10-27)
+
+A DAQmx producer/consumer demo was generated into `C:\test\NeillDemo` and had to be built on
+**gRPC**, because every `pylabview` attempt answered
+
+```
+errorCode 2  no part for a NIDAQ refnum (the harvested one is nisyscfg)   errorKind: composerRefused
+```
+
+for a VI whose `task out` terminal is `ref{GenClassTag.Task.NIDAQ}`. That is a real gap and it is
+worth stating precisely, because the neighbouring section ("Property nodes on a tag refnum") says a
+DAQmx task's PROPERTY NODES compose - which is true, and says nothing about the refnum OBJECT a
+control, indicator or constant of that type needs.
+
+**Measured 2026-10-27**, six one-element probes, each a `<Control>`+`<Indicator>` pair (or a
+constant) and nothing else, over both backends:
+
+| probe | `pylabview` | `grpc` |
+|---|---|---|
+| `ref{GenClassTag.Task.NIDAQ}` on the pane | **refused**, `the harvested one is nisyscfg` | `errorCode 0`, 4 371 B, `execState 1` |
+| the same type as a diagram **CONSTANT** | **refused**, `the harvested one is `**`Variable`** | `errorCode 0`, 3 999 B, `execState 1` |
+| `ref{GenClassTag.nisyscfgSession.nisyscfg}` on the pane | composes, 4 668 B, `execState 1` | - |
+| `ref{Queue}{string}` on the pane | composes, 4 352 B | - |
+| `tag{14}` (a DAQmx physical channel) | composes, 4 336 B | - |
+
+The last three are the **control arms**: without them a refusal says only that something is wrong,
+not that this type is what is wrong.
+
+**The constant and the pane object have DIFFERENT donors**, which one probe cannot see. The first
+report of this named `nisyscfg` for both, because its constant probe also carried an indicator and
+the indicator was refused first; a constant ALONE (`outputs="value:"`, nothing reading it) answers
+`Variable`. Two part slots, two classes, two refusals.
+
+**Why one part cannot serve another class** is already in `aixml2vi.py`'s own guard: a
+`Refnum.UsrDefndTag` is class-specific inside - its tag ddo names the class's DLL and its `STR`
+section the `typeClass` - so the composer compares the donor's `TypeName` with the requested one
+and refuses rather than shipping a refnum to the wrong library. The guard was right; what was
+missing is a part for the second class.
+
+### The fix: file the part by its CLASS, as `Refnum.LVObjCtl` already is
+
+Parts were filed under one class-blind key, `fpdco/stdRefNum/ctl/Refnum.UsrDefndTag` and
+`const/stdRefNum/Refnum.UsrDefndTag`, so the folder could hold exactly one class. They are now
+ALSO filed by class (`…/Refnum.UsrDefndTag.NIDAQ`), which is the shape `Refnum.LVObjCtl` already uses
+for its `CtlFlags` - `lvheap.tag_refnum_class` decides it - ONE
+implementation, which `harvest_parts.py` files the part with and `aixml2vi.py` asks for, because
+two copies of one rule drift - and **the generic key stays as the fallback**, so a class with no part of its own still
+reaches the named refusal and no existing part moved. A class whose `TypeName` holds `.` or a
+separator keeps the generic key, because a key's last segment maps `_` back to `.` and would not
+round-trip through the file name.
+
+**`lvheap.type_key` was deliberately NOT changed.** Returning `Refnum.UsrDefndTag.<TypeName>` from
+it is the one-line version and it breaks the next line of `build_ddo`: `DDO_OF_KEY` is keyed by
+that same string, so every such refnum would have come back `no data object for type`. The
+contained change touches the two places that file and pick a part, and nothing that identifies a
+type.
+
+### Harvested from NI's own build of a probe, which is where the nisyscfg part came from
+
+The existing pane part's provenance reads `source="ptypes.xml"` - a probe document *we* authored
+and NI's converter built, then harvested. So the donor for the missing class is the gRPC column of
+the table above, and the harvest is the ordinary one:
+
+```
+python harvest_parts.py scripts\aixml-pylabview\parts <NI's build of the probe>.vi
+```
+
+giving exactly three parts - `const/stdRefNum/Refnum.UsrDefndTag.NIDAQ`,
+`fpdco/stdRefNum/ctl/…` and `fpdco/stdRefNum/ind/…` - whose provenance is the bare donor file name
+(`lvheap.portable_source` cuts a scratch path). The probe is committed as
+`experiments/aixml-without-grpc/probes/ptypes-nidaq.xml` so the donor can be rebuilt; it needs a
+LabVIEW with NI's service once, exactly as `ptypes.xml` did.
+
+### Accepted through the MCP tool path after a client restart
+
+The measurements above were taken by driving `aixml2vi.py` DIRECTLY, because the running server
+still served the pre-fix scripts out of its `bin\` copy - the stale-build trap this repository
+records for `dotnet msbuild -t:Compile`, reached here by editing after the gate had built. Re-run
+2026-10-27 through `lvai_convert_aixml_to_vi` with `backend: "pylabview"` on a restarted client:
+
+| probe | answer |
+|---|---|
+| `ref{GenClassTag.Task.NIDAQ}` on the pane | `ok: true`, `execState 1`, `sourceOnly: true`, donor `ptypes-nidaq.vi` |
+| the same type as a CONSTANT | `ok: true`, `execState 1`, donor `ptypes-nidaq.vi` |
+| the nisyscfg control arm | `ok: true`, `execState 1`, donor still `ptypes.xml` |
+| `Start AI Acquisition.vi` (3 DAQmx calls, `task out`) | `ok: true`, 9 308 B, `execState 1` |
+| `Close Acquisition.vi` (`task in`, Stop, Clear, Release Queue) | `ok: true`, 7 941 B, `execState 1` |
+
+So the gap is closed on the route a client actually uses, and the control arm's donor did not move.
+
+### The demo's MAIN VI was eBad too - a WAVEFORM CHART with no clean part (fixed 2026-10-27)
+
+Found while accepting the refnum fix, and it is a separate defect: with both DAQmx subVIs
+executable, the main VI composed to 18 304 bytes and came back `execState 0`. **`left generic: 4`
+in that report is NOT the tell** - the fixed VI still reads it and is executable, so it says
+nothing about the fault; this paragraph bolded it as evidence for one afternoon.
+**Not a link fault** either - `linkerErrors` named no missing subVI, only the
+generic *"The VI is not executable"* - and not the refnum. The symptom that localised it:
+`lvai_open_file` answered **`Error 1013, Cannot load front panel`** where `lvai_exec_state` opened
+the same VI happily, because a VI reference does not load the panel.
+
+**Bisected from the panel's own declarations**, one probe per object that carries a `style=`:
+
+| probe | donor | result |
+|---|---|---|
+| `array{doublewaveform}` indicator, `style="graph21717"` (the chart) | `<labview>\examples\…\Continuous Decimating.vi` | **`execState 0`, panel `Error 1013`** |
+| the SAME type with **no** `style=` | `P3 ni accumulate-across-a-loop.vi` | `execState 1`, panel opens |
+| `bool` control, `style="latched"` (the Stop button) | `bool_control_donor.vi` | `execState 1` |
+
+So the type is innocent and the **donor** is the fault - the third instance of the shape
+`denylist.json` was created for: *a part cut from a whole NI example carries state a plain AIXML
+control does not have.* A chart keeps a history buffer, which is the obvious candidate and was not
+isolated further, because the remedy does not depend on knowing which byte it is.
+
+**The remedy is a clean part, not a denylist entry.** Every other `stdGraph21717` part reads
+`source="pgraph.xml" clean="1"` - cut from our own probe - and the waveform-array slot was the one
+the probe never declared, so the harvester had only the example to fall back on. Two lines in
+`experiments/aixml-without-grpc/probes/pgraph.xml` (`chart wfm`, `chart wfms`), NI's gRPC build of
+it, and `harvest_parts.py --clean` over that donor replace it and add the scalar-waveform chart
+beside it. Denying the part instead would have turned a broken VI into a refusal, which is louder
+and still loses the chart.
+
+**Measured after, one variable changed:** the chart probe `execState 0 -> 1`, and the main VI
+`execState 0 -> 1` with its panel opening `errorCode 0`, so the whole producer/consumer demo -
+main VI and both subVIs - now composes and loads with no NI service. Re-run through
+`lvai_convert_aixml_to_vi` once the gate had rebuilt `bin\`: all three `ok: true`,
+`sourceOnly: true`, `Acquired Data <- pgraph.vi`. Suite case `t110_graphs`
+carries the two new indicators; with the example-cut part put back it answers
+`BROKEN (ExecState 0)`, so the case is not vacuous.
+
+**Three suite cases fail in this environment and are NOT this change**: `t133_vi_filter_live`,
+`t136_application_events` and `t138_key_notify_live` declare no graph style and no waveform, so
+neither part is reachable from them, and they fail identically with the change reverted - they are
+the live cases that follow the desktop's ACTIVE window.
+
+### What it buys, measured
+
+- All six probes compose, and **`a-nidaq-fp`, `e-nidaq-const` and the nisyscfg arm load
+  `execState 1`**.
+- **The VI that forced gRPC composes with no NI service**: `Start AI Acquisition.vi` of the demo -
+  `DAQmx Create Channel (AI-Voltage-Basic).vi` -> `DAQmx Timing (Sample Clock).vi` ->
+  `DAQmx Start Task.vi`, a `task out` indicator, nine controls - 9 308 bytes, `execState 1`, no
+  linker errors.
+- The control arms still take their ORIGINAL donors (`ptypes.xml` for nisyscfg, two `<labview>`
+  VIs for the queue), so part selection did not move.
+- Suite case **`t190_tag_refnum_classes`**: both classes in ONE VI, each refnum asserted a genuine
+  null refnum through `Not A Number/Path/Refnum?`, the IO name passed through - `PASS`, run in
+  LabVIEW. **With the three parts removed it answers `COMPOSE FAILED … no part for a NIDAQ refnum`**,
+  so the case is not vacuous.
+- `t90`-`t99` and `t170`-`t179` still pass, `t171`/`t172` (the Network Stream endpoint and its
+  property node) among them - the other `UsrDefndTag` consumers.
+
+### Two things the probes found on the way
+
+- **`name` is not a declared attribute of `<VI>`.** The composer accepts it; NI's converter answers
+  `-2628` and `lvai_validate_aixml` names it (`attribute 'name' is not declared for element 'VI'`).
+  The suite writes `_name`. So a document that composes is not therefore schema-clean, and the
+  validate path is the cheap way to find out.
+- **NI's converter does not create the output directory.** A `viPath` under a folder that is not
+  there is `Error 7` at `Save:Instrument`, naming the file rather than the folder.
+
 ## Not covered, and not measured
 
-- **A DAQmx call has not been RUN through a composed VI** - the probes above stop at the link and
-  the pane, because a DAQmx task needs a device (simulated or real) this station was not set up
-  with.
+- **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the
+  link, the pane and `execState`. This bullet used to give the reason as a station with no device;
+  that is no longer true (a Create Channel + Clear Task probe on `Dev1/ai0` answered `error out = 0`
+  on 2026-10-27, and the gRPC-built demo acquired 100 samples and wrote a TDMS file). What is
+  missing is the run of a *composed* one, not a device.
 - **ActiveX is Windows only and needs a running LabVIEW**; it never starts one, so with no LabVIEW
   the pylabview backend writes and reads VIs and reports executability as not measured.
 - **`lvai_connector_pane` on pylabview does not MEASURE the pane's orientation** - the slot
