@@ -1828,6 +1828,70 @@ the live cases that follow the desktop's ACTIVE window.
 - **NI's converter does not create the output directory.** A `viPath` under a folder that is not
   there is `Error 7` at `Save:Instrument`, naming the file rather than the folder.
 
+## Four gaps a cold build of a CSV reader found (fixed 2026-10-27)
+
+A cold agent build of a chunked, parallel CSV reader (8 channels x 1 000 000 rows) had to send
+two VIs to NI's converter and hand-patch a third. All four are closed on `pylabview`; suite cases
+`t191`-`t193`, run in LabVIEW.
+
+- **`Spreadsheet String To Array` came out 1D.** Its part was cut from `GPIB with VISA
+  functions.vi`, which wires a 1D double array into `array type (2D Dbl)`, so with that input
+  unwired the composer typed `array` 1D - and a `Build Array` appending the parsed rows to a 2D
+  shift register was refused as "arrays of different dimensions". LabVIEW's default with the
+  input unwired is 2D double, and the composer now writes that. The refusal also names each
+  input's rank now (`accL.value=2D, rowo.value=1D`), which is what found the cause.
+- **`Get Waveform Attribute` knew only its every-attribute instance.** Slot 1 is `values` with
+  `name` unwired and `value` with it wired; slots 4/5/6/out are `error in`, `default value (empty
+  Variant)`, `name`, `error out` - read off the heap of the VI NI's converter built from the same
+  AIXML. `TERM_ALIASES` in `aixml2vi.py` carries the second name of slot 1.
+- **The reader dropped `concat="true"` and named a subarray `element`.** A concatenating input
+  carries DCO flag 0x10000; the reader now writes `concat="true"` from it, and an Index Array
+  output typed `SubArray` (a disabled index) is `subarray`, as NI writes both.
+- **Iteration parallelism.** NI's AIXML has no spelling for it and its export drops it, so it is
+  an instruction after `</VI>` - `<?lvmcp parallel uid="<For Loop uid>" workers="16"?>` - which
+  NI's service ignores (on grpc the loop stays sequential) and the composer turns into NI's own
+  shape: a `parForWorkers` DCO beside N, its inner terminal on the loop's sRN,
+  `<ParForWorkers uid=…/>` and `ParForNumStaticWorkers`. The reader writes the instruction back.
+  Measured as an A/B on the reader's piece parser, everything else equal: 2.48 s without, 0.97 s
+  with 16 instances, identical data.
+
+**A NaN or infinity constant is refused by NI's validator** - `nan`, `NAN` and `Inf` on a double
+`<Constant>` all answer `Unrecognized or unsupported attribute set`, although NI's OWN export writes
+a NaN constant as `value="nan"`. The composer takes `nan` and the VI runs NaN. `lvai_check_aixml`
+answers `nonFiniteConstantRefusedByNi` and the lint `non-finite-constant-refused-by-ni`, both
+warnings and scoped to the measured case, a double Constant.
+
+### What the third cold build still found (2026-10-27)
+
+- **A WAVEFORM does not cross LabVIEW's ActiveX server.** `GetControlValue` answers an opaque COM
+  object for one waveform and for an array of them - no type information at all (`GetTypeInfo` is
+  `E_NOTIMPL`) - and `lvai_run_vi_and_read_values` on `pylabview` printed it as
+  `System.__ComObject` with `problem: null`. A panel carrying a waveform indicator now gets the
+  composed `scripts/lvai_read_values.xml` (Open VI Reference by path, `Ctrl Val.Get All`, Flatten
+  To XML): it runs while the target's reference is still held, so it reads the values of THIS run,
+  and the waveform arrives as LabVIEW's own XML (`DBLWaveform` with `t0`, `dt`, `Y`, attributes).
+  Measured by hand over COM before it was wired in. A value it still cannot read is named in
+  `problem`, never left blank.
+- **`lvai_generate_vi` on gRPC answered `execState: null`.** The validated route converted without
+  `checkExecutable`, on the grounds that ValidateAIXML had looked; only the loaded-subVI route and
+  the composer read the state. It is read on the validated route too now, and a broken result is
+  `ok: false` at `execState`.
+- **`lvai_vi_terminals` printed `inputs=""`** for a VI with no inputs (High Resolution Relative
+  Seconds.vi), which NI's converter refuses and the lint flags (`terminal-list-empty`). An empty
+  list is left off now, there and in `lvai_placeholder_subvi`'s `Call`.
+- **A string array passed as a literal was split at the commas INSIDE its strings** (found by the
+  fourth cold build): `["1,2\r\n3,4","5,6"]` reached Parse CSV Pieces.vi as four pieces, with no
+  `problem` named. An item in double quotes is taken verbatim now - a quote counts only where it
+  starts an item and where the item ends - and AIXML's `\2C` still works beside it.
+- **"Wiring insanity found and fixed" on load - investigated, not changed.** Every wire left
+  generic in those builds is a FAN-OUT one of whose ends is a primitive terminal with NO learned
+  hotpoint at all: `String Subset` (1503, slots 1-3), `String To Byte Array` (1608/1) and `Read from
+  Text File` (8070/0). A fan-out is routed only where every end is exact (`route_heap`), so these
+  are left to LabVIEW, which repairs them on load - non-fatal, the VIs run. The remedy is data, not
+  code: LabVIEW-saved fan-outs through those terminals fed to `learn_hotpoints_fanout.py
+  --write` (the suite's LabVIEW-routed saves via `suite_corpus.py` are the source that carries the
+  composer's own terminal kinds).
+
 ## Not covered, and not measured
 
 - **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the
