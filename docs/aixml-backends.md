@@ -764,6 +764,15 @@ DAbort: the part's `fPDCO` carried no `termListLength`, and the data element ins
 the visible flags of the panel it was cut from. Both are written now; all nine LayoutCheck VIs
 compose, every one executable (`PylabviewRefnumControlTests`).
 
+**Inside a cluster or an array as well, since 2026-10-28.** The element splitter read one brace
+group after `ref` and took the payload group for a malformed label, so
+`cluster{ref{UserEvent}{bool.stop}.stop}` - the actor helper loop's events typedef - was refused as
+"unreadable type" while the same refnum composed as a top-level control; `lvai_create_typedef`
+("carrierRefused"), `lvai_placeholder_subvi` and `lvai_add_class_method`'s pre-check went to NI's
+service for it. Two brace groups are read after `ref` now. A cluster of one and of two user events
+with a double, an array of user events and a cluster holding a queue composed for LabVIEW 2020 and
+read `execState` 1 there, and read back unchanged (`PylabviewRefnumInClusterTests`).
+
 **Two composer defects surfaced on the way, both general.** A growable node now SHRINKS as well as
 grows: a one-input Format Into String used to keep the template's unwired second input and broke
 the VI. And structures are sized round after round until nothing changes: a case or event

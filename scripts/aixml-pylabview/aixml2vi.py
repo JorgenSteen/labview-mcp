@@ -150,8 +150,9 @@ def split_top(s, sep=","):
 
 def split_field(s):
     """'array.2{double}.Readings' -> ('array.2{double}', 'Readings'); 'double' -> ('double', None).
-    The type is read greedily - a word, an optional .N after `array`, an optional {...} - and
-    whatever follows a '.' is the label, which may itself contain anything."""
+    The type is read greedily - a word, an optional .N after `array`, an optional {...} (two of
+    them after `ref`: ref{UserEvent}{bool.stop}) - and whatever follows a '.' is the label, which
+    may itself contain anything."""
     m = re.match(r"[A-Za-z0-9_]+", s)
     if not m:
         raise Unsupported("unreadable type %r" % s)
@@ -160,7 +161,13 @@ def split_field(s):
         m2 = re.match(r"\.(\d+)(?=\{)", s[i:])
         if m2:
             i += m2.end()
-    if i < len(s) and s[i] == "{":
+    # a refnum that holds a type - ref{Queue|UserEvent|Notifier}{T}, ref{LV.X}{T} - carries its
+    # payload in a SECOND brace group; read with one, a cluster of user events (the helper loop's
+    # events typedef, cluster{ref{UserEvent}{bool.stop}.stop}) was refused as unreadable
+    # (2026-10-26) while the same refnum composed as a top-level control
+    for _ in range(2 if m.group(0) == "ref" else 1):
+        if not (i < len(s) and s[i] == "{"):
+            break
         depth = 0
         for j in range(i, len(s)):
             depth += {"{": 1, "}": -1}.get(s[j], 0)
