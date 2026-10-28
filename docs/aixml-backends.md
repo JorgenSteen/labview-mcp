@@ -773,6 +773,18 @@ service for it. Two brace groups are read after `ref` now. A cluster of one and 
 with a double, an array of user events and a cluster holding a queue composed for LabVIEW 2020 and
 read `execState` 1 there, and read back unchanged (`PylabviewRefnumInClusterTests`).
 
+**An error-cluster Case Structure composes in either frame order, since 2026-10-28.** Its two
+selector ranges both start at INT_MIN (`No Error` ..INT_MIN, `Error` the whole line), and the
+composer sorted ranges by their start alone, so the authored frame order decided: an `Error` frame
+written first put the whole-line range first, and LabVIEW loaded the VI broken - "Selector values
+are not unique / No case for some selector values" - while the tool answered ok and verifiedOnDisk.
+The same two errors broke an actor's `createResources` member on LabVIEW 2026 (2026-10-26; its
+AIXML was not kept, but the skill writes the `Error` frame first) and sent it to NI's service. The
+end now breaks the tie. Both orders, with and without a `Default`, composed for LabVIEW 2020 read
+`execState` 1, and a run took the `Error` frame for an error and the `No Error` frame for no error
+and for a warning. The reader exports both orders alike, so `PylabviewErrorCaseOrderTests` reads
+the stored ranges off the heap.
+
 **Two composer defects surfaced on the way, both general.** A growable node now SHRINKS as well as
 grows: a one-input Format Into String used to keep the template's unwired second input and broke
 the VI. And structures are sized round after round until nothing changes: a case or event

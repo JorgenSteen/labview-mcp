@@ -5010,7 +5010,11 @@ class Composer:
                             if di == by_name[x]:
                                 r = copy.deepcopy(r)
                                 r.find("diagramIdx").text = str(i)
-                                ranges.append((int(r.findtext("start")), r))
+                                # both ranges START at INT_MIN (No Error ..INT_MIN, Error the whole
+                                # line), so the END breaks the tie: sorted by start alone an Error
+                                # frame authored first went first and LabVIEW loaded the VI broken,
+                                # "Selector values are not unique" (measured on LabVIEW 2020, 2026-10-28)
+                                ranges.append(((int(r.findtext("start")), int(r.findtext("end"))), r))
             else:
                 if kind == "string" and is_enum(st):
                     # NI's export QUOTES an enum case's items ("Off", "Auto".."Manual") - the
