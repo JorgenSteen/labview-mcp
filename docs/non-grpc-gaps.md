@@ -25,8 +25,7 @@ is plausible but unmeasured; **no** = the capability is NI's own.
 
 | | gap | feasible? |
 |---|---|---|
-| [ ] | INDEXING tunnels on For/While loops | yes - the biggest everyday gap; needs `TunnelType` + `innerLpTunDCO` from a donor |
-| [ ] | other tunnel modes / `cond=` on some tunnels | yes |
+| [ ] | tunnel modes other than plain, `index` and `concat` (output), and `cond=` other than on an indexing output | yes. **Indexing tunnels DO compose** (`t67_for_indexing`) - the first version of this list said they did not, from a stale docstring in `add_loop` |
 | [ ] | structures beyond While, For, Case, Event, Flat Sequence, Disable, Conditional Disable, In Place pairs, Formula Node | yes per structure (donor + measurement); Timed Loop and Stacked Sequence are the candidates |
 | [ ] | types without a harvested part (further tag refnums, some refnum classes, FixedConst, rings of some types, some front-panel objects) | yes, but see 4a |
 | [ ] | some `In Place ...` variants | yes |
@@ -60,7 +59,7 @@ Measured 2026-10-15 over 865 cached VIs; each unread construct is named in a com
 | | gap | feasible? | idea |
 |---|---|---|---|
 | [ ] | **4a. New parts need NI's converter** to build the donor - impossible on a 2020-only station | likely | Build the donor with VI Server scripting over ActiveX (`New VI`, `New VI Object`, `Save`) in the LabVIEW at hand, then `harvest_parts.py --clean` on it. Also: harvest from LabVIEW's own saved VIs (`resource\`, `vi.lib`), already done for some parts |
-| [ ] | **4b. No wiring validation** - a fault only shows as `execState 0` | yes | After composing, read the Error List (`lvai_error_list`, already over ActiveX) and map each object back to its AIXML `uid`, which the composer knows |
+| [~] | **4b. No wiring validation** - a fault only shows as `execState 0` | partly done | See "4b, first step" below. Left: PRIMITIVES (polymorphic, typed from their donor) and clusters - the Error List over ActiveX names those after the fact (`errors` in every executability answer), but not the AIXML `uid` |
 | [ ] | **4c. Connector pane orientation not measured** (rotated panes, pattern 4815) | yes | Compose the probe that reads `Terminal Bounds[]` and run it over ActiveX, as other helpers already are |
 | — | ActiveX needs a running LabVIEW, Windows only | no | By design: COM-started LabVIEW quits and leaves an invisible dialog. `lvai_ensure_labview` starts the process |
 
