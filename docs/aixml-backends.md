@@ -374,6 +374,103 @@ call on `grpc` only when NI's service is up. `signalsJson` works over ActiveX si
 | interpreter | the pylabview bundle — `LABVIEWMCP_PYLABVIEW`, next to the exe, `tools\pylabview\runtime` in a checkout |
 | composer | `LABVIEWMCP_AIXML_COMPOSER`, else `scripts\aixml-pylabview` of a checkout above the exe (read live, so a Python edit needs no rebuild), else `scripts\aixml-pylabview` beside the exe |
 | parts | `LABVIEWMCP_AIXML_PARTS`, else `<composer>\parts` (what ships), else `aixml-parts` in the cache directory |
+| a `Call` target's installation | `LABVIEW_ROOT`, else the newest `LabVIEW 20*` with a `LabVIEW.exe`; then `%ProgramFiles%\NI\LVAddons` - per add-on ONE version folder (below) |
+
+**ONE VERSION PER ADD-ON, as LabVIEW loads them - since 2026-10-26 (issue #99).** The resolver
+searched every `<addon>\<version>` folder until then, so `lvai\1`, `lvai\26.1` and `lvai\26.3` were
+all roots of `<resource>`, and `nidaqmx64` sat beside a 32-bit LabVIEW. Measured the same day on
+LabVIEW 26.3.1 (32-bit): its log names 213 files under `lvai\26.3` and none under `lvai\1`,
+`lvai\26.1` or any `Targets\win64`. So `select_addons` keeps, per add-on, the highest version folder
+whose `lvaddoninfo.json` admits the LabVIEW - `MinimumSupportedLVVersion` against the version in
+`LabVIEW.exe`'s version resource, `SupportedBitness` against its PE header - and adds its
+`Targets\win32` or `Targets\win64`, where `lvai` keeps `resource\AI`. An add-on with no usable
+`lvaddoninfo.json` is not loaded at all (below); a missing version or bitness FIELD admits. And a symbolic link
+(`<vilib>\…`) or a parent class's `/<vilib>/…` URL now tries EVERY root of its anchor - the first
+one lacking the file used to end the search, which is how an add-on's class read as missing.
+
+**WHICH LabVIEW, WITH WHICH INI - `LabViewContext`, since 2026-10-26 (issue #99 Phase 2).** lvpm
+starts LabVIEW with `-pref <repo>\.lv-venv\.lvpm\labview.ini`, whose
+`LVAddons.AdditionalLocations` names the project's own add-on folder; NI's converter runs inside
+that LabVIEW and sees the packages, while the composer answered `no Test.lvclass`. The server now
+reads the running LabVIEW's executable and command line (`ProcessCommandLine`, no WMI), takes its
+`-pref` INI - else `LabVIEW.ini` beside the exe - and passes `--labview-root` and
+`--addon-locations` to `aixml2vi.py` and `vi2aixml.py` on every call, so the resident worker follows
+a switch. The palette and example indexes read the same add-on folders (`AddonTree.PlanIndex`).
+
+| key in `[LabVIEW]` | missing (a stock INI has none) | present |
+|---|---|---|
+| `LVAddons.Enabled` | enabled | `False`: no add-ons at all - an empty `--addon-locations` |
+| `LVAddons.CustomLocation` | `%ProgramFiles%\NI\LVAddons` | REPLACES that root; relative to the INI |
+| `LVAddons.AdditionalLocations` | none | `;`-separated, quotes stripped; ignored before LabVIEW 2024 |
+
+**The keys are OPTIONAL and a missing one is LabVIEW's default, never "no add-ons"** - the user's
+reminder of 2026-10-26.
+
+**MEASURED 2026-10-26 on LabVIEW 26.3.1 (32-bit).** Each run started LabVIEW with its own `-pref`
+INI (a copy of the installation's `LabVIEW.ini` plus the keys), then loaded and ran over ActiveX a
+caller whose only subVI is `<vilib>\LvmcpProbe\LvmcpAddonProbe.vi` - a file that exists ONLY inside
+probe add-ons, each copy returning its own number:
+
+| run | INI | caller returned | so |
+|---|---|---|---|
+| F | no keys (control) | broken, `ExecState 0` | the link needs an add-on |
+| A | `AdditionalLocations=venv` - versions 1 (≥24.0), 1.5 (≥26.0), 2 (≥30.0), 3 (64-bit) | **15** | highest version this LabVIEW admits, bitness checked |
+| B / C | `venv2;venv` and `venv;venv2` | 200 both | INI order is irrelevant |
+| D | `CustomLocation=custom` | 300 | the custom root is searched |
+| G | `CustomLocation` add-on `zcust` + additional `other` | 200 (`other`) | the base location has NO precedence |
+| H | `other;aprobe` | 400 (`aprobe`) | **the alphabetically first ADD-ON wins**, across locations |
+| I / J | no `lvaddoninfo.json` / text that is not JSON | broken | **the add-on is ignored** |
+| - | `lvaddoninfo.json` with a UTF-8 BOM, or without `AddonName` | broken (all runs of two earlier rounds) | **ignored** too |
+| K | `AddonName` different from the folder name | 700 | loaded |
+| M1 | an add-on copy of `vi.lib\Utility\error.llb\Trim Whitespace (string).vi` answering `ADDON` | `x` | **the installation's own file wins** over an add-on's |
+| M2 | add-on folder `dup` in A and in B, INI `A;B` / `B;A` | B's / A's | **the same folder name: the location listed LAST wins** |
+| M2 | `CustomLocation=A`, additional B | B's | an additional location beats the custom one for it |
+| M3 | folder `aaa` (AddonName `zzz`) against folder `mmm` (AddonName `bbb`) | `aaa`'s | ordered by **folder name**, not AddonName |
+| N1 | `dup` in A WITH the file, `dup` in B without it, INI `A;B` | broken | the later same-named add-on **REPLACES** the earlier one - A's is not searched |
+| N2 | the same, INI `B;A` (control) | A's | |
+
+An earlier round started LabVIEW with `CustomLocation` (no add-on of the default root in its log any
+more) and with `Enabled=False` (no add-on at all). So `resolve.ordered_addons` and
+`LabViewContext.SelectedAddons` order the chosen add-ons of all locations by name, and
+`addon_info` / `AddonTree.Admits` refuse a missing, unparsable, BOM-prefixed or nameless
+`lvaddoninfo.json`. **Two traps the probe itself fell into, worth knowing for any repeat:**
+PowerShell 5's `Set-Content -Encoding utf8` writes the BOM that makes LabVIEW ignore an add-on; and
+a caller placed INSIDE the tree holding the probes was linked by LabVIEW's own name search to the
+alphabetically first copy (300 in every run, the control included) - keep a caller far from the
+files it must not find. So the resolver searches the installation first, then the add-ons by
+folder name, and of one folder name in two locations ONLY the later-listed one. NOT measured: how
+versions compare across two such locations, and whether a later same-named folder with NO version
+this LabVIEW admits still hides the earlier one (the resolver keeps the earlier one then). Scripts:
+`experiments\lvaddons\lvaddons-probe2.ps1` to `-probe5.ps1` (they stop and restart
+LabVIEW and empty its auto-save store; PowerShell 5 drops an EMPTY argument to a native exe, so
+pass an empty folder rather than `''`); the `.mxx` provider probe tried first detects real
+providers only.
+
+**Several LabVIEWs at once** (lvpm runs its own beside the "primary" one): the one whose command line
+is nearest the VI being composed or read - lvpm passes the project and keeps its INI in the
+repository - else the one serving the connected gRPC port, else the newest, said in the answer.
+`"labviewExe"` and `"labviewPref"` in `settings.json` pin it.
+
+**A START KEEPS THE `-pref` NOW.** `lvai_ensure_labview` and `--ensure-labview` started the NEWEST
+installed LabVIEW with no arguments, whatever had run before - an lvpm LabVIEW 2024 came back as
+2026 without its packages. They start the settings file's LabVIEW, else the one LAST SEEN RUNNING
+(`%USERPROFILE%\.labviewmcp\last-labview.json`) with the `-pref` it ran with, else the newest
+installed; `lvai_list_labview_installations` shows the choice and why. Every launch strategy passes
+`-pref`. **Measured 2026-10-26 end to end** (`experiments\lvaddons\ensure-labview-pref.ps1`), both
+routes through `LabVIEWMCP --ensure-labview` with the INI on a path containing a space: pinned in a
+settings file, and remembered after the server had seen that LabVIEW running - each started by
+`breakaway` with `-pref "<ini>"` on its command line, and each ran a caller that only the INI's
+add-on location satisfies. Explorer cannot pass arguments, so that strategy opens a one-line
+`.cmd` that does; it is reached only when `breakaway` is refused, which never happened here, so
+its survival is not measured.
+
+**Caches.** The resolver's installation index is keyed on its roots AND the write times of the
+locations and chosen version folders, so an `lvpm install` is seen on the next compose instead of
+after its ten-minute lifetime. The palette and example indexes carry the selection in their key
+(`sel1`, so each is rebuilt once after the update); with locations beyond the default root they live
+in memory only, under the locations' fingerprint, and are never written to disk. The export cache
+is unchanged: it only ever held VIs under an installation or the DEFAULT add-on root, and a venv is
+neither.
 
 **EVERYTHING THE BACKEND NEEDS SHIPS - since 2026-10-12, the user's decision.** The composer, the
 reader and their parts moved from `experiments\aixml-without-grpc` to `scripts\aixml-pylabview`, so
@@ -626,6 +723,14 @@ facade, exported and composed, left the XControl's method answering 0 where NI's
 it carries no control STYLE, so the XControl looks like digital numerics and LEDs, not a slide and a
 thermometer. A loaded XControl stays in LabVIEW's memory and is served for any path with the same
 qualified name. `experiments/aixml-without-grpc/FINDINGS.md` §7a, "XControl facades".
+
+**The other members of an XControl compose too, since 2026-10-22**, and so do class members: the
+role (Facade, Method, Standard) is read from the `.xctl`, a Method VI gets its `VIMS` signature,
+and the reader writes after `</VI>` - where NI's service ignores it - the connector pane PATTERN
+(`<?lvmcp pane="4815"?>`, part of a subVI's link binding) and the class of every
+`ref{UDClassInst}` (`<?lvmcp classes uid=... names=...?>`), which AIXML does not name. Over all 23
+XControls of LabVIEW 2026: 3 625 VIs read, 2 764 of the 2 809 class-typed members composed load
+executable. FINDINGS §7a, "Every XControl of the installation".
 
 **A MENU REFERENCE composes as a wire** - out of `Current VI's Menubar` into `Insert Menu Items` and
 `Get Menu Item Info`, and out of a `Shortcut Menu Activation?` frame's `MenuRef`; a right-click on
@@ -1632,11 +1737,238 @@ LabVIEW 2020 f1 with no NI service involved. One step did not work there: Clean 
 **LabVIEW error 2** at `Block Diagram:Clean Up` (Clean Up Panel worked); the step is reported and
 never gating, so the VI is left as composed. Not investigated further.
 
+## A user-defined TAG refnum is CLASS-specific, and one class had no part (fixed 2026-10-27)
+
+A DAQmx producer/consumer demo was generated into `C:\test\NeillDemo` and had to be built on
+**gRPC**, because every `pylabview` attempt answered
+
+```
+errorCode 2  no part for a NIDAQ refnum (the harvested one is nisyscfg)   errorKind: composerRefused
+```
+
+for a VI whose `task out` terminal is `ref{GenClassTag.Task.NIDAQ}`. That is a real gap and it is
+worth stating precisely, because the neighbouring section ("Property nodes on a tag refnum") says a
+DAQmx task's PROPERTY NODES compose - which is true, and says nothing about the refnum OBJECT a
+control, indicator or constant of that type needs.
+
+**Measured 2026-10-27**, six one-element probes, each a `<Control>`+`<Indicator>` pair (or a
+constant) and nothing else, over both backends:
+
+| probe | `pylabview` | `grpc` |
+|---|---|---|
+| `ref{GenClassTag.Task.NIDAQ}` on the pane | **refused**, `the harvested one is nisyscfg` | `errorCode 0`, 4 371 B, `execState 1` |
+| the same type as a diagram **CONSTANT** | **refused**, `the harvested one is `**`Variable`** | `errorCode 0`, 3 999 B, `execState 1` |
+| `ref{GenClassTag.nisyscfgSession.nisyscfg}` on the pane | composes, 4 668 B, `execState 1` | - |
+| `ref{Queue}{string}` on the pane | composes, 4 352 B | - |
+| `tag{14}` (a DAQmx physical channel) | composes, 4 336 B | - |
+
+The last three are the **control arms**: without them a refusal says only that something is wrong,
+not that this type is what is wrong.
+
+**The constant and the pane object have DIFFERENT donors**, which one probe cannot see. The first
+report of this named `nisyscfg` for both, because its constant probe also carried an indicator and
+the indicator was refused first; a constant ALONE (`outputs="value:"`, nothing reading it) answers
+`Variable`. Two part slots, two classes, two refusals.
+
+**Why one part cannot serve another class** is already in `aixml2vi.py`'s own guard: a
+`Refnum.UsrDefndTag` is class-specific inside - its tag ddo names the class's DLL and its `STR`
+section the `typeClass` - so the composer compares the donor's `TypeName` with the requested one
+and refuses rather than shipping a refnum to the wrong library. The guard was right; what was
+missing is a part for the second class.
+
+### The fix: file the part by its CLASS, as `Refnum.LVObjCtl` already is
+
+Parts were filed under one class-blind key, `fpdco/stdRefNum/ctl/Refnum.UsrDefndTag` and
+`const/stdRefNum/Refnum.UsrDefndTag`, so the folder could hold exactly one class. They are now
+ALSO filed by class (`…/Refnum.UsrDefndTag.NIDAQ`), which is the shape `Refnum.LVObjCtl` already uses
+for its `CtlFlags` - `lvheap.tag_refnum_class` decides it - ONE
+implementation, which `harvest_parts.py` files the part with and `aixml2vi.py` asks for, because
+two copies of one rule drift - and **the generic key stays as the fallback**, so a class with no part of its own still
+reaches the named refusal and no existing part moved. A class whose `TypeName` holds `.` or a
+separator keeps the generic key, because a key's last segment maps `_` back to `.` and would not
+round-trip through the file name.
+
+**`lvheap.type_key` was deliberately NOT changed.** Returning `Refnum.UsrDefndTag.<TypeName>` from
+it is the one-line version and it breaks the next line of `build_ddo`: `DDO_OF_KEY` is keyed by
+that same string, so every such refnum would have come back `no data object for type`. The
+contained change touches the two places that file and pick a part, and nothing that identifies a
+type.
+
+### Harvested from NI's own build of a probe, which is where the nisyscfg part came from
+
+The existing pane part's provenance reads `source="ptypes.xml"` - a probe document *we* authored
+and NI's converter built, then harvested. So the donor for the missing class is the gRPC column of
+the table above, and the harvest is the ordinary one:
+
+```
+python harvest_parts.py scripts\aixml-pylabview\parts <NI's build of the probe>.vi
+```
+
+giving exactly three parts - `const/stdRefNum/Refnum.UsrDefndTag.NIDAQ`,
+`fpdco/stdRefNum/ctl/…` and `fpdco/stdRefNum/ind/…` - whose provenance is the bare donor file name
+(`lvheap.portable_source` cuts a scratch path). The probe is committed as
+`experiments/aixml-without-grpc/probes/ptypes-nidaq.xml` so the donor can be rebuilt; it needs a
+LabVIEW with NI's service once, exactly as `ptypes.xml` did.
+
+### Accepted through the MCP tool path after a client restart
+
+The measurements above were taken by driving `aixml2vi.py` DIRECTLY, because the running server
+still served the pre-fix scripts out of its `bin\` copy - the stale-build trap this repository
+records for `dotnet msbuild -t:Compile`, reached here by editing after the gate had built. Re-run
+2026-10-27 through `lvai_convert_aixml_to_vi` with `backend: "pylabview"` on a restarted client:
+
+| probe | answer |
+|---|---|
+| `ref{GenClassTag.Task.NIDAQ}` on the pane | `ok: true`, `execState 1`, `sourceOnly: true`, donor `ptypes-nidaq.vi` |
+| the same type as a CONSTANT | `ok: true`, `execState 1`, donor `ptypes-nidaq.vi` |
+| the nisyscfg control arm | `ok: true`, `execState 1`, donor still `ptypes.xml` |
+| `Start AI Acquisition.vi` (3 DAQmx calls, `task out`) | `ok: true`, 9 308 B, `execState 1` |
+| `Close Acquisition.vi` (`task in`, Stop, Clear, Release Queue) | `ok: true`, 7 941 B, `execState 1` |
+
+So the gap is closed on the route a client actually uses, and the control arm's donor did not move.
+
+### The demo's MAIN VI was eBad too - a WAVEFORM CHART with no clean part (fixed 2026-10-27)
+
+Found while accepting the refnum fix, and it is a separate defect: with both DAQmx subVIs
+executable, the main VI composed to 18 304 bytes and came back `execState 0`. **`left generic: 4`
+in that report is NOT the tell** - the fixed VI still reads it and is executable, so it says
+nothing about the fault; this paragraph bolded it as evidence for one afternoon.
+**Not a link fault** either - `linkerErrors` named no missing subVI, only the
+generic *"The VI is not executable"* - and not the refnum. The symptom that localised it:
+`lvai_open_file` answered **`Error 1013, Cannot load front panel`** where `lvai_exec_state` opened
+the same VI happily, because a VI reference does not load the panel.
+
+**Bisected from the panel's own declarations**, one probe per object that carries a `style=`:
+
+| probe | donor | result |
+|---|---|---|
+| `array{doublewaveform}` indicator, `style="graph21717"` (the chart) | `<labview>\examples\…\Continuous Decimating.vi` | **`execState 0`, panel `Error 1013`** |
+| the SAME type with **no** `style=` | `P3 ni accumulate-across-a-loop.vi` | `execState 1`, panel opens |
+| `bool` control, `style="latched"` (the Stop button) | `bool_control_donor.vi` | `execState 1` |
+
+So the type is innocent and the **donor** is the fault - the third instance of the shape
+`denylist.json` was created for: *a part cut from a whole NI example carries state a plain AIXML
+control does not have.* A chart keeps a history buffer, which is the obvious candidate and was not
+isolated further, because the remedy does not depend on knowing which byte it is.
+
+**The remedy is a clean part, not a denylist entry.** Every other `stdGraph21717` part reads
+`source="pgraph.xml" clean="1"` - cut from our own probe - and the waveform-array slot was the one
+the probe never declared, so the harvester had only the example to fall back on. Two lines in
+`experiments/aixml-without-grpc/probes/pgraph.xml` (`chart wfm`, `chart wfms`), NI's gRPC build of
+it, and `harvest_parts.py --clean` over that donor replace it and add the scalar-waveform chart
+beside it. Denying the part instead would have turned a broken VI into a refusal, which is louder
+and still loses the chart.
+
+**Measured after, one variable changed:** the chart probe `execState 0 -> 1`, and the main VI
+`execState 0 -> 1` with its panel opening `errorCode 0`, so the whole producer/consumer demo -
+main VI and both subVIs - now composes and loads with no NI service. Re-run through
+`lvai_convert_aixml_to_vi` once the gate had rebuilt `bin\`: all three `ok: true`,
+`sourceOnly: true`, `Acquired Data <- pgraph.vi`. Suite case `t110_graphs`
+carries the two new indicators; with the example-cut part put back it answers
+`BROKEN (ExecState 0)`, so the case is not vacuous.
+
+**Three suite cases fail in this environment and are NOT this change**: `t133_vi_filter_live`,
+`t136_application_events` and `t138_key_notify_live` declare no graph style and no waveform, so
+neither part is reachable from them, and they fail identically with the change reverted - they are
+the live cases that follow the desktop's ACTIVE window.
+
+### What it buys, measured
+
+- All six probes compose, and **`a-nidaq-fp`, `e-nidaq-const` and the nisyscfg arm load
+  `execState 1`**.
+- **The VI that forced gRPC composes with no NI service**: `Start AI Acquisition.vi` of the demo -
+  `DAQmx Create Channel (AI-Voltage-Basic).vi` -> `DAQmx Timing (Sample Clock).vi` ->
+  `DAQmx Start Task.vi`, a `task out` indicator, nine controls - 9 308 bytes, `execState 1`, no
+  linker errors.
+- The control arms still take their ORIGINAL donors (`ptypes.xml` for nisyscfg, two `<labview>`
+  VIs for the queue), so part selection did not move.
+- Suite case **`t190_tag_refnum_classes`**: both classes in ONE VI, each refnum asserted a genuine
+  null refnum through `Not A Number/Path/Refnum?`, the IO name passed through - `PASS`, run in
+  LabVIEW. **With the three parts removed it answers `COMPOSE FAILED … no part for a NIDAQ refnum`**,
+  so the case is not vacuous.
+- `t90`-`t99` and `t170`-`t179` still pass, `t171`/`t172` (the Network Stream endpoint and its
+  property node) among them - the other `UsrDefndTag` consumers.
+
+### Two things the probes found on the way
+
+- **`name` is not a declared attribute of `<VI>`.** The composer accepts it; NI's converter answers
+  `-2628` and `lvai_validate_aixml` names it (`attribute 'name' is not declared for element 'VI'`).
+  The suite writes `_name`. So a document that composes is not therefore schema-clean, and the
+  validate path is the cheap way to find out.
+- **NI's converter does not create the output directory.** A `viPath` under a folder that is not
+  there is `Error 7` at `Save:Instrument`, naming the file rather than the folder.
+
+## Four gaps a cold build of a CSV reader found (fixed 2026-10-27)
+
+A cold agent build of a chunked, parallel CSV reader (8 channels x 1 000 000 rows) had to send
+two VIs to NI's converter and hand-patch a third. All four are closed on `pylabview`; suite cases
+`t191`-`t193`, run in LabVIEW.
+
+- **`Spreadsheet String To Array` came out 1D.** Its part was cut from `GPIB with VISA
+  functions.vi`, which wires a 1D double array into `array type (2D Dbl)`, so with that input
+  unwired the composer typed `array` 1D - and a `Build Array` appending the parsed rows to a 2D
+  shift register was refused as "arrays of different dimensions". LabVIEW's default with the
+  input unwired is 2D double, and the composer now writes that. The refusal also names each
+  input's rank now (`accL.value=2D, rowo.value=1D`), which is what found the cause.
+- **`Get Waveform Attribute` knew only its every-attribute instance.** Slot 1 is `values` with
+  `name` unwired and `value` with it wired; slots 4/5/6/out are `error in`, `default value (empty
+  Variant)`, `name`, `error out` - read off the heap of the VI NI's converter built from the same
+  AIXML. `TERM_ALIASES` in `aixml2vi.py` carries the second name of slot 1.
+- **The reader dropped `concat="true"` and named a subarray `element`.** A concatenating input
+  carries DCO flag 0x10000; the reader now writes `concat="true"` from it, and an Index Array
+  output typed `SubArray` (a disabled index) is `subarray`, as NI writes both.
+- **Iteration parallelism.** NI's AIXML has no spelling for it and its export drops it, so it is
+  an instruction after `</VI>` - `<?lvmcp parallel uid="<For Loop uid>" workers="16"?>` - which
+  NI's service ignores (on grpc the loop stays sequential) and the composer turns into NI's own
+  shape: a `parForWorkers` DCO beside N, its inner terminal on the loop's sRN,
+  `<ParForWorkers uid=…/>` and `ParForNumStaticWorkers`. The reader writes the instruction back.
+  Measured as an A/B on the reader's piece parser, everything else equal: 2.48 s without, 0.97 s
+  with 16 instances, identical data.
+
+**A NaN or infinity constant is refused by NI's validator** - `nan`, `NAN` and `Inf` on a double
+`<Constant>` all answer `Unrecognized or unsupported attribute set`, although NI's OWN export writes
+a NaN constant as `value="nan"`. The composer takes `nan` and the VI runs NaN. `lvai_check_aixml`
+answers `nonFiniteConstantRefusedByNi` and the lint `non-finite-constant-refused-by-ni`, both
+warnings and scoped to the measured case, a double Constant.
+
+### What the third cold build still found (2026-10-27)
+
+- **A WAVEFORM does not cross LabVIEW's ActiveX server.** `GetControlValue` answers an opaque COM
+  object for one waveform and for an array of them - no type information at all (`GetTypeInfo` is
+  `E_NOTIMPL`) - and `lvai_run_vi_and_read_values` on `pylabview` printed it as
+  `System.__ComObject` with `problem: null`. A panel carrying a waveform indicator now gets the
+  composed `scripts/lvai_read_values.xml` (Open VI Reference by path, `Ctrl Val.Get All`, Flatten
+  To XML): it runs while the target's reference is still held, so it reads the values of THIS run,
+  and the waveform arrives as LabVIEW's own XML (`DBLWaveform` with `t0`, `dt`, `Y`, attributes).
+  Measured by hand over COM before it was wired in. A value it still cannot read is named in
+  `problem`, never left blank.
+- **`lvai_generate_vi` on gRPC answered `execState: null`.** The validated route converted without
+  `checkExecutable`, on the grounds that ValidateAIXML had looked; only the loaded-subVI route and
+  the composer read the state. It is read on the validated route too now, and a broken result is
+  `ok: false` at `execState`.
+- **`lvai_vi_terminals` printed `inputs=""`** for a VI with no inputs (High Resolution Relative
+  Seconds.vi), which NI's converter refuses and the lint flags (`terminal-list-empty`). An empty
+  list is left off now, there and in `lvai_placeholder_subvi`'s `Call`.
+- **A string array passed as a literal was split at the commas INSIDE its strings** (found by the
+  fourth cold build): `["1,2\r\n3,4","5,6"]` reached Parse CSV Pieces.vi as four pieces, with no
+  `problem` named. An item in double quotes is taken verbatim now - a quote counts only where it
+  starts an item and where the item ends - and AIXML's `\2C` still works beside it.
+- **"Wiring insanity found and fixed" on load - investigated, not changed.** Every wire left
+  generic in those builds is a FAN-OUT one of whose ends is a primitive terminal with NO learned
+  hotpoint at all: `String Subset` (1503, slots 1-3), `String To Byte Array` (1608/1) and `Read from
+  Text File` (8070/0). A fan-out is routed only where every end is exact (`route_heap`), so these
+  are left to LabVIEW, which repairs them on load - non-fatal, the VIs run. The remedy is data, not
+  code: LabVIEW-saved fan-outs through those terminals fed to `learn_hotpoints_fanout.py
+  --write` (the suite's LabVIEW-routed saves via `suite_corpus.py` are the source that carries the
+  composer's own terminal kinds).
+
 ## Not covered, and not measured
 
-- **A DAQmx call has not been RUN through a composed VI** - the probes above stop at the link and
-  the pane, because a DAQmx task needs a device (simulated or real) this station was not set up
-  with.
+- **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the
+  link, the pane and `execState`. This bullet used to give the reason as a station with no device;
+  that is no longer true (a Create Channel + Clear Task probe on `Dev1/ai0` answered `error out = 0`
+  on 2026-10-27, and the gRPC-built demo acquired 100 samples and wrote a TDMS file). What is
+  missing is the run of a *composed* one, not a device.
 - **ActiveX is Windows only and needs a running LabVIEW**; it never starts one, so with no LabVIEW
   the pylabview backend writes and reads VIs and reports executability as not measured.
 - **`lvai_connector_pane` on pylabview does not MEASURE the pane's orientation** - the slot

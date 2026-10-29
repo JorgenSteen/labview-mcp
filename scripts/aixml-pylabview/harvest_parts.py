@@ -257,6 +257,13 @@ def ref_class(tree):
             if line.startswith("#") or row[0] == "class" or len(row) < 2:
                 continue
             _REF_CLASS_BY_FLAGS.setdefault(row[1].upper(), row[0])
+        # and the classes learn_node_classes.py read off NI's exports (LV.Pane, LV.SceneMesh,
+        # LV.SceneGraphDisplay ...): their nodes were skipped, so the composer had no row for
+        # them (the XControl sweep, 2026-10-22)
+        learned = os.path.join(lvheap.own_parts(), "class-ids-learned.json")
+        if os.path.exists(learned):
+            for flags, cls in json.load(open(learned, encoding="utf-8")).get("classes", {}).items():
+                _REF_CLASS_BY_FLAGS.setdefault(("0x%04X" % int(flags, 16)).upper(), cls)
     return _REF_CLASS_BY_FLAGS.get((tree.get("CtlFlags") or "").upper())
 
 
@@ -508,6 +515,14 @@ class Harvester:
                     # (CtlFlags): Ring and Enum both hold a stdRing, of different types
                     self.save("fpdco", "fpdco/stdRefNum/%s/%s.%s" % (ind, tk, types[0].get("CtlFlags")),
                               source, fpdco, types)
+                if tk == "Refnum.UsrDefndTag" and lvheap.tag_refnum_class(types[0]):
+                    # a user-defined TAG refnum is class-specific inside too (its tag ddo names
+                    # the class's DLL, its STR section the typeClass), so one class's part cannot
+                    # serve another: a DAQmx task against the nisyscfg part was `no part for a
+                    # NIDAQ refnum (the harvested one is nisyscfg)` (measured 2026-10-27). Filed
+                    # by its class BESIDE the generic key, exactly as Refnum.LVObjCtl is.
+                    self.save("fpdco", "fpdco/%s/%s/%s.%s" % (graph_class(ddo), ind, tk, lvheap.tag_refnum_class(types[0])),
+                              source, fpdco, types)
                 self.array_elements(b, fpdco, "fpdco", source)
         if b.bd is None:
             return
@@ -524,6 +539,22 @@ class Harvester:
             if cls == "exprNode" and not self.only_props:
                 # an Expression Node: input and output bDDCO, the formula in a textNodeLabel
                 self.save("node", "node/exprNode", source, e, resolve_types(b, e))
+                continue
+            if cls == "decimate" and not self.only_props:
+                # Decimate 1D Array: its array input and one decimateDCO output per element
+                self.save("node", "node/decimate", source, e, resolve_types(b, e))
+                continue
+            if cls == "callByRefNode" and not self.only_props:
+                # Call By Reference: four own terminals (hGrowCItem) and one iUseDCO per pane slot
+                self.save("node", "node/callByRefNode", source, e, resolve_types(b, e))
+                continue
+            if cls == "scriptNode" and not self.only_props:
+                # a script node (MATLAB script): a Formula Node's shape plus an error in and out
+                self.save("node", "node/scriptNode", source, e, resolve_types(b, e))
+                continue
+            if cls == "fBox" and not self.only_props:
+                # a Formula Node: one fBoxDCO per variable, the code in its formula textHair
+                self.save("node", "node/fBox", source, e, resolve_types(b, e))
                 continue
             if cls == "statVIRef":
                 self.save("node", "node/statVIRef", source, e, resolve_types(b, e))
@@ -546,6 +577,11 @@ class Harvester:
                     types = resolve_types(b, e)
                     tk = lvheap.type_key(types[0])
                     self.save("const", "const/%s/%s" % (ddo.get("class"), tk), source, e, types)
+                    if tk == "Refnum.UsrDefndTag" and lvheap.tag_refnum_class(types[0]):
+                        # class-specific as on the pane, above - the generic const donor is a
+                        # `Variable` refnum, which refused a NIDAQ one
+                        self.save("const", "const/%s/%s.%s" % (ddo.get("class"), tk, lvheap.tag_refnum_class(types[0])),
+                                  source, e, types)
                     self.array_elements(b, e, "const", source)
             elif cls == "signal":
                 n = str(len(e.find("termList")))
@@ -606,6 +642,24 @@ class Harvester:
                 # decomposeMatchNodes INSIDE it, joined by a matchPoserInterface; the
                 # structure's own termList holds only the outer terminals
                 self.save("struct", "struct/inplace", source, e, resolve_types(b, e))
+                # and each ARRAY or CLUSTER pair on its own - Array Index / Replace Elements,
+                # Unbundle / Bundle Elements: its two decompose nodes, the poser joining them and
+                # the structure's outer terms that name their DCOs (the XControl sweep, 2026-10-22)
+                diag = e.find("diagramList/SL__arrayElement")
+                nodes = {n.get("uid"): n for n in (diag.find("nodeList") if diag is not None else [])}
+                for poser in (e.find("multiSegPipeFlange2Size") if e.find("multiSegPipeFlange2Size") is not None else []):
+                    if poser.get("class") not in ("arrayPoserInterface", "clusterPoserInterface"):
+                        continue
+                    halves = [nodes.get(poser.find(t).get("uid")) for t in
+                              ("multiSegPipeFlange1Depth", "multiSegPipeFlange2Depth") if poser.find(t) is not None]
+                    if len(halves) != 2 or None in halves:
+                        continue
+                    dcos = {d.get("uid") for h in halves for d in h.iter("dco")}
+                    wrap = ET.Element("pair")
+                    for x in halves + [poser] + [t for t in e.find("termList")
+                                                 if t.find("dco") is not None and t.find("dco").get("uid") in dcos]:
+                        wrap.append(copy.deepcopy(x))
+                    self.save("inplacepair", "inplacepair/%s" % poser.get("class"), source, wrap, resolve_types(b, wrap))
             elif cls == "flatSequence":
                 # a Flat Sequence: sequenceFrame structures side by side, each with seqTun
                 # tunnels whose DCO termList is [inner, outer] - as a loop's
