@@ -727,6 +727,40 @@ def elem_of(tree):
     return fields(tree)[0]
 
 
+def wire_class(tree):
+    """The coercion class of a wire's type, for the wiring check: numeric (an enum included),
+    bool, string, path, or ("array", element class). None for everything the check does not
+    judge - clusters, refnums, variants, waveforms - so an unknown type is never a fault."""
+    tree = typedef_inner(tree)
+    if tree is None:
+        return None
+    t = tree.get("Type") or ""
+    if t.startswith("Num") or t.startswith("Unit"):
+        return "numeric"
+    if t in ("Boolean", "String", "Path"):
+        return t.lower()
+    if t == "Array" and fields(tree):
+        inner = wire_class(elem_of(tree))
+        return ("array", inner) if inner is not None else None
+    return None
+
+
+def wire_mismatch(src, want):
+    """True where LabVIEW has NO coercion from `src` to `want` - a broken wire NI's validation
+    refuses and the composer used to write in silence. Numeric to numeric coerces (a dot); a
+    variant, cluster or refnum on either side is not judged."""
+    a, b = wire_class(src), wire_class(want)
+    if a is None or b is None:
+        return False
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return a[1] != b[1]
+    return a != b
+
+
+def class_text(c):
+    return "array of %s" % c[1] if isinstance(c, tuple) else c
+
+
 def unlabel(tree):
     """The type a WIRE carries: the outer label goes, field labels stay (they are the type)."""
     return lvheap.strip_label(tree)
@@ -1436,6 +1470,10 @@ class Composer:
         self.used_uids = set(lvheap.all_uids(self.fp)) | set(lvheap.all_uids(self.bd))
         self.ends = {}               # (aixml uid, terminal) -> (heap term uid, Diagram)
         self.net_type = {}           # net -> inlined type tree (unlabelled)
+        # (what, net, wanted type tree) for a sink whose type is FIXED - judged after wiring,
+        # when every net's type is known (check_wiring); and faults found while composing
+        self.sink_checks = []
+        self.wiring_faults = []
         self.loops = []              # (loop heap element, its inner Diagram, parent Diagram)
         self.report = []
         self.search_dirs = []        # where a <Call> target is looked for; the output dir first
@@ -5354,7 +5392,16 @@ class Composer:
                     raise Unsupported("Call %r has no %s %r on its pane (has: %s)"
                                       % (target, "input" if direction == "in" else "output", tname,
                                          ", ".join(sorted(set(by_dir["in"]) | set(by_dir["out"])))))
+        wired_in = {tname for tname, net in listed["in"] if net}
+        for i in sorted(required_at):
+            if name_at.get(i) in by_dir["in"] and name_at[i] not in wired_in:
+                # NI's validation: "required input 'X' is not wired" - LabVIEW breaks the caller
+                self.wiring_faults.append("Call %r: required input %r is not wired"
+                                          % (target, name_at[i]))
         for tname, net in listed["in"]:
+            if net:
+                self.sink_checks.append(("Call %r input %r" % (target, tname), net,
+                                         by_dir["in"][tname][1]))
             src = self.net_type.get(net) if net else None
             t, want = by_dir["in"][tname]
             if src is not None and want.get("Type") == "TypeDef" and src.get("Type") != "TypeDef":
@@ -9857,6 +9904,7 @@ class Composer:
         self.finish_cases()
         self.finish_events()
         nets = self.wire(elements)
+        self.check_wiring(elements)
         for el in labels:
             self.add_label(el)
         self.layout(nets)
@@ -9886,6 +9934,39 @@ class Composer:
         self.connector_pane()
         # escaped as NI escapes it (\2C, \3A, \0A, a doubled backslash), like a control's below
         self.description = unescape(vi.get("description") or "")
+
+    def check_wiring(self, elements):
+        """Refuse what NI's ValidateAIXML refuses and LabVIEW would load broken: an unwired
+        REQUIRED subVI input, and a wire with no coercion into a sink of FIXED type (an
+        indicator, a subVI input). The pylabview backend has no NI validation, so these used
+        to compose, write a VI and surface only as execState 0. Primitives are not judged -
+        they are polymorphic, and the donor's type says nothing about what they accept.
+
+        Only a wire whose SOURCE has an exact type is judged: a Control, a Constant, a subVI
+        Call's output. A primitive's output is typed from its donor part, which can be in
+        another mode - an Equal? comparing aggregates gives one boolean where its donor gave an
+        array of them, and judging that refused six working VIs of the suite and scripts\."""
+        exact = {net for el in elements if el.tag in ("Control", "Constant", "Call")
+                 for _, net in pairs(el.get("outputs")) if net}
+        for el in elements:
+            if el.tag != "Indicator" or not el.get("type"):
+                continue
+            ins = pairs(el.get("inputs"))
+            if not ins or not ins[0][1]:
+                continue
+            try:
+                want = type_tree(el.get("type"))
+            except Exception:
+                continue        # a type the check cannot build is not judged
+            self.sink_checks.append(("Indicator %r" % unescape(el.get("_name") or ""), ins[0][1], want))
+        for what, net, want in self.sink_checks:
+            src = self.net_type.get(net) if net in exact else None
+            if src is not None and wire_mismatch(src, want):
+                self.wiring_faults.append("%s: a %s wire (net %r) cannot feed a %s terminal"
+                                          % (what, class_text(wire_class(src)), net,
+                                             class_text(wire_class(want))))
+        if self.wiring_faults:
+            raise Unsupported("wiring: " + "; ".join(self.wiring_faults))
 
     def set_array_anchors(self):
         """Give every array constant its nRC/oRC anchor now that every position is final (see

@@ -71,3 +71,43 @@ Measured 2026-10-15 over 865 cached VIs; each unread construct is named in a com
 | [ ] | A COMPOSED VI calling DAQmx actually run against a device |
 | [ ] | Clean Up Diagram answering error 2 on LabVIEW 2020 f1 (2026-10-13; predates our own layout engine) |
 | [ ] | Broad coverage on LabVIEW 2020 - most measurements are on 2026 |
+
+## 4b, first step: the composer refuses a broken wire (2026-10-29)
+
+**The symptom.** On `pylabview` a "validation" is a scratch compose, and the composer wrote these
+three faults into a VI without a word, where NI's `ValidateAIXML` refuses each before anything is
+written - measured on one-fault probes beside clean controls:
+
+| probe | before | now |
+|---|---|---|
+| a subVI input the callee marks `required`, unwired | written | `UNSUPPORTED: wiring: Call 'Callee.vi': required input 'n' is not wired` |
+| a `string` constant into a `double` subVI input | written | `... input 'n': a string wire (net ...) cannot feed a numeric terminal` |
+| a `string` control into a `double` indicator | written | `Indicator 'sum': a string wire ... cannot feed a numeric terminal` |
+| an `int32` into a `double` input (a coercion dot) | written | written - not a fault |
+| a misspelt terminal (`yy` on `Add`) | refused already | refused |
+| `Add` with `y` unwired, or a string into `Add` | written | **still written** - primitives are not judged |
+
+The refusal is the composer's ordinary `Unsupported`, so the server answers `composerRefused` with
+the fault named and no C# changed. `Composer.check_wiring` runs after `wire()`, when every net's
+type is known.
+
+**Classes compared**: numeric (an enum included), boolean, string, path, and an array by its
+element class. A cluster, refnum, variant or waveform on either side is not judged, so an unknown
+type is never a fault.
+
+**Only a wire from an EXACT source is judged** - a Control, a Constant, a subVI Call's output.
+The first version judged every net and refused **six working documents**: `t136`, `t184` and four
+helpers in `scripts\` (`lvai_add_class_method`, `lvai_cleanup_panel`, `lvai_set_vi_description`,
+`lvlu_add_test_method`), all an `Equal?`/`Not Equal?`/`And` feeding a boolean indicator. A
+primitive's output is typed from its DONOR part, and those donors were in array mode where the
+VIs compare aggregates. Swept after the fix: all 279 documents (the composer suite, `scripts\*.xml`,
+the skeletons) - **253 composed before and 253 after, 0 wiring refusals**; the 26 others refuse
+for setup reasons (`{stamp}` callees, DQMH/LMock/LUnit not installed here) the same way without
+the check.
+
+`PylabviewWiringCheckTests` pins four faults and four controls, the aggregate compare among them;
+run against the composer without the check, exactly the four faults fail.
+
+**NOT measured in LabVIEW yet**: that each refused probe really loads broken and each control
+loads executable. LabVIEW 2026 was in use and LabVIEW 2020 shares its COM registration (both
+32-bit), so ActiveX could not be aimed at 2020. Do it with only one LabVIEW running.
