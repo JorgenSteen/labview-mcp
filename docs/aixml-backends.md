@@ -785,6 +785,20 @@ end now breaks the tie. Both orders, with and without a `Default`, composed for 
 and for a warning. The reader exports both orders alike, so `PylabviewErrorCaseOrderTests` reads
 the stored ranges off the heap.
 
+**An Event Structure's Timeout is wired from AIXML, since 2026-10-28** - `timeoutin="<net>"` on
+the structure, a net as a Case's `selectin` (`docs/aixml-reference.md`, Event Structure). NI's
+AIXML has no terminal for it, so every composed Event Structure waited for ever and its Timeout
+frame never ran; the only route was a scripting helper that set the value after generation, and
+on LabVIEW 2020 that helper failed at a VI Server refnum class (its `ref{LV.Terminal}` part, cut
+from 2026 VIs, is not the class 2020's `Timeout Terminal` property returns) and any regeneration
+reset the value anyway. Wired in the AIXML, the helper is not needed. The reader writes the
+attribute back where it dropped the wire, and the linter and the tools that count a net's readers
+(`DiagramSize`, the AF hook check, the graft's wired-terminal test) know it
+(`PylabviewEventTimeoutTests`, `aixml_lint_test.py` [8c]). Measured on LabVIEW 2020, 2026-10-29:
+a loop whose only frame is Timeout, composed for 2020, read execState 1 and stopped after 200 and
+501 ms with `timeoutin` fed 200 and 500 from a control through a tunnel, and after 300 ms from a
+constant inside the loop - zero iterations each.
+
 **Two composer defects surfaced on the way, both general.** A growable node now SHRINKS as well as
 grows: a one-input Format Into String used to keep the template's unwired second input and broke
 the VI. And structures are sized round after round until nothing changes: a case or event

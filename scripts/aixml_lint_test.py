@@ -741,6 +741,31 @@ def test_conditional_tunnel_consumes_its_condition(directory: str) -> None:
           "the Equal? read only by cond is not reported unconsumed", str(findings))
 
 
+def test_event_timeout_consumes_its_net(directory: str) -> None:
+    """`timeoutin=` on an Event Structure READS a net, so the constant feeding it is not unconsumed."""
+    print("\n[8c] an Event Structure's timeoutin counts as a consumer")
+    doc = (
+        '<VI _name="probe.vi" description="probe">'
+        '<Structure _name="While Loop" uid="4300" uid_parent="root">'
+        '<Constant type="int32" value="100" uid="4301" uid_parent="4300" outputs="value:4301.value"/>'
+        '<Structure _name="Event Structure" timeoutin="4301.value" uid="4310" uid_parent="4300">'
+        '<CaseFrame selector=" Timeout " uid="4311" uid_parent="4310">'
+        '<Constant type="bool" value="true" uid="4312" uid_parent="4311" outputs="value:4312.value"/>'
+        '<Tunnel _id="Out1" inputs="value:4312.value" uid="4313" uid_parent="4311"/>'
+        '</CaseFrame>'
+        '<Tunnel _id="Out1" outputs="value:4314.stop" uid="4314" uid_parent="4310"/>'
+        '</Structure>'
+        '<Condition inputs="value:4314.stop" uid="4315" uid_parent="4300" value="stop"/>'
+        '</Structure></VI>'
+    )
+    p = os.path.join(directory, "event_timeout.xml")
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write(doc)
+    findings = [(f.code, f.uid) for f in lint.lint_file(p)]
+    check(("net-unconsumed", "4301") not in findings,
+          "the constant read only by timeoutin is not reported unconsumed", str(findings))
+
+
 def test_no_regression_on_shipped_helpers() -> None:
     print("\n[9] the shipped helpers stay error-free under the new checks")
     helpers = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "*.xml")))
@@ -776,6 +801,7 @@ def main() -> int:
         test_measured_against_labview(directory)
         test_nested_property_separator(directory)
         test_conditional_tunnel_consumes_its_condition(directory)
+        test_event_timeout_consumes_its_net(directory)
         test_no_regression_on_shipped_helpers()
 
         # These mutate whatever document in the pool carries the right shape, and the pool

@@ -1625,6 +1625,14 @@ class Reader:
                     for t in ts.get(d.get("uid"), []):
                         self.term_owner[t.get("uid")] = IGNORED
                 continue
+            if dc == "eventTimeOut":
+                # the Timeout terminal reads `timeoutin` (a net, as `selectin`); NI's exporter
+                # drops it, so a wired timeout came back as a loose constant (B4, 2026-10-28)
+                self.term_owner[term.get("uid")] = (el, "#timeoutin", True)
+                for ts in frame_srn_terms:
+                    for t in ts.get(d.get("uid"), []):
+                        self.term_owner[t.get("uid")] = IGNORED
+                continue
             if dc == "caseSel":
                 sel_tree = self.tid_tree(term)
                 self.term_owner[term.get("uid")] = (el, "#selectin", True)
@@ -2398,6 +2406,8 @@ class Reader:
                         el.set("maxin", net)
                     elif term == "#selectin":
                         el.set("selectin", net)
+                    elif term == "#timeoutin":
+                        el.set("timeoutin", net)
                     elif term == "#cond":
                         el.set("cond", net)
                     else:

@@ -5275,6 +5275,12 @@ class Composer:
         dl.set("elements", str(len(dl)))
         if node.find("dIdx") is not None:
             node.find("dIdx").text = "0"
+        # the Timeout terminal (top-left corner) reads `timeoutin`, a net as a Case's `selectin`:
+        # AIXML had no way to wire it, so a composed Event Structure waited for ever (-1) and a
+        # Timeout frame never ran (B4, 2026-10-28)
+        tmo = [t for t in fixed if t.find("dco").get("class") == "eventTimeOut"]
+        if tmo:
+            self.ends[(el.get("uid"), "timeout")] = (tmo[0].get("uid"), parent)
         for e in node.iter("typeDesc"):
             if e.get("_t") is not None:
                 tree = plain(lvheap.strip_label(donor_types[int(e.get("_t"))]))
@@ -6798,7 +6804,8 @@ class Composer:
             return ([(el.get("selectout"), (uid, "selectout"))] if el.get("selectout") else []), []
         if el.tag == "Structure" and el.get("_name") == "Event Structure":
             net = getattr(self, "dyn_reg", {}).get(uid)
-            return [], ([(net, (uid, "dyn"))] if net else [])
+            return [], (([(net, (uid, "dyn"))] if net else [])
+                        + ([(el.get("timeoutin"), (uid, "timeout"))] if el.get("timeoutin") else []))
         if el.tag == "Structure" and el.get("_name") == "Case Structure":
             return [], ([(el.get("selectin"), (uid, "sel"))] if el.get("selectin") else [])
         if el.tag == "Structure":
@@ -7884,14 +7891,15 @@ class Composer:
                 e = lvsr.find(path)
                 if e is not None:
                     e.set(at, v)
-            if any(e.tag == "Structure" and e.get("_name") == "Event Structure" for e in self._by_uid.values()):
+            if any(e.tag == "Structure" and e.get("_name") == "Event Structure" and not e.get("timeoutin")
+                   for e in self._by_uid.values()):
                 # NI's facades return through a Timeout frame with the timeout wired to 0, which
                 # AIXML cannot express - its export of one keeps the 0 as a loose constant. Composed
                 # as written, the facade waited for ever and the XControl's method answered 0
                 # where NI's answers 212 (t140's control arm, 2026-10-11)
-                print("NOTE: a facade's Event Structure keeps its timeout at -1 (AIXML has no terminal "
-                      "for it): end the loop in every XControl event's frame, or the facade never "
-                      "returns", file=sys.stderr)
+                print("NOTE: a facade's Event Structure keeps its timeout at -1 unless `timeoutin` "
+                      "wires it (NI's AIXML has no terminal for it): end the loop in every XControl "
+                      "event's frame, or the facade never returns", file=sys.stderr)
         m.find("STRG/Section/String").text = self.description
         # The heap slice is fixed BEFORE the link types are added: a callee's pane type is a
         # consolidated type of the VI, not a heap type - LabVIEW's own callers keep it outside

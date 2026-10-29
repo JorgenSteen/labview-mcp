@@ -1124,6 +1124,22 @@ name inside is `<registration terminal>.<cluster field>`, and the trailing text 
 `Event Data Node` exposes event fields (`NewVal`, `Source`, `code`, …) via `fields`; expect
 one per frame. Filter events additionally use an `Event Filter Node`.
 
+**The Timeout value: `timeoutin` (pylabview backend only, since 2026-10-28).** NI's AIXML has no
+attribute for the Timeout terminal at the top-left corner, so a generated Event Structure waits for
+ever (-1) and its Timeout frame never runs. The pylabview composer reads `timeoutin="<net>"` on the
+`<Structure _name="Event Structure">` - a net, as a Case Structure's `selectin` - and wires it to
+that terminal; the pylabview reader writes it back. A constant inside the loop or a control through
+an input tunnel both work:
+
+```xml
+<Constant _name="wait" type="int32" value="300" outputs="value:5024.value" uid="5024" uid_parent="5020"/>
+<Structure _name="Event Structure" timeoutin="5024.value" uid="5030" uid_parent="5020">
+  <CaseFrame selector=" Timeout " uid="5031" uid_parent="5030"> ... </CaseFrame>
+</Structure>
+```
+
+NI's converter (grpc) is not known to read it (untested); on grpc set the value by hand.
+
 ## 8. Multi-terminal nodes
 
 `fields` is a comma-separated terminal list whose meaning depends on the node:

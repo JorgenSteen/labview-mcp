@@ -86,6 +86,8 @@ BARE_NET_ATTRS = {
     ("Structure", "maxin"): "consume",
     ("Structure", "maxout"): "produce",
     ("Structure", "selectin"): "consume",
+    # an Event Structure's Timeout terminal (pylabview backend, B4 2026-10-28)
+    ("Structure", "timeoutin"): "consume",
     ("CaseFrame", "selectout"): "produce",
     # A CONDITIONAL output tunnel READS its condition net - `cond="4414.hit"` on an indexing
     # Out tunnel. Without this row an Equal? feeding only a cond was reported net-unconsumed,
