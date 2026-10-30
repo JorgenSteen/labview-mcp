@@ -761,7 +761,7 @@ NODE_READERS = {"nMux": "nmux", "mux": "mux", "demux": "demux", "aIndx": "aindx"
                 "eventRegNode": "eventreg",
                 "exprNode": "expr", "fBox": "fbox",
                 "callByRefNode": "callbyref", "scriptNode": "scriptnode",
-                "decimate": "decimate", "xNode": "xnode"}
+                "decimate": "decimate", "xNode": "xnode", "extFunc": "extfunc"}
 CA_OPS ={0: "Add", 1: "Multiply", 2: "AND", 3: "OR", 4: "XOR"}
 # a bDFixed constant's `cnst` code -> its AIXML FixedConst name (the composer's own table, reversed)
 FIXED_BY_CODE = {v.upper(): k for k, v in aixml2vi.Composer.FIXED.items()}
@@ -852,6 +852,7 @@ class Reader:
         self.anchored = {}       # anchored comments: object uid -> text, set as comment= in read()
         self.ordered_inputs = {}   # element -> its inputs in TERMINAL order, unwired ones listed
         self.ordered_ports = []    # (element, attr, [(term uid, name)]) rewritten after wiring
+        self.full_ports = []       # the same, written even when nothing is wired (a CLF node)
         self.term_net = {}
 
     # ---- helpers ---------------------------------------------------------------------------
@@ -1280,6 +1281,8 @@ class Reader:
                 el.set(attr, ",".join("%s:%s" % (escape(nm), self.term_net.get(u, "")) for u, nm in order))
             elif attr in el.attrib:
                 del el.attrib[attr]
+        for el, attr, order in self.full_ports:
+            el.set(attr, ",".join("%s:%s" % (escape(nm), self.term_net.get(u, "")) for u, nm in order))
         # an UNWIRED terminal still carries its attribute with an empty net, as NI writes it on
         # every one of its 404 unwired controls and 79 indicators - 0 of ~5 500 omit it - and as
         # the schema requires (CLAUDE.md, cold-build-shakerrig.md section 2)
@@ -2931,6 +2934,38 @@ class Reader:
         for t in node.find("termList"):
             nm = unquote(t.findtext("dco/vblName/text") or "")
             self.term_owner[t.get("uid")] = (el, nm, not self._is_out(t))
+        return el
+
+    def extfunc(self, node, parent_uid):
+        """A CALL LIBRARY FUNCTION NODE, as NI's export writes it: a Node whose terminals are
+        every one that is neither hidden (term flag 0x800000) nor Void, in terminal order, wired
+        or not - `path in`/`path out` only where the path is set on the diagram, `error in (no error)`/`error out`, the return
+        value on the OUTPUT side only (its own label, `return value` or `return type`), then each
+        parameter on both sides. A name is its type's label, inside a typedef wrapper for an
+        IMAQdx session; an output side carries term flag
+        0x20000, the return argument dco flag 0x10000, an hGrowCItem's output dco flag 1 (65 nodes
+        of NI's exports, 2026-10-30). The library, function and calling convention are not in
+        NI's format, so nothing is written for them."""
+        el = self._node_el(node, parent_uid, "Call Library Function Node")
+        dcos = {d.get("uid"): d for d in node.iter("dco") if d.get("class")}
+        ins, outs = [], []
+        for t in node.find("termList"):
+            d = dcos.get(t.find("dco").get("uid"), t.find("dco"))
+            tree = self.tid_tree(d)
+            if tree is None or tree.get("Type") == "Void" or int(t.findtext("objFlags") or 0) & 0x800000:
+                continue
+            while not tree.get("Label") and tree.get("Type") == "TypeDef" and tree.find("TypeDesc") is not None:
+                tree = tree.find("TypeDesc")
+            if d.get("class") == "hGrowCItem":
+                out = bool(int(d.findtext("objFlags") or 0) & 1)
+            else:
+                out = bool(int(t.findtext("objFlags") or 0) & 0x20000)
+                if not out and int(d.findtext("objFlags") or 0) & 0x10000:
+                    continue
+            nm = tree.get("Label") or "?"
+            self.term_owner[t.get("uid")] = (el, nm, not out)
+            (outs if out else ins).append((t.get("uid"), nm))
+        self.full_ports += [(el, "inputs", ins), (el, "outputs", outs)]
         return el
 
     # ---- wiring --------------------------------------------------------------------------------

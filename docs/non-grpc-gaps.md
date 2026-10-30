@@ -45,14 +45,16 @@ is plausible but unmeasured; **no** = the capability is NI's own.
 Measured 2026-10-30 over **2011 VIs** against NI's own export of each (`compare_full.py`; the
 reference set rebuilt that day - 1498 examples, the `Application Control` folder left out, and 600
 random `vi.lib` VIs, exported through LabVIEW 2026). **1437 match in every fact**, 1376 before the
-call-target fix below; elements 99.0 %, attributes 97.5 %, values 99.3 %, edges 96.7 %. Each
-unread construct is named in a comment.
+call-target fix below; elements 99.0 %, attributes 97.5 %, values 99.3 %, edges 96.7 %. After the
+Call Library Function reader the same day: **1499 of 2014** (three exports more in the cache),
+elements 99.1 %, attributes 97.5 %, values 99.3 %, edges 97.2 %. Each unread construct is named in
+a comment.
 
 | | gap | feasible? |
 |---|---|---|
 | [x] | call targets: a CHANNEL endpoint named after its typed clone (`Tag-bool.lvlib`) where NI names the template (`Tag.lvlib`), and a library nested in the caller's own missing the outer one - 459 targets, all of them | done 2026-10-30, `ReaderChannelAndNestedLibraryCallTests` |
 | [x] | In Place Element structure | read; 14 pairs of unusual kinds are still named as not read |
-| [ ] | Call Library Function - 85 nodes in 80 VIs, the largest unread node; its 109 lost edges are the largest edge gap | likely - configuration blob |
+| [x] | Call Library Function - 85 nodes in 80 VIs, the largest unread node; its 109 lost edges were the largest edge gap | done 2026-10-30: read as NI writes it - every terminal neither hidden nor Void, wired or not; 67 of 67 nodes in the cached exports match by name, order and wiring (`ReaderCallLibraryFunctionTests`). The library, function and calling convention are not in NI's format either, so neither backend can compose one |
 | [ ] | `attr fields` 147, `selector` 111, `cond` 109 differ | yes - not yet looked at |
 | [ ] | Shared Variable 21, `xDataNode` 20, data value reference In Place 12, Merge Signals 11, Python Node 11 | likely, per node |
 | [ ] | Stacked Sequence 10, Timed Loop 9 | yes - Timed Loop configuration is not in NI's export either |
