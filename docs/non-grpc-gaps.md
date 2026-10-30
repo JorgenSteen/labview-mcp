@@ -38,21 +38,35 @@ is plausible but unmeasured; **no** = the capability is NI's own.
 | [ ] | enum/ring items containing a quote | yes - an escaping question |
 | [ ] | some events, class-dependent event data, some Event Data Nodes | yes per event (scan LabVIEW's own VIs, as the key events were) |
 | [ ] | Conditional Disable operators beyond the supported ones | yes |
+| [ ] | channel wires (`Tag.lvlib:Write.vi` and the other channel endpoints) - nothing in the composer knows `ChannelInstances` | likely - LabVIEW clones a typed library per channel; the composer would have to make or find that clone |
 
 ## 3. Reader gaps (VI -> AIXML, used by every edit)
 
-Measured 2026-10-15 over 865 cached VIs; each unread construct is named in a comment.
+Measured 2026-10-30 over **2011 VIs** against NI's own export of each (`compare_full.py`; the
+reference set rebuilt that day - 1498 examples, the `Application Control` folder left out, and 600
+random `vi.lib` VIs, exported through LabVIEW 2026). **1437 match in every fact**, 1376 before the
+call-target fix below; elements 99.0 %, attributes 97.5 %, values 99.3 %, edges 96.7 %. Each
+unread construct is named in a comment.
 
 | | gap | feasible? |
 |---|---|---|
-| [ ] | In Place Element structure (largest by count) | yes |
-| [ ] | Call By Reference | yes - the composer writes it now, the reader should match |
-| [ ] | Stacked Sequence, Timed Loop | yes - Timed Loop configuration is not in NI's export either |
-| [ ] | Call Library Function, .NET constructor, Python Node | likely - configuration blobs |
-| [ ] | Express VIs / XNodes | likely - hard |
-| [ ] | terminal descriptions | yes |
-| [ ] | units, sets/maps, strictly typed VI refnums | yes |
+| [x] | call targets: a CHANNEL endpoint named after its typed clone (`Tag-bool.lvlib`) where NI names the template (`Tag.lvlib`), and a library nested in the caller's own missing the outer one - 459 targets, all of them | done 2026-10-30, `ReaderChannelAndNestedLibraryCallTests` |
+| [x] | In Place Element structure | read; 14 pairs of unusual kinds are still named as not read |
+| [ ] | Call Library Function - 85 nodes in 80 VIs, the largest unread node; its 109 lost edges are the largest edge gap | likely - configuration blob |
+| [ ] | `attr fields` 147, `selector` 111, `cond` 109 differ | yes - not yet looked at |
+| [ ] | Shared Variable 21, `xDataNode` 20, data value reference In Place 12, Merge Signals 11, Python Node 11 | likely, per node |
+| [ ] | Stacked Sequence 10, Timed Loop 9 | yes - Timed Loop configuration is not in NI's export either |
+| [ ] | .NET constructor 7, Express VIs / XNodes | likely - hard |
+| [ ] | class constants (192 values of type `UDClassInst` not decoded) | likely |
+| [ ] | terminal descriptions; units, sets/maps, strictly typed VI refnums | yes |
 | — | LabVIEW 9.0 constants, variants holding data | no / low value - values live in compiled code |
+
+The reference set lives in the export cache (`%USERPROFILE%\.labviewmcp\cache\aixml`). It held
+874 exports on 2026-10-15 and only 58 on 2026-10-30 - cleared in between, cause not known - so
+before a reader measurement, count the cache's entries; rebuilding it is a `lvai_convert_vis_to_aixml`
+batch on a LabVIEW nobody else is using. Exporting NI's `Application Control` examples raised
+LabVIEW's quit dialog once (`Abort Running VIs` naming `VI Save Instrument [Multiple].vi.ProxyCaller`);
+it is not established that they caused it, and they were left out after.
 
 ## 4. Infrastructure
 
@@ -87,7 +101,15 @@ written - measured on one-fault probes beside clean controls:
 | `Add` with `y` unwired, or a string into `Add` | written | **still written** - primitives are not judged |
 
 The refusal is the composer's ordinary `Unsupported`, so the server answers `composerRefused` with
-the fault named and no C# changed. `Composer.check_wiring` runs after `wire()`, when every net's
+the fault named.
+
+**Only a VALIDATION refuses, since 2026-10-30** (`aixml2vi.py --validate`, passed by
+`lvai_validate_aixml` on `pylabview`). The first version refused on CONVERT as well, and the full
+test run showed what that broke: `PylabviewLlbContainerTests` composes a `DAQmx Clear Task.vi` call
+with its required input open on purpose, to test linking through an `.llb`. NI splits it the same
+way - `ValidateAIXML` refuses, `ConvertAIXMLToVI` writes the broken VI, and routes depend on that
+(`lvai_add_class_method` converts unvalidated and repairs afterwards). A conversion now writes the VI
+and puts each fault in its report as `WARNING: wiring: ... - LabVIEW will load this VI broken`. `Composer.check_wiring` runs after `wire()`, when every net's
 type is known.
 
 **Classes compared**: numeric (an enum included), boolean, string, path, and an array by its
