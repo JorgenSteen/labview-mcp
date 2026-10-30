@@ -9945,7 +9945,7 @@ class Composer:
         Only a wire whose SOURCE has an exact type is judged: a Control, a Constant, a subVI
         Call's output. A primitive's output is typed from its donor part, which can be in
         another mode - an Equal? comparing aggregates gives one boolean where its donor gave an
-        array of them, and judging that refused six working VIs of the suite and scripts\."""
+        array of them, and judging that refused six working VIs of the suite and of scripts."""
         exact = {net for el in elements if el.tag in ("Control", "Constant", "Call")
                  for _, net in pairs(el.get("outputs")) if net}
         for el in elements:
