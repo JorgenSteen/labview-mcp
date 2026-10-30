@@ -1476,6 +1476,7 @@ class Composer:
         self.wiring_faults = []
         self.loops = []              # (loop heap element, its inner Diagram, parent Diagram)
         self.report = []
+        self.validating = False     # --validate: wiring faults refuse instead of being reported
         self.search_dirs = []        # where a <Call> target is looked for; the output dir first
         self.resolver = None         # built on the first <Call> that needs the installation
         self.links = {}              # callee path -> {"name", "flat", "cons", "offsets": [uid]}
@@ -9945,7 +9946,13 @@ class Composer:
         Only a wire whose SOURCE has an exact type is judged: a Control, a Constant, a subVI
         Call's output. A primitive's output is typed from its donor part, which can be in
         another mode - an Equal? comparing aggregates gives one boolean where its donor gave an
-        array of them, and judging that refused six working VIs of the suite and of scripts."""
+        array of them, and judging that refused six working VIs of the suite and of scripts.
+
+        Only a VALIDATION refuses (--validate), as NI's split is: ValidateAIXML refuses these and
+        ConvertAIXMLToVI writes the broken VI, which some routes depend on - a call authored
+        with its inputs open to test linking, a method converted unvalidated and repaired
+        afterwards. A conversion writes the VI and names each fault in its report (2026-10-30:
+        refusing on convert failed PylabviewLlbContainerTests' unwired DAQmx Clear Task.vi)."""
         exact = {net for el in elements if el.tag in ("Control", "Constant", "Call")
                  for _, net in pairs(el.get("outputs")) if net}
         for el in elements:
@@ -9965,8 +9972,10 @@ class Composer:
                 self.wiring_faults.append("%s: a %s wire (net %r) cannot feed a %s terminal"
                                           % (what, class_text(wire_class(src)), net,
                                              class_text(wire_class(want))))
-        if self.wiring_faults:
+        if self.wiring_faults and self.validating:
             raise Unsupported("wiring: " + "; ".join(self.wiring_faults))
+        for fault in self.wiring_faults:
+            self.report.append("WARNING: wiring: %s - LabVIEW will load this VI broken" % fault)
 
     def set_array_anchors(self):
         """Give every array constant its nRC/oRC anchor now that every position is final (see
@@ -10384,6 +10393,7 @@ def main(argv):
     search = []
     args = []
     target = None
+    validating = False
     i = 0
     while i < len(argv):
         if argv[i] == "--parts":
@@ -10391,6 +10401,8 @@ def main(argv):
         elif argv[i] == "--lv-version":
             # the LabVIEW major version to write for (25 for 2025); the skeleton's own otherwise
             target = int(argv[i + 1]); i += 2
+        elif argv[i] == "--validate":
+            validating = True; i += 1
         elif argv[i] == "--keep":
             keep = argv[i + 1]; i += 2
         elif argv[i] == "--search":
@@ -10402,6 +10414,7 @@ def main(argv):
     src, out_vi = args
     c = Composer(parts)
     c.target_major = target
+    c.validating = validating
     c.search_dirs = [os.path.dirname(os.path.abspath(out_vi))] + search
     c.caller_file = os.path.abspath(out_vi)   # relative links are computed from the caller FILE
     try:

@@ -6,8 +6,9 @@ namespace LabVIEWMcp.Tests.Infra;
 /// <summary>
 /// The pylabview backend has no NI validation, so a wiring fault NI's ValidateAIXML refuses - an
 /// unwired REQUIRED subVI input, a string into a numeric indicator or subVI input - used to compose,
-/// write a VI and surface only as execState 0 (2026-10-29, docs/non-grpc-gaps.md 4b). The composer
-/// now refuses those by name. Only wires whose SOURCE type is exact are judged: a primitive's output
+/// write a VI and surface only as execState 0 (2026-10-29, docs/non-grpc-gaps.md 4b). A VALIDATION
+/// now refuses those by name; a conversion writes the VI and names the fault in its report, the
+/// split NI's ValidateAIXML and ConvertAIXMLToVI make (2026-10-30). Only wires whose SOURCE type is exact are judged: a primitive's output
 /// is typed from its donor part, and judging it refused six working documents (an Equal? comparing
 /// aggregates feeds a boolean indicator while its donor gave an array of booleans), so the
 /// aggregate case is pinned here as the control. SKIPS where the bundled interpreter is missing, as
@@ -80,18 +81,23 @@ public sealed class PylabviewWiringCheckTests
             var xml = Path.Combine(dir, "probe.xml");
             var vi = Path.Combine(dir, fileName);
             await File.WriteAllTextAsync(xml, document);
-            var composed = await AixmlComposer.ComposeAsync(setup, xml, vi, [], 300, default);
+            var validated = await AixmlComposer.ComposeAsync(setup, xml, vi, [], 300, default, validate: true);
 
             if (refusal is null)
             {
-                Assert.True(composed.Written, composed.Message);
+                Assert.True(validated.Written, validated.Message);
             }
             else
             {
-                Assert.True(composed.Refused, "composed although LabVIEW would break it: " + composed.Message);
-                Assert.Contains("wiring:", composed.Message);
-                Assert.Contains(refusal, composed.Message);
+                Assert.True(validated.Refused, "validated although LabVIEW would break it: " + validated.Message);
+                Assert.Contains("wiring:", validated.Message);
+                Assert.Contains(refusal, validated.Message);
                 Assert.False(File.Exists(vi));
+
+                // a CONVERSION writes it, as NI's converter does, and names the fault
+                var converted = await AixmlComposer.ComposeAsync(setup, xml, vi, [], 300, default);
+                Assert.True(converted.Written, converted.Message);
+                Assert.Contains(converted.Report, r => r.Contains("wiring:") && r.Contains(refusal));
             }
         }
         finally
