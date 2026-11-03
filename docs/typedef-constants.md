@@ -314,5 +314,30 @@ an empty run is retried, up to three tries (`TypedefTools.SweepAttempts`), and
 open all correct, at most one retry each; `Gibtsnicht.vi` refused as `subViNotOnDiagram`; the bind
 `ok: true` with `coercedBefore: 1`, `coercedAfter: 0`.
 
-`lvai_exec_state` opens its VI without an application reference too, and has not been measured
-against this.
+### `lvai_exec_state` read a second copy too (fixed 2026-11-03)
+
+This section said until 2026-11-03 that `lvai_exec_state` "opens its VI without an application
+reference too, and has not been measured against this". It was then found by a user (session-7
+report M5, LabVIEW 2025, pylabview backend): after typedef edits made in a DQMH module's project -
+the module data cluster, argument typedefs, `Replace` on handler controls - the tool reported
+UNCHANGED Delacor framework VIs (`Close Module.vi`, `VI Reference AE.vi`, `Init Module.vi`,
+`Start Module.vi`, ...) broken, `Get Errors` answering 74/1073, while `lvai_dqmh_validate_module`
+said "Cannot load front panel/block diagram" (1012/1013). After a LabVIEW restart all 69 module VIs
+were executable. On that route the composed helper runs over ActiveX in LabVIEW's MAIN instance and
+opened a second copy there.
+
+The helper now opens the VI the way this sweep does: through `Project:Active Project` ->
+`Application` when a project is active, in its own instance otherwise, and answers which copy it
+read as `instance` (`project`, `own`; `main` for the direct ActiveX fallback, which has no project
+route). Measured on LabVIEW 2026 over gRPC with a project active and one of its VIs edited in
+memory (a front-panel control deleted through VI Server in the project's instance, not saved):
+the fixed build read `execState 0` with that edit's Error List line and `instance: project`.
+On that route the installed build had read the edited copy as well - the AI add-on's instance
+did not hold a second copy there - so the gRPC route did not reproduce the report. **The ActiveX
+route, measured the same day on LabVIEW 2025:** the same probe (a project VI edited in the
+project's memory) read `execState 0` with the installed build too, and the fixed build answered
+`instance: project` with a project active and `instance: own` after it was closed. So an edited VI
+that is ALREADY LOADED in the project is read correctly either way; the report's case - framework
+VIs not edited themselves, read while the project held edited typedefs they depend on - was not
+reproduced, and the fix rests on the coercion sweep's measured second-copy defect plus `instance`,
+which now makes the copy read visible.

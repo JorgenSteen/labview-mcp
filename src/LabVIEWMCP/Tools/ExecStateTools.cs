@@ -22,10 +22,18 @@ namespace LabVIEWMcp.Tools;
 /// Null when they were NOT read (a helper built before 2026-10-14, the direct ActiveX fallback, or
 /// Get Errors itself refused), which is not the same as an empty list.
 /// </param>
+/// <param name="Instance">
+/// Which copy was read: "project" - the active project's application instance, the one the IDE
+/// edits; "own" - the helper's own instance, no project being active; "main" - the direct ActiveX
+/// fallback, LabVIEW's main instance. Null from a helper built before 2026-11-03 (session-7 report
+/// M5: the helper always read its own instance, and on the ActiveX route that was a stale second
+/// copy in the main instance after typedef edits in the project).
+/// </param>
 internal sealed record ExecStateReading(int State, string LinkerErrors, int Code, string Source,
                                         bool LinkerErrorsRead = true,
                                         IReadOnlyList<ErrorListTools.ErrorLine>? Errors = null,
-                                        int? GetErrorsCode = null)
+                                        int? GetErrorsCode = null,
+                                        string? Instance = null)
 {
     /// <summary>The VI is not executable. Only 0 means this.</summary>
     internal bool Broken => State == 0;
@@ -73,7 +81,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
         flattened XML; an empty `<Val>` means none; `linkerErrorsAvailable` says whether they were
         read. Use it after a pylv_apply retarget, after generating a VI that calls project-local
         code, and whenever green answers still leave doubt - it often sees what nothing else does.
-        It does not burn the path for a later regeneration and needs no project.
+        It does not burn the path for a later regeneration and needs no project; with a project
+        active it reads the PROJECT's copy, the one the IDE edits (`instance`: project, own, main).
         A broken CLASS MEMBER also gets `missingInterfaceOverrides` (from the files): interface
         methods the class does not override - a missing override breaks EVERY member of the class.
         `dispatchUnknown` lists members it could not classify; null plus
@@ -288,6 +297,7 @@ internal sealed class ExecStateTools(LvaiConnection connection)
             broken = reading.Broken,
             couldNotOpen = reading.CouldNotOpen,
             meaning = Meaning(reading.State),
+            instance = reading.Instance,
             linkerErrors = reading.LinkerErrors,
             linkerErrorsAvailable = true,
             errors = ErrorsJson(reading),
@@ -373,6 +383,7 @@ internal sealed class ExecStateTools(LvaiConnection connection)
             broken = r.Broken,
             couldNotOpen = r.CouldNotOpen,
             meaning = Meaning(r.State),
+            instance = r.Instance,
             via = "ActiveX",
             route = read.Route,
             helperViPath = read.HelperViPath,
@@ -436,8 +447,14 @@ internal sealed class ExecStateTools(LvaiConnection connection)
     /// </summary>
     internal static readonly string[] ErrorsReadBack = ["errors xml", "details xml", "get errors code"];
 
+    /// <summary>
+    /// Which copy the helper read - added 2026-11-03 (session-7 report M5). Optional like the
+    /// errors: a helper without it still gives a trusted state, with `instance` null.
+    /// </summary>
+    internal const string InstanceReadBack = "instance";
+
     /// <summary>Everything asked of the composed helper over ActiveX.</summary>
-    internal static readonly string[] ComReadBack = [.. HelperReadBack, .. ErrorsReadBack];
+    internal static readonly string[] ComReadBack = [.. HelperReadBack, .. ErrorsReadBack, InstanceReadBack];
 
     /// <summary>
     /// The Error List's lines for this VI from the helper's three Get Errors indicators, or null when
@@ -557,7 +574,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
         try
         {
             var state = await route.ReadDirect(full, timeoutSeconds, ct);
-            return new ComReading(new ExecStateReading(state, "", 0, "", LinkerErrorsRead: false),
+            return new ComReading(new ExecStateReading(state, "", 0, "", LinkerErrorsRead: false,
+                                                       Instance: "main"),
                                   "direct", helper, why);
         }
         // the -1 contract holds on this route too: a VI LabVIEW refused to open is "could not
@@ -610,7 +628,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
                          System.Globalization.CultureInfo.InvariantCulture, out var code) ? code : 0,
             Read("source")!.ReplaceLineEndings("\n"),
             Errors: ErrorLines(Read),
-            GetErrorsCode: GetErrorsCodeOf(Read)), null);
+            GetErrorsCode: GetErrorsCodeOf(Read),
+            Instance: InstanceOf(Read(InstanceReadBack))), null);
     }
 
     /// <summary>
@@ -887,7 +906,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
                     int.TryParse(Value(values, "code"), out var code) ? code : 0,
                     Value(values, "source") ?? "",
                     Errors: ErrorLines(name => Value(values, name)),
-                    GetErrorsCode: GetErrorsCodeOf(name => Value(values, name)));
+                    GetErrorsCode: GetErrorsCodeOf(name => Value(values, name)),
+                    Instance: InstanceOf(Value(values, InstanceReadBack)));
             }
 
             // the same retry as the ActiveX route: measured 2026-10-14 on this route too - a grpc
@@ -905,6 +925,10 @@ internal sealed class ExecStateTools(LvaiConnection connection)
 
     private static string? Value(JsonObject values, string name) =>
         values[name] is JsonObject entry ? entry["value"]?.GetValue<string>() : null;
+
+    /// <summary>The helper's `instance` answer, or null for a helper that has none (or answers nonsense).</summary>
+    internal static string? InstanceOf(string? text) =>
+        text?.Trim() is "project" or "own" ? text.Trim() : null;
 
     private async Task<string?> GenerateHelperAsync(
         string aixml, string helperVi, int timeoutSeconds, CancellationToken ct)
