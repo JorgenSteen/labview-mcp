@@ -165,7 +165,7 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
             // begun after it would report a misleadingly small number.
             var elapsed = System.Diagnostics.Stopwatch.StartNew();
 
-            if (UserLibFolder() is not { } folder)
+            if (UserLibFolder(viPath) is not { } folder)
                 return Json.Error("noInstallation",
                     "No LabVIEW installation was found, so there is no user.lib to put a " +
                     "placeholder in. lvai_list_labview_installations reports what discovery sees.");
@@ -802,16 +802,16 @@ internal sealed class PlaceholderTools(LvaiConnection connection)
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(signature)))[..10].ToLowerInvariant();
 
     /// <summary>
-    /// user.lib of the installation the tools actually talk to - the same discovery and preference
-    /// order as everywhere else, so the placeholder lands beside the LabVIEW that will resolve it.
+    /// user.lib of the LabVIEW the tools actually talk to - <see cref="LabViewContext.Resolve"/>, the
+    /// composer's own choice: the settings file's pin, else the RUNNING LabVIEW, else the one last
+    /// seen running, else the newest installed. It took the newest INSTALLED one until 2026-10-30,
+    /// so with only LabVIEW 2020 running the stubs went into 2026's user.lib as 26.x files that
+    /// 2020 cannot load, and a stub already there was answered `reused` (B11).
     /// </summary>
-    internal static string? UserLibFolder()
-    {
-        var install = LabViewLocator.Select(LabViewLocator.Discover());
-        if (install is null) return null;
-        var directory = Path.GetDirectoryName(install.ExePath);
-        return directory is null ? null : Path.Combine(directory, "user.lib", FolderName);
-    }
+    internal static string? UserLibFolder(string? hintPath = null) =>
+        LabViewContext.Resolve(hintPath).Root is { } root
+            ? Path.Combine(root, "user.lib", FolderName)
+            : null;
 
     /// <summary>
     /// AIXML attribute escaping. `&` and `<` are XML; `"` would end the attribute. The `\3A`-style
