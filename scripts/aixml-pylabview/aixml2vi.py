@@ -9652,13 +9652,30 @@ class Composer:
         diag.z.insert(0, lab)                   # z-order runs newest first
         diag.placed.append((lab, el))
 
+    def use_default_pane(self, pattern):
+        """The pattern a NEW VI gets: the DefaultConPane of the LabVIEW in use, else LabVIEW's own
+        4815 - what NI's converter and LabVIEW's File>New give it. The skeleton's 4833 only came
+        from the station the parts were cut on; with no such INI key, `lvai_connector_pane` said
+        4815 and the composer wrote 4833, so a pane authored by the tool's numbers came back with
+        three violations (LabVIEW 2020, 2026-11-03). A pane the document names (<?lvmcp pane?>)
+        still wins, and so does a conIdx past this pattern's slots."""
+        if pattern not in self.pane_codes:
+            self.report.append("WARNING: default connector pane %d is not a known pattern - kept %d"
+                               % (pattern, self.con_id))
+            return
+        self.con_id = pattern
+        self.fp.find("root/conPane/conId").text = str(pattern)
+
     def connector_pane(self):
         top = max([con for con, _, _, _ in self.pane_terms] or [-1])
         if top >= self.pane_codes.get(self.con_id, (0x108, 16))[1]:
             # a conIdx past the default pattern's slots: NI's converter then picks a larger
             # pattern by itself (4834, 20 slots, for conIdx up to 19 - CLAUDE.md); the same
             # family up to 4835's 28, refused beyond. Indexed past the list it was an IndexError.
-            bigger = [p for p in (4834, 4835) if self.pane_codes.get(p, (0, 0))[1] > top]
+            # 4833 first: under a 4815 default (no DefaultConPane) a document authored against
+            # 4833 - every helper, error out at 15 - keeps the pane it always had. What NI's
+            # converter picks there is not measured.
+            bigger = [p for p in (4833, 4834, 4835) if self.pane_codes.get(p, (0, 0))[1] > top]
             if not bigger:
                 raise Unsupported("conIdx %d needs a connector pane of more than 28 terminals" % top)
             self.con_id = bigger[0]
@@ -10499,6 +10516,7 @@ def main(argv):
     search = []
     args = []
     target = None
+    default_pane = None
     i = 0
     while i < len(argv):
         if argv[i] == "--parts":
@@ -10506,6 +10524,11 @@ def main(argv):
         elif argv[i] == "--lv-version":
             # the LabVIEW major version to write for (25 for 2025); the skeleton's own otherwise
             target = int(argv[i + 1]); i += 2
+        elif argv[i] == "--default-pane":
+            # the pattern a NEW VI gets - the server passes the DefaultConPane of the LabVIEW in
+            # use, else LabVIEW's own 4815. Without it the skeleton's (4833, the station it was
+            # cut on), which no LabVIEW without that INI key would give a new VI (2026-11-03)
+            default_pane = int(argv[i + 1]); i += 2
         elif argv[i] == "--keep":
             keep = argv[i + 1]; i += 2
         elif argv[i] == "--search":
@@ -10516,6 +10539,8 @@ def main(argv):
             args.append(argv[i]); i += 1
     src, out_vi = args
     c = Composer(parts)
+    if default_pane is not None:
+        c.use_default_pane(default_pane)
     c.target_major = target
     c.search_dirs = [os.path.dirname(os.path.abspath(out_vi))] + search
     c.caller_file = os.path.abspath(out_vi)   # relative links are computed from the caller FILE

@@ -98,11 +98,42 @@ internal static class StationPaneDefault
     }
 
     /// <summary>
-    /// LabVIEW.ini sits next to LabVIEW.exe. Uses the same discovery and the same preference order as
-    /// everything else here, so the ini read belongs to the installation the tools actually talk to.
+    /// The pattern LabVIEW gives a NEW VI under <paramref name="context"/>: its INI's
+    /// DefaultConPane, else LabVIEW's own <see cref="FactoryDefault"/> when the INI exists without
+    /// the key (or with a value that is no pattern). Null when no INI is known - no installation -
+    /// so the composer keeps its own. The composer stamped its skeleton's 4833 on every VI until
+    /// 2026-11-03, the pattern of the station its parts were cut on: on a station whose INIs carry
+    /// no DefaultConPane (LabVIEW 2020, 2025 and 2026 alike) `lvai_connector_pane` said 4815, and a
+    /// pane authored by its numbers came back with three violations.
+    /// </summary>
+    public static int? ForNewVi(LabViewContext context)
+    {
+        var ini = IniOf(context);
+        if (ini is null || !File.Exists(ini)) return null;
+        return Read(ini).Pattern ?? FactoryDefault;
+    }
+
+    /// <summary>The INI LabVIEW reads its settings from: the -pref file, else LabVIEW.ini beside the exe.</summary>
+    private static string? IniOf(LabViewContext context) =>
+        context.IniFile ?? (context.Root is { } root ? Path.Combine(root, "LabVIEW.ini") : null);
+
+    /// <summary>
+    /// The INI of the LabVIEW the tools work for (<see cref="LabViewContext.Resolve"/>: a pin, the
+    /// running one, a -pref file), so this answer and the composer's pane agree. It took the
+    /// locator's choice until 2026-11-03, which ignores a pin and a -pref INI. The locator remains
+    /// the fallback when no context can be resolved.
     /// </summary>
     private static string? Locate()
     {
+        try
+        {
+            if (IniOf(LabViewContext.Resolve()) is { } ini) return ini;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // fall back to the locator
+        }
+
         var install = LabViewLocator.Select(LabViewLocator.Discover());
         if (install is null) return null;
 

@@ -20,7 +20,11 @@ namespace LabVIEWMcp.Tests.Tools;
 /// </summary>
 public sealed class PylabviewReadToolsTests
 {
-    /// <summary>The composer suite's t01 shape: a and b in, sum out - b sits in a middle column on 4833.</summary>
+    /// <summary>
+    /// The composer suite's t01 shape: a and b in, sum out - b sits in a middle column on 4833. The
+    /// pane is NAMED after `&lt;/VI&gt;`: a new VI gets the station's default since 2026-11-03, 4815
+    /// where LabVIEW.ini has no DefaultConPane, and these assertions are about 4833.
+    /// </summary>
     private const string Add = """
         <VI _name="T01 Add.vi" description="Composed without LabVIEW: sum = a + b.">
           <Control _name="a" type="double" uid="4200" uid_parent="root" value="0" conIdx="0" connection="recommended" outputs="value:4200.value"/>
@@ -28,6 +32,7 @@ public sealed class PylabviewReadToolsTests
           <Node _name="Add" inputs="x:4200.value,y:4210.value" outputs="x+y:4220.x+y" uid="4220" uid_parent="root"/>
           <Indicator _name="sum" type="double" uid="4230" uid_parent="root" value="0" conIdx="4" connection="recommended" inputs="value:4220.x+y"/>
         </VI>
+        <?lvmcp pane="4833"?>
         """;
 
     private static bool ComposerHere() => AixmlComposer.Locate(out _) is not null;

@@ -171,9 +171,11 @@ rule of 2026-09-12):
 - a top-level VI with no callers is not an exception.
 
 **Ask `lvai_connector_pane` where terminals go; never carry a map in your head.** `conIdx` is a
-POSITION and its meaning depends on the pattern. A new VI gets the station's `DefaultConPane` from
-`LabVIEW.ini` (4833 here) - **that file is read-only to us**. A VI naming a conIdx the default
-lacks is put on a larger pattern by the generator (4834 for up to 19). **A class member is
+POSITION and its meaning depends on the pattern. A new VI gets the `DefaultConPane` of the
+LabVIEW in use (its `LabVIEW.ini` or `-pref` file), else LabVIEW's own 4815 - on both backends
+since 2026-11-03, when the composer stopped stamping its skeleton's 4833 - and **that file is
+read-only to us**. A VI naming a conIdx the default lacks is put on a larger pattern by the
+generator (4834 for up to 19; the composer takes the smallest of 4833/4834/4835 that holds it). **A class member is
 authored against 4815** (class in 11, more inputs 10/9, `error in` 8, class out 3, more outputs
 2/1, `error out` 0), because the class tools re-pane it. A wrong-looking pane is often the PATTERN,
 not the assignment - fixing the pattern moves no terminal. A wrong assignment is fixed by
