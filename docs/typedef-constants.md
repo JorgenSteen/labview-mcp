@@ -333,6 +333,11 @@ route). Measured on LabVIEW 2026 over gRPC with a project active and one of its 
 memory (a front-panel control deleted through VI Server in the project's instance, not saved):
 the fixed build read `execState 0` with that edit's Error List line and `instance: project`.
 On that route the installed build had read the edited copy as well - the AI add-on's instance
-did not hold a second copy there - so the gRPC route did not reproduce the report. **Not yet
-measured: the ActiveX route the report came from**, which needs a LabVIEW that is the first one
-COM reaches.
+did not hold a second copy there - so the gRPC route did not reproduce the report. **The ActiveX
+route, measured the same day on LabVIEW 2025:** the same probe (a project VI edited in the
+project's memory) read `execState 0` with the installed build too, and the fixed build answered
+`instance: project` with a project active and `instance: own` after it was closed. So an edited VI
+that is ALREADY LOADED in the project is read correctly either way; the report's case - framework
+VIs not edited themselves, read while the project held edited typedefs they depend on - was not
+reproduced, and the fix rests on the coercion sweep's measured second-copy defect plus `instance`,
+which now makes the copy read visible.
