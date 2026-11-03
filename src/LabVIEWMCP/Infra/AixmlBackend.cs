@@ -51,8 +51,10 @@ internal static class AixmlBackend
     {
         try
         {
+            // the LabVIEW the composer resolves against, so a second one started beside it does not
+            // move the backend, the helpers' target release or the stubs' user.lib (B8, 2026-10-30)
             var running = LabViewVersionStamp.RunningReleases();
-            if (running.Count > 0) return running.Max(r => r.Release);
+            if (running.Count > 0) return LabViewContext.Resolve().Release ?? running.Max(r => r.Release);
             return global::LabVIEWMcp.Grpc.LabViewLocator.Select(
                 global::LabVIEWMcp.Grpc.LabViewLocator.Discover())?.Release;
         }

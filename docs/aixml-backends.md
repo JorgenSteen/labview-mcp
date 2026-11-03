@@ -451,6 +451,24 @@ is nearest the VI being composed or read - lvpm passes the project and keeps its
 repository - else the one serving the connected gRPC port, else the newest, said in the answer.
 `"labviewExe"` and `"labviewPref"` in `settings.json` pin it.
 
+**A server stays with its LabVIEW, since 2026-10-30.** The settings file is read by EVERY server of
+the user, and with no pin a LabVIEW started later took over: a session working on LabVIEW 2020 saw
+the user start 2026 and from then on chose 2026 - `labviewInUse`, the helpers' target release and
+`lvai_placeholder_subvi`'s user.lib all moved, and the 2020 run hit `File version is later` on
+its own helpers (2026-10-29). Now:
+- a server keeps the LabVIEW it last chose with no ambiguity (the only one running, or a pin)
+  while that one runs - after a restart, the only one of the same executable - and only then falls
+  back to the rules above; with none running, a start takes this server's own before the one last
+  seen by any server; `labviewInUse` follows the same choice;
+- `LABVIEWMCP_LABVIEW_EXE` in the environment of the client that starts the server pins THAT
+  server, before the settings file;
+- ActiveX cannot be steered at all: every release registers the same class (`LabVIEW.Application`,
+  one CLSID), and with two running a call reaches whichever COM picks. So with several running,
+  every ActiveX operation first reads which LabVIEW answered (`ApplicationDirectory`, else
+  `Version`) and refuses with `labviewAmbiguous` - nothing done - unless it is the chosen one.
+  A pylabview session therefore never acts on another LabVIEW, but it cannot work beside one
+  either: with the wrong one answering, close it and call again.
+
 **A START KEEPS THE `-pref` NOW.** `lvai_ensure_labview` and `--ensure-labview` started the NEWEST
 installed LabVIEW with no arguments, whatever had run before - an lvpm LabVIEW 2024 came back as
 2026 without its packages. They start the settings file's LabVIEW, else the one LAST SEEN RUNNING

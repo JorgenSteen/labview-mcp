@@ -174,6 +174,21 @@ public sealed class LabViewContextTests : IDisposable
     }
 
     [Fact]
+    public void A_LabVIEW_started_beside_the_one_this_server_worked_with_does_not_take_over()
+    {
+        // B8, measured 2026-10-29: a session on LabVIEW 2020 saw 2026 start and moved to it
+        var lv2020 = new LabViewContext.Instance(10, @"C:\Program Files (x86)\National Instruments\LabVIEW 2020\LabVIEW.exe", null, []);
+        var lv2026 = new LabViewContext.Instance(20, @"C:\Program Files (x86)\National Instruments\LabVIEW 2026\LabVIEW.exe", null, []);
+        var restarted = lv2020 with { Pid = 30 };
+
+        Assert.Null(LabViewContext.Stayed([lv2020, lv2026], null));
+        Assert.Equal(10, LabViewContext.Stayed([lv2026, lv2020], lv2020)?.Pid);
+        Assert.Equal(30, LabViewContext.Stayed([lv2026, restarted], lv2020)?.Pid);                          // restarted
+        Assert.Null(LabViewContext.Stayed([lv2026, restarted, restarted with { Pid = 40 }], lv2020));     // two of it: no guess
+        Assert.Null(LabViewContext.Stayed([lv2026], lv2020));                                              // it is gone
+    }
+
+    [Fact]
     public void Addons_of_all_locations_are_ordered_by_name_not_by_location()
     {
         var custom = Folder("custom");

@@ -161,7 +161,11 @@ internal static class LabViewCom
             if (!OperatingSystem.IsWindows())
                 throw new ComException("notWindows", "LabVIEW's ActiveX server is reachable on Windows only.");
             var app = Attach();
-            try { return body(app); }
+            try
+            {
+                EnsureChosen(app);
+                return body(app);
+            }
             finally { Release(app); }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
@@ -567,6 +571,36 @@ internal static class LabViewCom
         if (vi is null) throw new ComException(ViNotOpened, $"LabVIEW returned no VI for '{viPath}'.");
         try { return body(vi); }
         finally { Release(vi); }
+    }
+
+    /// <summary>
+    /// With several LabVIEWs running, refuses unless the one COM reached is the one this server
+    /// chose (<see cref="LabViewContext.Resolve"/>). Every release registers the SAME class
+    /// (LabVIEW.Application, one CLSID), so which instance a creation reaches is not ours to pick;
+    /// a 2020 session with 2026 started beside it could otherwise act on the user's 2026 (B8,
+    /// 2026-10-30). Read from the instance itself: its ApplicationDirectory, else its Version.
+    /// </summary>
+    private static void EnsureChosen(object app)
+    {
+        if (LabViewContext.RunningInstances().Count < 2) return;
+        var chosen = LabViewContext.Resolve();
+        string? directory = null, version = null;
+        try { directory = Get(app, "ApplicationDirectory") as string; }
+        catch (Exception e) when (e is TargetInvocationException or COMException or MissingMethodException) { }
+        if (directory is null)
+        {
+            try { version = Get(app, "Version") as string; }
+            catch (Exception e) when (e is TargetInvocationException or COMException or MissingMethodException) { }
+        }
+        var same = directory is { Length: > 0 } && chosen.Root is { } root
+            ? LabViewContext.SamePath(directory, root)
+            : version is { Length: > 0 } && chosen.Major is { } major && version.StartsWith($"{major}.", StringComparison.Ordinal);
+        if (!same)
+            throw new ComException("labviewAmbiguous",
+                $"Several LabVIEWs run and ActiveX reached {(directory ?? (version is null ? "one that did not say which it is" : "LabVIEW " + version))}, " +
+                $"not the one this server works with ({chosen.ExePath ?? "none"}): every release shares one ActiveX " +
+                "registration, so the instance a call reaches cannot be chosen. Nothing was done. Call again when " +
+                "the other LabVIEW is closed.");
     }
 
     private static object? Get(object target, string name) =>

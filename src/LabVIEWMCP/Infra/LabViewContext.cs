@@ -55,6 +55,22 @@ internal sealed record LabViewContext(
     public const string ExeSetting = "labviewExe";
     public const string PrefSetting = "labviewPref";
 
+    /// <summary>
+    /// The same pin for ONE server - set in the environment of the client that starts it. The
+    /// settings file is read by every server of the user, so pinning LabVIEW 2020 there for a test
+    /// session pinned the user's 2026 sessions too (B8, 2026-10-30). Beats the settings file.
+    /// </summary>
+    public const string ExeVariable = "LABVIEWMCP_LABVIEW_EXE";
+
+    /// <summary>
+    /// The LabVIEW THIS server last chose with no ambiguity: the pin, or the only one running. With
+    /// several running it is chosen again while it runs - a newer one started beside it does not
+    /// take over. Measured 2026-10-29: a session working on LabVIEW 2020 saw 2026 start and from
+    /// then on composed its helpers for 2026 and put its stubs into 2026's user.lib (B8).
+    /// </summary>
+    private static Instance? _affinity;
+
+
     public string? Root => ExePath is null ? null : Path.GetDirectoryName(ExePath);
 
     public int? Release => Major is { } m ? 2000 + m : null;
@@ -149,16 +165,31 @@ internal sealed record LabViewContext(
     // ---------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// The context now. Order: the settings file's <c>labviewExe</c> (and <c>labviewPref</c>); one
-    /// running LabVIEW; of several, the one whose command line is nearest <paramref name="hintPath"/>
-    /// (lvpm passes the project, and its INI lives in the repository), else the one serving
-    /// <paramref name="connectedPort"/>, else the newest - flagged in <see cref="Notes"/>; with none
-    /// running, the LabVIEW last seen running (<see cref="Remembered"/>), else the newest installed.
+    /// The context now. Order: <see cref="ExeVariable"/> (this server only); the settings file's
+    /// <c>labviewExe</c> (and <c>labviewPref</c>); one running LabVIEW; of several, the one this
+    /// server stayed with (<see cref="_affinity"/>), else the one whose command line is nearest
+    /// <paramref name="hintPath"/> (lvpm passes the project, and its INI lives in the repository),
+    /// else the one serving <paramref name="connectedPort"/>, else the newest - flagged in
+    /// <see cref="Notes"/>; with none running, this server's own, else the LabVIEW last seen
+    /// running by any server (<see cref="Remembered"/>), else the newest installed.
     /// </summary>
     public static LabViewContext Resolve(string? hintPath = null, int? connectedPort = null)
     {
         var notes = new List<string>();
         var running = RunningInstances();
+
+        if (Environment.GetEnvironmentVariable(ExeVariable) is { Length: > 0 } own)
+        {
+            if (!File.Exists(own))
+                notes.Add($"{ExeVariable} names {own}, which does not exist - ignored.");
+            else
+            {
+                var same = running.Where(r => SamePath(r.Exe, own)).ToList();
+                _affinity = same.Count == 1 ? same[0] : new Instance(0, own, null, []);
+                return Build(own, same.Count == 1 ? same[0].Pref : null, same.Count == 1 ? same[0].Pid : null,
+                             "environment", notes);
+            }
+        }
 
         if (ServerSettings.ReadString(ExeSetting) is { Length: > 0 } pinned)
         {
@@ -177,10 +208,21 @@ internal sealed record LabViewContext(
 
         if (running.Count > 0)
         {
-            var pick = running.Count == 1 ? running[0] : Choose(running, hintPath, connectedPort, notes);
+            Instance pick;
+            if (running.Count == 1) pick = _affinity = running[0];
+            else if (Stayed(running, _affinity) is { } stayed)
+            {
+                pick = _affinity = stayed;
+                notes.Add($"{running.Count} LabVIEWs run; stayed with pid {stayed.Pid} ({stayed.Exe}), the one this server " +
+                          "worked with - a LabVIEW started beside it does not take over.");
+            }
+            else pick = Choose(running, hintPath, connectedPort, notes);
             Remember(pick.Exe, pick.Pref);
             return Build(pick.Exe, pick.Pref, pick.Pid, "running", notes);
         }
+
+        if (_affinity is { } mine && File.Exists(mine.Exe))
+            return Build(mine.Exe, mine.Pref, null, "session", notes);
 
         if (Remembered() is { } last && File.Exists(last.Exe))
         {
@@ -318,6 +360,19 @@ internal sealed record LabViewContext(
             }
         }
         return list;
+    }
+
+    /// <summary>
+    /// Of several running, this server's own (<paramref name="mine"/>): the same process, else -
+    /// after a restart - the only one of the same executable. Null when it has none, or that
+    /// LabVIEW is not among them.
+    /// </summary>
+    internal static Instance? Stayed(IReadOnlyList<Instance> running, Instance? mine)
+    {
+        if (mine is null) return null;
+        if (running.FirstOrDefault(r => r.Pid == mine.Pid && mine.Pid != 0) is { } same) return same;
+        var sameExe = running.Where(r => SamePath(r.Exe, mine.Exe)).ToList();
+        return sameExe.Count == 1 ? sameExe[0] : null;
     }
 
     /// <summary>Several LabVIEWs run: the one nearest the hint, else the connected one, else the newest.</summary>
