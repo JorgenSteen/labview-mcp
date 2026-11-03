@@ -168,10 +168,11 @@ public class ViServerKnowledgeTests
     [Fact]
     public void EveryRowWithASourceBelongsToTheHandAddedClasses()
     {
-        // every row of the first four classes was added by hand; {LV.Application} and {LV.Tunnel}
-        // mix harvested rows with hand-added ones, so only their sourced rows are allowed through
+        // every row of the first four classes was added by hand; {LV.Application}, {LV.Tunnel} and
+        // {LV.VI} (Execution:Reentrancy Type, 2026-11-03, session-7 report M4) mix harvested rows
+        // with hand-added ones, so only their sourced rows are allowed through
         string[] added = ["{LV.Project}", "{LV.ProjectItem}", "{LV.Library}", "{LV.LVClassLibrary}",
-                          "{LV.Application}", "{LV.Tunnel}"];
+                          "{LV.Application}", "{LV.Tunnel}", "{LV.VI}"];
         foreach (var (resource, width) in new[] { ("vi-server-methods.tsv", 5), ("vi-server-properties.tsv", 4) })
         {
             var lines = KnowledgeTools.Load(resource).Replace("\r\n", "\n").Split('\n');
