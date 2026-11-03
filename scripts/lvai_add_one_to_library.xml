@@ -1,5 +1,6 @@
-<VI _name="lvai_add_one_to_library.vi" description="Adds ONE existing file to an existing library through NI's own AddItem - the gesture that relinks\2C which hand-editing NI.Lib.ContainingLib does not. Type is an input\2C so this serves LVClass and VI alike. Given a folder name it adds INTO that virtual folder\2C the way NI's own Message Maker places a message class: AddItem is invoked on the FOLDER's project item rather than on the library. An unknown or empty folder name falls back to the library root\2C which is what NI does too.">
-  <FreeLabel comment="Open\2C find the folder\2C add\2C save all" uid="4200" uid_parent="root"/>
+<VI _name="lvai_add_one_to_library.vi" description="Adds ONE existing file to an existing library through NI's own AddItem - the gesture that relinks\2C which hand-editing NI.Lib.ContainingLib does not. Type is an input\2C so this serves LVClass and VI alike. Given a folder name it adds INTO that virtual folder\2C the way NI's own Message Maker places a message class: AddItem is invoked on the FOLDER's project item rather than on the library. An unknown or empty folder name falls back to the library root\2C which is what NI does too. The LIBRARY FILE is saved on its own first (library save error)\2C then Save All This Library saves the MODIFIED members - the callers AddItem relinked - so a member that cannot be saved no longer keeps the membership off disk (session-7 report M3).">
+  <FreeLabel comment="Open\2C find the folder\2C add\2C save" uid="4200" uid_parent="root"/>
+  <Constant _name="only modified" type="bool" uid="4208" uid_parent="root" value="true" outputs="value:4208.value"/>
   <Control _name="library path" type="path" uid="4201" uid_parent="root" value="" outputs="value:4201.value"/>
   <Control _name="item name" type="string" uid="4202" uid_parent="root" value="" outputs="value:4202.value"/>
   <Control _name="item path" type="path" uid="4203" uid_parent="root" value="" outputs="value:4203.value"/>
@@ -41,8 +42,10 @@
   </Structure>
   <Node _name="Invoke Node" target="AddItem" type="{LV.ProjectItem}" inputs="reference:4290.target,error in (no error):4230.err,Name:4202.value,Path:4203.value,Type:4204.value" outputs="reference out:4300.ref,error out:4300.err,AddItem:" uid="4300" uid_parent="root"/>
   <Node _name="Close Reference" inputs="reference:4291.rest,error in (no error):4300.err" outputs="error out:4310.err" uid="4310" uid_parent="root"/>
-  <Call target="Edit LVLibs.lvlib\3ASave All This Library.vi" inputs="Library in:4220.lib,Save Only Modified VIs and Libraries? (F):,error in (no error):4310.err" outputs="Library out:4320.lib,error out:4320.err" uid="4320" uid_parent="root"/>
+  <Node _name="Invoke Node" target="Save" type="{LV.Library}" inputs="reference:4220.lib,error in (no error):4310.err,Path:4201.value" outputs="reference out:4315.lib,error out:4315.err" uid="4315" uid_parent="root"/>
+  <Call target="Edit LVLibs.lvlib\3ASave All This Library.vi" inputs="Library in:4315.lib,Save Only Modified VIs and Libraries? (F):4208.value,error in (no error):4315.err" outputs="Library out:4320.lib,error out:4320.err" uid="4320" uid_parent="root"/>
   <Node _name="Close Reference" inputs="reference:4320.lib,error in (no error):4320.err" outputs="error out:4330.err" uid="4330" uid_parent="root"/>
   <Indicator _name="folder index" type="int32" uid="4340" uid_parent="root" value="0" inputs="value:4250.idx"/>
+  <Indicator _name="library save error" type="cluster{bool.status,int32.code,string.source}" uid="4342" uid_parent="root" value="[false,0,]" inputs="value:4315.err"/>
   <Indicator _name="error out" conIdx="15" connection="recommended" type="cluster{bool.status,int32.code,string.source}" uid="4341" uid_parent="root" value="[false,0,]" inputs="value:4330.err"/>
 </VI>

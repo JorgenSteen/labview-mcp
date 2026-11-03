@@ -23,7 +23,10 @@ namespace LabVIEWMcp.Tools;
 /// members that call each other by it.
 ///
 /// WHAT DOES THE JOB is NI's own `{LV.Library}` `AddItem` followed by
-/// `Edit LVLibs.lvlib:Save All This Library.vi` - the pair `Create Child Actor.vi` ends with. Driven
+/// `Edit LVLibs.lvlib:Save All This Library.vi` - the pair `Create Child Actor.vi` ends with. Since
+/// 2026-11-03 the library FILE is saved on its own between the two, and Save All saves only the
+/// MODIFIED members: Save All stopped at a member that was broken at that moment, left the .lvlib
+/// unsaved and re-saved 21 unchanged members (session-7 report M3). Driven
 /// against an existing file it writes BOTH halves and relinks the callers. Verified on the same kind
 /// of change the hand edit broke: `Append To Log.vi`, called by three class methods, moved into
 /// `Aquarium.lvlib` and every caller still `execState 1` after a project close.
@@ -39,14 +42,19 @@ internal sealed class LibraryTools(LvaiConnection connection)
 {
     private const string HelperAixmlFileName = "lvai_add_one_to_library.xml";
 
+    /// <summary>The helper's indicator for the save of the LIBRARY FILE alone, before Save All.</summary>
+    internal const string LibrarySaveError = "library save error";
+
     /// <summary>Item keys accepted in <c>itemsJson</c>, read out of the parser below in full.</summary>
     private static readonly string[] ItemKeys = ["path", "name", "type"];
 
     [McpServerTool(Name = "lvai_add_to_library", Destructive = true, OpenWorld = true,
         Title = "Add existing classes or VIs to a LabVIEW library")]
     [Description("""
-        Library: add EXISTING classes or VIs to a `.lvlib` through NI's `{LV.Library}` `AddItem`
-        plus `Save All This Library.vi`, which RELINKS. MUTATING. Never write
+        Library: add EXISTING classes or VIs to a `.lvlib` through NI's `{LV.Library}` `AddItem`,
+        a save of the library file, then `Save All This Library.vi` on the modified members, which
+        RELINKS. A member that cannot be saved is reported under `memberSaveErrors` with the
+        membership already on disk - do not re-run then. MUTATING. Never write
         `NI.Lib.ContainingLib` by hand - that leaves every member eBad with all file checks green.
         Needs a project OPEN and ACTIVE (Error 1055 otherwise; pass projectPath to open it).
         It does NOT edit the .lvproj: entries that now belong through the library are named under
@@ -206,6 +214,7 @@ internal sealed class LibraryTools(LvaiConnection connection)
             // ONE RUN PER ITEM. The helper adds one item and saves the library, which keeps it
             // simple enough to read; the loop lives here so the CALLER still spends one turn.
             var added = new JsonArray();
+            var memberSaveErrors = new JsonArray();
             foreach (var item in items)
             {
                 var inputs = HelperInputs(library, item.Name, item.Path, item.Type, folder);
@@ -226,20 +235,39 @@ internal sealed class LibraryTools(LvaiConnection connection)
                         "holds the refusal. Items before it are in the library and saved.",
                         new JsonObject { ["itemsAdded"] = added.DeepClone(), ["steps"] = steps });
 
-                if (ErrorCode(Values(answer)) is { } code && code != 0)
-                    return Json.Document(new JsonObject
-                    {
-                        ["ok"] = false,
-                        ["failedAtItem"] = item.Name,
-                        ["errorCode"] = code,
-                        ["errorSource"] = ErrorSource(Values(answer)),
-                        ["libraryPath"] = library,
-                        ["itemsAdded"] = added.DeepClone(),
-                        ["steps"] = steps,
-                        ["note"] = "AddItem stopped at this item. The items before it are already " +
-                            "in the library and saved - re-run with only the ones that are left, " +
-                            "because re-adding one is refused.",
-                    });
+                // TWO ERRORS SINCE 2026-11-03 (session-7 report M3). The library file is saved on
+                // its own first, so when Save All then stops at a MEMBER - one still broken at that
+                // moment, or read-only - the membership is on disk anyway and the item counts as
+                // added; the member's error is reported, not mistaken for the add failing. Before,
+                // Save All stopped first and the .lvlib stayed unsaved while AddItem had happened
+                // in memory, and the answer said error 1.
+                var values = Values(answer);
+                var libraryCode = ErrorCode(values, LibrarySaveError);
+                if (ErrorCode(values) is { } code && code != 0)
+                {
+                    if (libraryCode is 0)
+                        memberSaveErrors.Add(new JsonObject
+                        {
+                            ["item"] = item.Name,
+                            ["errorCode"] = code,
+                            ["errorSource"] = ErrorSource(values),
+                        });
+                    else
+                        return Json.Document(new JsonObject
+                        {
+                            ["ok"] = false,
+                            ["failedAtItem"] = item.Name,
+                            ["errorCode"] = code,
+                            ["errorSource"] = ErrorSource(values),
+                            ["libraryPath"] = library,
+                            ["itemsAdded"] = added.DeepClone(),
+                            ["memberSaveErrors"] = memberSaveErrors.DeepClone(),
+                            ["steps"] = steps,
+                            ["note"] = "AddItem or the save of the library file stopped at this item. " +
+                                "The items before it are already in the library and saved - re-run " +
+                                "with only the ones that are left, because re-adding one is refused.",
+                        });
+                }
 
                 added.Add(new JsonObject
                 {
@@ -278,6 +306,28 @@ internal sealed class LibraryTools(LvaiConnection connection)
             {
                 verify["note"] = $"The library could not be re-read: {e.Message}";
             }
+
+            if (memberSaveErrors.Count > 0)
+                return Json.Document(new JsonObject
+                {
+                    ["ok"] = false,
+                    ["membershipSaved"] = verified,
+                    ["libraryPath"] = library,
+                    ["itemsAdded"] = added,
+                    ["memberSaveErrors"] = memberSaveErrors,
+                    ["verify"] = verify,
+                    ["projectEntriesToRemove"] =
+                        new JsonArray([.. items.Select(i => (JsonNode)i.Name)]),
+                    ["steps"] = steps,
+                    ["note"] = (verified
+                        ? "The items ARE in the library and the .lvlib on disk lists them - do NOT " +
+                          "re-run this call, re-adding is refused. "
+                        : "The .lvlib does not list every item asked for - read verify.missing. ") +
+                        "Saving the library's MODIFIED members stopped with the error under " +
+                        "memberSaveErrors, so a member AddItem relinked may be unsaved: a member that " +
+                        "is broken at this moment or read-only is the measured cause. Fix it, then " +
+                        "save it through the project, and check the callers with lvai_exec_state.",
+                });
 
             return Json.Document(new JsonObject
             {
@@ -473,17 +523,17 @@ internal sealed class LibraryTools(LvaiConnection connection)
     private static JsonObject? Values(string answer) =>
         (Read(answer) as JsonObject)?["values"] as JsonObject;
 
-    private static int? ErrorCode(JsonObject? values)
+    private static int? ErrorCode(JsonObject? values, string indicator = "error out")
     {
-        if ((values?["error out"] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml)
+        if ((values?[indicator] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml)
             return null;
         var match = Regex.Match(xml, "<Name>code</Name>\\s*<Val>(-?\\d+)</Val>");
         return match.Success && int.TryParse(match.Groups[1].Value, out var code) ? code : null;
     }
 
-    private static string? ErrorSource(JsonObject? values)
+    private static string? ErrorSource(JsonObject? values, string indicator = "error out")
     {
-        if ((values?["error out"] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml)
+        if ((values?[indicator] as JsonObject)?["xml"]?.GetValue<string>() is not { } xml)
             return null;
         var match = Regex.Match(xml, "<Name>source</Name>\\s*<Val>(.*?)</Val>", RegexOptions.Singleline);
         return match.Success && match.Groups[1].Value.Length > 0 ? match.Groups[1].Value : null;

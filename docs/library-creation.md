@@ -61,3 +61,34 @@ them once they belonged through the library, so `looseEntriesRemoved` was empty 
 composed without complaint on pylabview and was refused by NI's schema on grpc (`attribute '_name'
 is not declared for element 'FreeLabel'`). The composer is more lenient than `ValidateAIXML` about
 undeclared attributes; an AIXML document meant for both backends is only proven by grpc.
+
+## 4. `lvai_add_to_library` saves the library FILE first (fixed 2026-11-03)
+
+**The symptom** (session-7 report M3, LabVIEW 2025, seen twice): `errorCode 1` at `Invoke Node in
+Edit LVLibs.lvlib:Save All This Library.vi->lvai_add_one_to_library.vi ... Save:Instrument`,
+although `AddItem` had happened in memory - the `.lvlib` on disk did not list the item - and the
+same call had re-saved 21 unchanged member VIs. Both times the added VI was broken at that moment.
+
+**The cause.** The helper went from `AddItem` straight to `Save All This Library.vi` with `Save
+Only Modified VIs and Libraries? (F)` unwired, so it saved EVERY member and stopped at the first
+one that could not be saved, before the library file was written.
+
+**The fix, in the helper.** After `AddItem` the library file is saved on its own (`{LV.Library}`
+`Save`, the way `lvdqmh_save_library` does it), reported as `library save error`; then `Save All
+This Library.vi` runs with only-modified TRUE. The tool counts an item as added once the library
+save succeeded; a member that then cannot be saved is reported under `memberSaveErrors`, with
+`ok: false`, `membershipSaved` from the re-read `.lvlib`, and a note not to re-run.
+
+**Measured on LabVIEW 2026 over gRPC**, the installed build as the control, each arm with its own
+library holding a `caller` that calls a `callee`; a member save failure made deterministic by
+adding a READ-ONLY VI (error 8 instead of the report's 1 - the same Save All stop):
+
+| step | installed build (Save All, every member) | fixed build |
+|---|---|---|
+| add the `callee` (the relink case) | `ok`; caller saved | `ok`; caller saved, same two link records |
+| callers loaded from disk afterwards | `execState 1` | `execState 1` |
+| add a read-only VI | `ok: false`, error 8 at Save All, **the `.lvlib` does not list it** | `ok: false`, `membershipSaved: true`, error 8 under `memberSaveErrors`, **the `.lvlib` lists it** |
+| add one more plain VI | rewrote all five member files, the unchanged caller and callee included | wrote the new VI, the still-pending one and the `.lvlib`; caller and callee untouched |
+
+So the relinking that was the reason for Save All survives only-modified: a caller `AddItem`
+relinks is a modified member.

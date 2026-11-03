@@ -77,6 +77,32 @@ public class LibraryToolsTests
 
     private static string? Kind(JsonObject answer) => answer["errorKind"]?.GetValue<string>();
 
+    /// <summary>
+    /// Session-7 report M3: Save All This Library stopped at a member that was broken at that moment
+    /// (error 1 at Save:Instrument), the .lvlib stayed unsaved although AddItem had happened, and 21
+    /// unchanged members were re-saved. The helper saves the LIBRARY FILE on its own first, reports
+    /// that save apart, and then saves only the MODIFIED members - the callers AddItem relinked.
+    /// </summary>
+    [Fact]
+    public void The_helper_saves_the_library_file_before_Save_All_and_only_modified_members()
+    {
+        var helper = System.Xml.Linq.XElement.Load(Support.RepoTree.Path("scripts", "lvai_add_one_to_library.xml"));
+        var nodes = helper.Elements().ToList();
+        var save = nodes.FindIndex(e => (string?)e.Attribute("target") == "Save" && (string?)e.Attribute("type") == "{LV.Library}");
+        var saveAll = nodes.FindIndex(e => ((string?)e.Attribute("target") ?? "").EndsWith("Save All This Library.vi"));
+        Assert.True(save >= 0 && saveAll > save, "the library's own Save comes before Save All");
+
+        var saveUid = (string)nodes[save].Attribute("uid")!;
+        Assert.Contains($"error in (no error):{saveUid}.err", (string)nodes[saveAll].Attribute("inputs")!);
+        var libraryError = Assert.Single(nodes, e => (string?)e.Attribute("_name") == LibraryTools.LibrarySaveError);
+        Assert.Equal($"value:{saveUid}.err", (string?)libraryError.Attribute("inputs"));
+
+        var onlyModified = System.Text.RegularExpressions.Regex.Match((string)nodes[saveAll].Attribute("inputs")!,
+            @"Save Only Modified VIs and Libraries\? \(F\):(\d+)\.value").Groups[1].Value;
+        var constant = Assert.Single(nodes, e => (string?)e.Attribute("uid") == onlyModified);
+        Assert.Equal("true", (string?)constant.Attribute("value"));
+    }
+
     [Fact]
     public void AMissingLibraryIsRefusedAndTheCreatorIsNamed()
     {
