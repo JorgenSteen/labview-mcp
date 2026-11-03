@@ -18,6 +18,9 @@ namespace LabVIEWMcp.Tests.Infra;
 /// </summary>
 public sealed class AixmlBackendTests
 {
+    // The pane is NAMED after </VI> (NI's service ignores it there): a new VI gets the station's
+    // default since 2026-11-03 - 4815 where LabVIEW.ini has no DefaultConPane - and the pane
+    // assertions below were measured against NI's probe on 4833.
     private const string Add = """
         <VI _name="T01 Add.vi" description="Composed without LabVIEW: sum = a + b.">
           <Control _name="a" type="double" uid="4200" uid_parent="root" value="0" conIdx="0" connection="recommended" outputs="value:4200.value"/>
@@ -25,6 +28,7 @@ public sealed class AixmlBackendTests
           <Node _name="Add" inputs="x:4200.value,y:4210.value" outputs="x+y:4220.x+y" uid="4220" uid_parent="root"/>
           <Indicator _name="sum" type="double" uid="4230" uid_parent="root" value="0" conIdx="4" connection="recommended" inputs="value:4220.x+y"/>
         </VI>
+        <?lvmcp pane="4833"?>
         """;
 
     /// <summary>Measured: the composer answers `UNSUPPORTED: Node '...' is not a primitive this prototype knows`, exit 2.</summary>

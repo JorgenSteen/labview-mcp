@@ -190,6 +190,13 @@ internal static class AixmlComposer
 
         var args = new List<string> { "--parts", setup.PartsDirectory };
         args.AddRange(ContextArgs(context));
+        // the pane a NEW VI gets from that LabVIEW, as NI's converter gives it - not the
+        // skeleton's 4833 (2026-11-03); a pane the document names still wins in the composer
+        if (StationPaneDefault.ForNewVi(context) is { } pane)
+        {
+            args.Add("--default-pane");
+            args.Add(pane.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
         if (targetRelease is { } release) { args.Add("--lv-version"); args.Add((release - 2000).ToString(System.Globalization.CultureInfo.InvariantCulture)); }
         foreach (var search in searchFolders) { args.Add("--search"); args.Add(search); }
         // LabVIEW's project\ folder LAST: vendor toolkits install their scriptable VIs there -
