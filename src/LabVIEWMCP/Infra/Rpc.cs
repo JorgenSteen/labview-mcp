@@ -75,7 +75,7 @@ internal static class Rpc
             answer["possibleDialogs"] = dialogs;
             answer["dialogNote"] = "LabVIEW shows a possible dialog. A modal dialog blocks the service until a " +
                                    "person answers it; nothing was pressed. lvai_labview_state names it again.";
-            return answer.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            return Json.Document(answer);
         }
         catch (System.Text.Json.JsonException)
         {

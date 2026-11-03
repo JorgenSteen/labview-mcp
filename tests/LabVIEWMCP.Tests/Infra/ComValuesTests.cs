@@ -110,6 +110,23 @@ public sealed class ComValuesTests
         Assert.Contains("cannot be set over COM", Refusal("", "ref{LV.VI}"));
     }
 
+    /// <summary>
+    /// An IVI or VISA session or a DAQmx task is marked for the set helper, not refused - and not
+    /// handed to SetControlValue as a string, which LabVIEW took with no error and ignored. Any
+    /// other refnum is still refused.
+    /// </summary>
+    [Theory]
+    [InlineData("ref{IVI.niRFSA}", "PXI1Slot2")]
+    [InlineData("ref{Visa.Instr}", "GPIB0::22::INSTR")]
+    [InlineData("ref{GenClassTag.Task.NIDAQ}", "MyTask")]
+    public void A_named_session_is_marked_for_the_set_helper(string type, string name)
+    {
+        var named = Assert.IsType<ComValues.NamedSession>(Convert(name, type));
+        Assert.Equal(name, named.Name);
+        Assert.True(ComValues.IsNamedSession(type));
+        Assert.False(ComValues.IsNamedSession("ref{LV.VI}"));
+    }
+
     [Fact]
     public void Values_read_back_are_written_as_AIXML_literals()
     {
@@ -253,6 +270,30 @@ public sealed class ComValuesTests
         Assert.Contains("not rectangular", Refusal("[[1,2],[3]]", "array.2{double}"));
         Assert.Contains("element 'x'", Refusal("[[1,x]]", "array.2{double}"));
         Assert.Contains("cannot be set over COM", Refusal("[[[1]]]", "array.2{cluster{double.a}}"));
+    }
+
+    /// <summary>
+    /// An ARRAY OF CLUSTERS as a literal crosses as object[] of object[], the shape the XML route
+    /// already built. Measured 2026-11-01: the XML form set the tank monitor's `Events` input of
+    /// Write Alarm Log.vi and both clusters reached its CSV; the literal form was refused here.
+    /// </summary>
+    [Fact]
+    public void An_array_of_clusters_crosses_as_an_array_of_variant_arrays()
+    {
+        const string type = "array{cluster{string.Event Source,string.Event Text}}";
+        var events = Assert.IsType<object?[]>(Convert(@"[[Tank 0,High],[Valve 1,Opened\2C late]]", type));
+        Assert.Equal(2, events.Length);
+        Assert.Equal(new object?[] { "Tank 0", "High" }, Assert.IsType<object?[]>(events[0]));
+        Assert.Equal(new object?[] { "Valve 1", "Opened, late" }, Assert.IsType<object?[]>(events[1]));
+
+        Assert.Empty(Assert.IsType<object?[]>(Convert("[]", type)));
+        Assert.Contains("element '[Tank 0]'", Refusal("[[Tank 0]]", type));
+
+        // and the literal it reads back as is the one it was given
+        Assert.Equal(@"[[Tank 0,High],[Valve 1,Opened\2C late]]", ComValues.Format(events));
+
+        // the same escape one level down in a 2D string array
+        Assert.Equal(new[,] { { "a,b", "c" } }, Convert(@"[[a\2Cb,c]]", "array.2{string}"));
     }
 
     /// <summary>LabVIEW's XML for a 2D array: a Dimsize per dimension, then the elements row-major.</summary>

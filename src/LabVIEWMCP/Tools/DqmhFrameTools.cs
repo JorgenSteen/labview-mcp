@@ -27,6 +27,23 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
 {
     private const string Helper = "lvdqmh_place_frame_handler";
     private const string ConnectHelper = "lvbd_connect_by_names";
+    private const string SpliceHelper = "lvbd_splice_by_names";
+
+    /// <summary>
+    /// Delacor's placeholder text in a message frame: `#CodeNeeded` in DQMH 5 and 6, and
+    /// `#DQMH_CodeNeeded` in 7.x - the tool matched only the first, so on a 7.x module it deleted
+    /// nothing and said `codeNeededTextsBefore: 0` (found in the DQMH_EscapingTest build of
+    /// 2026-10-31). A pattern for the helper's Match Pattern, which is NOT a full regular
+    /// expression: it has no groups, so `^#(DQMH_)?CodeNeeded` would match neither spelling.
+    /// A character class with `*` it does have. Whether the 7.x labels are reached at all is not
+    /// measured: the dry run listed no #DQMH_CodeNeeded text in a 7.1 frame, so the deletion may
+    /// need the label's class too.
+    /// </summary>
+    internal const string CodeNeededPattern = "^#[A-Z_]*CodeNeeded";
+
+    internal static bool IsCodeNeeded(string text) =>
+        text.StartsWith("#CodeNeeded", StringComparison.Ordinal)
+        || text.StartsWith("#DQMH_CodeNeeded", StringComparison.Ordinal);
 
     /// <summary>VI Server's class name for Merge Errors in a DQMH frame, measured: `Bundler`.</summary>
     internal const string MergeErrorsClass = "Bundler";
@@ -38,19 +55,18 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_dqmh_place_handler", Destructive = true, OpenWorld = true,
         Title = "Put a handler subVI into a DQMH message frame")]
     [Description("""
-        MUTATING: fills ONE message frame of a DQMH module's Main.vi - the frame Delacor scripts
-        with a #CodeNeeded label - by dropping a HANDLER subVI into it and wiring it BY NAME:
-        each request argument (the frame's Unbundle By Name) into the handler input of the same
-        name, Variant To Data's error out into the handler's `error in`, and for a Request and
-        Wait for Reply each handler output into the reply field of the same name plus its
-        `error out` into `<Event>_error` AND into the frame's Merge Errors, whose second input
-        Delacor leaves unwired - that unwired input is what keeps Main.vi from running after a
-        Request and Wait for Reply event. The #CodeNeeded text is deleted and Main.vi saved.
-        So name the handler's terminals after the event's argument and reply fields - that is
-        the whole contract. A dry run first reads the frame; a handler input or reply field that
-        finds no partner is reported, never guessed, and a frame that already holds a subVI is
-        refused. Needs the module's project OPEN AND ACTIVE. The answer gives Main.vi's exec
-        state before and after.
+        DQMH: put a HANDLER subVI into ONE message frame of a module's Main.vi (the #CodeNeeded
+        frame) and wire it BY NAME. MUTATING. Name the handler's terminals after the event's
+        argument and reply fields - that is the whole contract. Arguments go to same-named
+        inputs, Variant To Data's error out to `error in`. Request and Wait for Reply: outputs go
+        to same-named reply fields, `error out` to `<Event>_error` AND the frame's Merge Errors
+        (its unwired input otherwise keeps Main.vi broken). Plain Request: the handler goes in
+        series into the frame's error wire.
+        `ok` is false when the handler lands OUTSIDE the frame (`placement` is read back) or its
+        error out reaches nothing. An input or field with no partner is reported, never guessed;
+        a frame already holding a subVI is refused. The #CodeNeeded text is deleted and Main.vi
+        saved; its exec state before and after is reported. Use `dryRun` first.
+        Needs the module's project OPEN and ACTIVE.
         """)]
     public async Task<string> PlaceHandlerAsync(
         [Description("Module, e.g. 'Bank' or 'Bank.lvlib'")] string moduleName,
@@ -93,7 +109,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             // ---- 2. the frame, read without changing anything ----------------------------------
             var headless = new DqmhHeadless(connection);
             if (await headless.EnsureWrapperAsync(scripts, Helper, [], projectPath, steps,
-                    timeoutSeconds, ct, [ConnectHelper]) is { } wrapperError)
+                    timeoutSeconds, ct, [ConnectHelper, SpliceHelper]) is { } wrapperError)
                 return wrapperError;
             var dqmh = new DqmhTools(connection);
             var (dry, dryError) = await dqmh.RunDetailedAsync(scripts, Helper, new()
@@ -124,7 +140,10 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
 
             var nodeClasses = DqmhHeadless.Listed(dry, "Node Classes");
             var argTerminals = DqmhHeadless.Listed(dry, "Arg Source Terminals").Select(Unmarked).ToList();
-            var replyTerminals = DqmhHeadless.Listed(dry, "Reply Sink Terminals").Select(Unmarked).ToList();
+            // a reply field Delacor already feeds is not the handler's: on a Cloneable 7.x module
+            // `Module ID` comes from the module's own Accessors:Module ID property, and asking the
+            // handler for it refused every Request and Wait for Reply frame (2026-10-30)
+            var (replyTerminals, replyAlreadyFed) = SplitReplySinks(DqmhHeadless.Listed(dry, "Reply Sink Terminals"));
             var texts = DqmhHeadless.Listed(dry, "Decoration Texts");
             var plan = Plan(eventBare, inputs, outputs, argTerminals, replyTerminals);
             var detail = new JsonObject
@@ -134,6 +153,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["frameNodes"] = DqmhHeadless.Array(nodeClasses),
                 ["arguments"] = DqmhHeadless.Array(argTerminals.Except(PlumbingTerminals)),
                 ["replyFields"] = DqmhHeadless.Array(replyTerminals.Except(PlumbingTerminals)),
+                ["replyFieldsAlreadyFed"] = DqmhHeadless.Array(replyAlreadyFed),
                 ["handlerInputs"] = DqmhHeadless.Array(inputs),
                 ["handlerOutputs"] = DqmhHeadless.Array(outputs),
                 ["plan"] = plan.ToJson(),
@@ -162,19 +182,25 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["Frame Name"] = frameName,
                 ["Handler VI Path"] = handler,
                 ["Error Source Class"] = "Function",
-                ["Delete Text Pattern"] = "^#CodeNeeded",
+                ["Delete Text Pattern"] = CodeNeededPattern,
                 ["Dry Run"] = "false",
             };
+            // A PLAIN REQUEST HAS NO REPLY AND NO MERGE ERRORS, so the handler's error out used to
+            // reach nothing - an error from the handler was lost in silence (the user's finding of
+            // 2026-10-31). It goes in series into the error source's wire instead, which also
+            // feeds its error in: the splice replaces the plain error-in connection.
+            var mergeErrors = nodeClasses.Contains(MergeErrorsClass) && outputs.Contains("error out");
+            var splice = SpliceErrorChain(plan, outputs, mergeErrors);
             AddArray(run, "Arg Names", plan.Arguments);
-            AddArray(run, "Error Sources", plan.ErrorIn ? ["error out"] : []);
-            AddArray(run, "Error Sinks", plan.ErrorIn ? ["error in"] : []);
+            AddArray(run, "Error Sources", plan.ErrorIn && !splice ? ["error out"] : []);
+            AddArray(run, "Error Sinks", plan.ErrorIn && !splice ? ["error in"] : []);
+            AddArray(run, "Splice Names", splice ? ["error out", "error in", "error out"] : []);
             AddArray(run, "Reply Sources", plan.Replies.Select(r => r.From));
             AddArray(run, "Reply Sinks", plan.Replies.Select(r => r.To));
             // THE USER'S FINDING OF 2026-10-06: Delacor's reply frame carries a Merge Errors whose
             // second input is UNWIRED, and that alone leaves Main.vi not executable - VI Server named
             // no cause, NI's AppBuilder report was empty, the user read it off the IDE. The
             // handler's error out goes there too; the connect helper picks the FREE `error in`.
-            var mergeErrors = nodeClasses.Contains(MergeErrorsClass) && outputs.Contains("error out");
             AddArray(run, "Merge Sources", mergeErrors ? ["error out"] : []);
             AddArray(run, "Merge Sinks", mergeErrors ? ["error in"] : []);
             var (placed, placeError) = await dqmh.RunDetailedAsync(scripts, Helper, run, timeoutSeconds, ct);
@@ -185,19 +211,27 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             var missing = DqmhHeadless.Listed(placed, "Missing");
             var error = DqmhTools.Failed(placed);
             var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
-            var expected = plan.Arguments.Count + (plan.ErrorIn ? 1 : 0) + plan.Replies.Count
+            var expected = plan.Arguments.Count + (plan.ErrorIn && !splice ? 1 : 0) + plan.Replies.Count
                            + (mergeErrors ? 1 : 0);
+            var placement = DqmhTools.Scalar(placed, "Placement");
+            var spliceAnswer = DqmhTools.Scalar(placed, "Splice");
+            var visible = PlacedInside(placement);
+            var spliced = !splice || (spliceAnswer ?? "").StartsWith("spliced;", StringComparison.Ordinal);
 
             var answer = new JsonObject
             {
-                ["ok"] = error is null && missing.Count == 0 && connected.Count == expected,
+                ["ok"] = error is null && missing.Count == 0 && connected.Count == expected
+                         && visible && spliced,
+                ["placement"] = placement,
+                ["handlerVisible"] = visible,
+                ["errorChain"] = splice ? spliceAnswer : mergeErrors ? "into the frame's Merge Errors" : null,
                 ["module"] = DqmhHeadless.DelacorModuleName(moduleName ?? ""),
                 ["event"] = eventBare,
                 ["handler"] = handler,
                 ["connected"] = DqmhHeadless.Array(connected),
                 ["missing"] = DqmhHeadless.Array(missing),
                 ["error"] = error,
-                ["codeNeededTextsBefore"] = texts.Count(t => t.StartsWith("#CodeNeeded", StringComparison.Ordinal)),
+                ["codeNeededTextsBefore"] = texts.Count(IsCodeNeeded),
                 ["mainViExecStateBefore"] = mainBefore,
                 ["mainViExecState"] = mainAfter,
                 ["note"] = mainAfter is 1
@@ -207,6 +241,15 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["projectHygiene"] = DqmhHeadless.ProjectHygieneNote,
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
             };
+            if (!visible)
+                answer["placementProblem"] =
+                    "The handler is NOT inside its frame - LabVIEW clips it out of sight, so a person " +
+                    "reading Main.vi cannot see the call. Main.vi was saved; move the node into the frame " +
+                    "or delete it and place the handler again.";
+            if (!spliced)
+                answer["errorChainProblem"] =
+                    "The handler's error out could not be put into the frame's error wire - an error from " +
+                    "the handler reaches nothing. `errorChain` says what the splice helper found.";
             if (plan.Warnings.Count > 0) answer["warnings"] = new JsonArray([.. plan.Warnings.Select(w => JsonValue.Create(w))]);
             foreach (var (key, value) in detail) answer[key] = value?.DeepClone();
             return Json.Document(answer);
@@ -231,7 +274,8 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     /// Which wires to make. Every handler input except `error in` must be a request argument of
     /// the same name, and every reply field must be a handler output of the same name - a gap on
     /// either side is a PROBLEM, because guessing would wire the wrong value. A reply's error
-    /// field takes the handler's `error out`. An argument the handler does not take is only a
+    /// field - `&lt;Event&gt;_error` in DQMH 5, `error` in 7.x - takes the handler's `error out`.
+    /// An argument the handler does not take is only a
     /// warning: a handler may need less than the message carries.
     /// </summary>
     internal static WiringPlan Plan(string eventName, IReadOnlyCollection<string> handlerInputs,
@@ -253,7 +297,10 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         var replyWires = new List<Wire>();
         foreach (var field in replies)
         {
-            if (field == errorField)
+            // DQMH 7.x names the reply cluster's error member plain `error`, where 5.x wrote
+            // `<Event>_error` - issue #111, which refused every 7.x handler for the missing output.
+            // A handler output of that exact name still wins: it is what the author wired.
+            if ((field == errorField || field == "error") && !handlerOutputs.Contains(field))
             {
                 if (handlerOutputs.Contains("error out")) replyWires.Add(new Wire("error out", field));
                 else problems.Add($"The reply field '{field}' needs the handler's 'error out'.");
@@ -263,12 +310,51 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         }
         if (replies.Count == 0 && handlerOutputs.Any(o => o != "error out"))
             warnings.Add("This frame sends no reply, so the handler's outputs other than error out stay unwired.");
-        if (replies.Count == 0 && handlerOutputs.Contains("error out"))
-            warnings.Add("A Request frame has no reply to carry the handler's error out; it stays unwired.");
+        if (replies.Count == 0 && handlerOutputs.Contains("error out") && !handlerInputs.Contains("error in"))
+            warnings.Add("A Request frame has no reply to carry the handler's error out, and the handler has " +
+                         "no error in to put it in series into the frame's error wire; it stays unwired.");
 
         return new WiringPlan([.. wired.Where(args.Contains)], handlerInputs.Contains("error in"),
             replyWires, problems, warnings);
     }
+
+    /// <summary>
+    /// Whether the handler goes IN SERIES into the frame's error wire: a frame with no Merge Errors
+    /// to take its error out (a plain Request, or any frame Delacor gave none) and a handler with
+    /// both error terminals. A reply's error field is fed separately and does not count - the
+    /// frame's own error chain still has to carry the handler's error.
+    /// </summary>
+    internal static bool SpliceErrorChain(WiringPlan plan, IReadOnlyCollection<string> handlerOutputs,
+                                          bool mergeErrors) =>
+        plan.ErrorIn && handlerOutputs.Contains("error out") && !mergeErrors;
+
+    /// <summary>
+    /// The helper's Placement answer - `inside;l,t,r,b;frame l,t,r,b` or `OUTSIDE;...` - read back
+    /// from LabVIEW after the move, never assumed. Anything else, an empty answer included, is
+    /// NOT a visible handler: a placement nobody could read is not a placement anybody checked.
+    /// </summary>
+    internal static bool PlacedInside(string? placement) =>
+        placement is not null && placement.StartsWith("inside;", StringComparison.Ordinal);
+
+    /// <summary>
+    /// The reply bundler's terminals split into those the handler must feed and the fields
+    /// Delacor already wired (the connect helper marks those ` &lt;wired&gt;`), plumbing left out of the second.
+    /// </summary>
+    internal static (List<string> Open, List<string> AlreadyFed) SplitReplySinks(IEnumerable<string> sinks)
+    {
+        var all = sinks.ToList();
+        bool Fed(string s) => Unmarked(s) != s || s == DelacorReplyField;
+        return (all.Where(s => !Fed(s)).ToList(),
+                all.Where(Fed).Select(Unmarked).Except(PlumbingTerminals).ToList());
+    }
+
+    /// <summary>
+    /// A Cloneable module's reply field Delacor always feeds from the module's own
+    /// `Accessors:Module ID` property - a handler cannot know it. Named outright because the live
+    /// run of 2026-10-30 read it WITHOUT the ` &lt;wired&gt;` mark although the export shows the wire,
+    /// so the mark alone did not keep the handler from being asked for it.
+    /// </summary>
+    internal const string DelacorReplyField = "Module ID";
 
     /// <summary>
     /// A sink terminal's name without the connect helper's ` <wired>` mark - the helper marks a

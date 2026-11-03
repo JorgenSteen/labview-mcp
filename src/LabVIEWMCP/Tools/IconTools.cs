@@ -26,65 +26,37 @@ internal sealed class IconTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_set_vi_icon", Destructive = true, OpenWorld = true,
                    Title = "Set a VI's icon from an image file")]
     [Description("""
-        MUTATING: replaces the icon of an EXISTING .vi and saves the VI in place.
-        lvai_convert_aixml_to_vi cannot do this - "VI icon graphics" is on NI's not-supported
-        list - so this composes the VI Server route instead: generate the helper VI from
-        scripts\lvdoc_set_icon.xml (once, then reused), run it, read the icon back out.
-        Measured on LabVIEW 2026: a 32x32 PNG is applied as-is and the icon read back out of
-        the VI is pixel-identical. Other formats and sizes are untested.
-        TWO WAYS TO SUPPLY THE IMAGE. Either pass line1/line2/line3 and let this DRAW the
-        32x32 icon for you - banner across the top plus up to two lines under it, 5 characters
-        per line, from a built-in bitmap font - or pass iconImagePath if you have your own art.
-        PREFER THE LINES: drawing the PNG yourself through PowerShell and System.Drawing was
-        measured at 12.5 s of a generation session, against 0 ms here, and it costs an extra
-        tool call worth about 11 s of wall clock on top.
-        CALL THIS LAST. lvai_convert_aixml_to_vi over an existing path DESTROYS the icon -
-        measured on two VIs - so re-apply after every regeneration. It is safe in the other
-        direction: setting an icon does not leave the VI in memory, so the path can still be
-        regenerated afterwards.
-        `ok` IS `verified`, and on a verified run `errorCode` is 0: RunVIAsTopLevel's own 91 - the
-        known read-back artefact, which appears on success - is dropped, and only an unexpected
-        runner code is kept under runnerErrorCode. Look at the read-back PNG to see what actually
-        landed in the VI.
-        IT FLATTENS THE ICON: the icon editor's layers - a class or library template layer and the
-        VI's own editable layer - become plain pixels. On hand-made icons that changed 27-36 % of
-        every icon and lost the editable text. To refresh only the class or library TEMPLATE of a VI
-        whose own layer must survive, pass keepOwnLayer instead of an image: no pixels are set, the
-        owner's icon is re-applied (ApplyIconToVIs) and the VI saved, and the answer reports the
-        layer data before and after. keepOwnLayer was measured 2026-10-10 - see its parameter.
+        Icon: set the 32x32 icon of an EXISTING .vi and save it in place - AIXML cannot carry an
+        icon. MUTATING. Pass line1/line2/line3 to have the icon DRAWN here (banner plus two lines,
+        5 characters each) - prefer that over drawing a PNG yourself - or iconImagePath for your
+        own 32x32 PNG.
+        CALL IT LAST: regenerating a VI from AIXML destroys its icon, so re-apply after every
+        regeneration. Setting an icon leaves nothing in memory.
+        `ok` is `verified` (the icon read back out of the VI); errorCode 91 on success is dropped,
+        an unexpected runner code is kept under `runnerErrorCode`.
+        It FLATTENS the icon editor's layers into pixels. To refresh only the class/library
+        TEMPLATE while keeping the VI's own layer, pass keepOwnLayer instead of an image.
+        Several VIs in one call: iconsJson; the answer carries `failed` and every VI's answer under
+        `results`. For a class or library icon pushed onto members, lvai_set_owner_icon.
         """)]
     public async Task<string> SetViIconAsync(
-        [Description(@"Absolute path to the .vi whose icon is replaced - it is saved in place")]
-        string viPath,
+        [Description(@"Absolute path to the .vi whose icon is replaced - it is saved in place. Optional when iconsJson is given.")]
+        string? viPath = null,
         [Description("""
-            Absolute path to a ready-made icon image; a 32x32 PNG is what was measured. Leave
-            this out and pass line1/line2/line3 instead to have the icon drawn here. If both
-            are given the file wins and the lines are reported as ignored.
+            Absolute path to a ready-made 32x32 PNG; wins over the lines if both are given.
             """)]
         string? iconImagePath = null,
-        [Description("""
-            Where to write the icon read back OUT of the VI afterwards, for verification.
-            Defaults to a temp file. Its directory is created if missing - LabVIEW's own file
-            write does not create directories and fails with Error 7 instead.
-            """)]
+        [Description("Where to write the icon read back out of the VI; defaults to a temp file, directory created.")]
         string? readBackPath = null,
-        [Description("""
-            Where to keep the generated helper VI. Defaults to a per-user cache directory,
-            because the scripts folder next to the exe may be read-only. Generated once and
-            reused; pass regenerateHelper to force a rebuild.
-            """)]
+        [Description("Where to keep the generated helper VI; defaults to a per-user cache directory.")]
         string? helperViPath = null,
-        [Description("""
-            The helper's AIXML source. Defaults to lvdoc_set_icon.xml inside the folder
-            lvai_status reports as scriptsDirectory.
-            """)]
+        [Description("The helper's AIXML source; defaults to lvdoc_set_icon.xml in lvai_status's scriptsDirectory.")]
         string? helperAixmlPath = null,
         [Description("Regenerate the helper VI even when it already exists")]
         bool regenerateHelper = false,
         [Description("""
-            Text for the coloured banner across the top of a drawn icon, e.g. "DAQ". Up to 5
-            characters; A-Z, 0-9, space and - . / : + # are drawn, anything else is reported.
-            Lowercase is upper-cased - a 5x7 cell has no room for descenders.
+            Banner text of a drawn icon, e.g. "DAQ": up to 5 characters of A-Z, 0-9, space and
+            - . / : + # (lowercase is upper-cased; anything else is reported).
             """)]
         string? line1 = null,
         [Description("Second line of a drawn icon, under the banner. Up to 5 characters")]
@@ -92,9 +64,8 @@ internal sealed class IconTools(LvaiConnection connection)
         [Description("Third line of a drawn icon. Up to 5 characters")]
         string? line3 = null,
         [Description("""
-            Banner colour of a drawn icon as RRGGBB or #RRGGBB. Defaults to 006699, the web-safe
-            neighbour of NI blue - LabVIEW quantises a stored icon to the web-safe cube, so a
-            colour outside it reads back changed and is reported in warnings.
+            Banner colour as RRGGBB or #RRGGBB, default 006699. LabVIEW stores web-safe colours
+            only; another reads back changed and is reported in warnings.
             """)]
         string? bannerColor = null,
         [Description(@"Body background of a drawn icon as RRGGBB. Defaults to white FFFFFF")]
@@ -103,27 +74,35 @@ internal sealed class IconTools(LvaiConnection connection)
         string? borderColor = null,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
         [Description("""
-            Keep the VI's own icon layer and re-apply only its class or library TEMPLATE, instead of
-            setting pixels and flattening. Pass no image and no lines with it. The owner's current
-            icon is laid over the VI with ApplyIconToVIs (white is transparent) and the VI saved; the
-            project must be closed. The answer reports the VI's icon layer data before and after
-            (read from the file), whether every template pixel landed, and how many pixels outside the
-            template changed. Measured 2026-10-10 on LabVIEW 2026 Q3 on a VI that already had a
-            template layer and an own pixel layer, after the class icon changed: the template layer
-            was replaced (not stacked), every template pixel landed and no pixel outside it moved. An
-            own layer of editable text (made in the icon editor) has not been run - judge each call
-            by iconLayersAfter, templateMissing and pixelsChangedOutsideTemplate.
+            Keep the VI's own icon layer and re-apply only its class/library TEMPLATE (no image, no
+            lines with it); the project must be CLOSED. Judge the call by iconLayersAfter,
+            templateMissing and pixelsChangedOutsideTemplate - an editable-text own layer is untested.
             """)]
         bool keepOwnLayer = false,
         [Description("""
-            With keepOwnLayer: the .lvclass or .lvlib whose icon is the template. Defaults to the one
-            class or library in the VI's folder or up to three above that lists the VI.
+            With keepOwnLayer: the template's .lvclass/.lvlib; defaults to the owner listing the VI
+            in its folder or up to three above.
             """)]
         string? ownerPath = null,
         CancellationToken ct = default,
-        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null) =>
+        [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
+        [Description("""
+            JSON array for several VIs: [{"viPath":"...","line1":"...","line2":"...","line3":"...",
+            "iconImagePath":"..."}]. viPath required; missing keys fall back to this call's
+            parameters; an unknown key is refused.
+            """)]
+        string? iconsJson = null) =>
         await Rpc.GuardAsync(async () =>
         {
+            if (iconsJson is { Length: > 0 })
+                return await SetManyAsync(iconsJson, viPath, iconImagePath, line1, line2, line3,
+                    entry => SetViIconAsync(entry.ViPath, entry.IconImagePath, readBackPath, helperViPath,
+                        helperAixmlPath, regenerateHelper, entry.Line1, entry.Line2, entry.Line3,
+                        bannerColor, backgroundColor, borderColor, timeoutSeconds, keepOwnLayer,
+                        ownerPath, ct, backend));
+            if (viPath is not { Length: > 0 })
+                return BatchAnswer.NothingAsked("lvai_set_vi_icon", "viPath", "iconsJson");
+
             if (!AixmlBackend.TryResolve(backend, "lvai_set_vi_icon", out var choice, out var badBackend))
                 return AixmlBackend.Refusal(badBackend);
             if (!File.Exists(viPath))
@@ -272,6 +251,105 @@ internal sealed class IconTools(LvaiConnection connection)
                     "code is kept under runnerErrorCode. Open readBackPath to see the icon now " +
                     "stored in the VI."))), verified);
         });
+
+    /// <summary>One VI of an iconsJson batch, after the fallbacks to the call's own parameters.</summary>
+    internal sealed record IconEntry(string ViPath, string? IconImagePath, string? Line1, string? Line2, string? Line3);
+
+    /// <summary>
+    /// The per-VI call a batch makes in place of the live one - set by a test only, which then
+    /// needs neither LabVIEW nor the helper.
+    /// </summary>
+    internal Func<IconEntry, Task<string>>? SingleOverride { get; init; }
+
+    private static readonly string[] IconEntryKeys = ["viPath", "line1", "line2", "line3", "iconImagePath"];
+
+    /// <summary>
+    /// Reads iconsJson. An unknown key is REFUSED rather than dropped: a key that vanishes in
+    /// silence is how `expectFieldValue` once produced a green suite asserting the opposite of what
+    /// was asked (CLAUDE.md, "the same silence lives one layer in, inside any casesJson").
+    /// </summary>
+    internal static List<IconEntry> ParseIconsJson(string iconsJson, string? viPath, string? iconImagePath,
+                                                   string? line1, string? line2, string? line3,
+                                                   out string? refusal)
+    {
+        refusal = null;
+        JsonNode? node;
+        try { node = JsonNode.Parse(iconsJson); }
+        catch (System.Text.Json.JsonException e)
+        {
+            refusal = Json.Error("badArguments", $"iconsJson is not valid JSON: {e.Message}");
+            return [];
+        }
+        if (node is not JsonArray array || array.Count == 0)
+        {
+            refusal = Json.Error("badArguments",
+                "iconsJson must be a non-empty JSON array of objects, each with a viPath.",
+                new { accepted = IconEntryKeys });
+            return [];
+        }
+        var entries = new List<IconEntry>();
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (array[i] is not JsonObject o)
+            {
+                refusal = Json.Error("badArguments", $"iconsJson[{i}] is not an object.",
+                    new { accepted = IconEntryKeys });
+                return [];
+            }
+            var unknown = o.Select(kv => kv.Key).Where(k => !IconEntryKeys.Contains(k)).ToList();
+            if (unknown.Count > 0)
+            {
+                refusal = Json.Error("badArguments",
+                    $"iconsJson[{i}] has unknown key(s) {string.Join(", ", unknown)}. Colours, helper " +
+                    "settings and timeout are shared and set once on the call itself.",
+                    new { accepted = IconEntryKeys, unknown });
+                return [];
+            }
+            var path = o["viPath"]?.GetValue<string>();
+            if (path is not { Length: > 0 })
+            {
+                refusal = Json.Error("badArguments", $"iconsJson[{i}] has no viPath.",
+                    new { accepted = IconEntryKeys });
+                return [];
+            }
+            static string? Str(JsonObject obj, string key, string? fallback) =>
+                obj[key] is { } v ? v.GetValue<string>() : fallback;
+            entries.Add(new IconEntry(path,
+                Str(o, "iconImagePath", iconImagePath),
+                Str(o, "line1", line1), Str(o, "line2", line2), Str(o, "line3", line3)));
+        }
+        // A viPath given beside the list is one more entry, with the call's own image or lines.
+        if (viPath is { Length: > 0 } &&
+            !entries.Any(e => string.Equals(Path.GetFullPath(e.ViPath), Path.GetFullPath(viPath),
+                                            StringComparison.OrdinalIgnoreCase)))
+            entries.Insert(0, new IconEntry(viPath, iconImagePath, line1, line2, line3));
+        return entries;
+    }
+
+    private async Task<string> SetManyAsync(string iconsJson, string? viPath, string? iconImagePath,
+                                            string? line1, string? line2, string? line3,
+                                            Func<IconEntry, Task<string>> one)
+    {
+        var entries = ParseIconsJson(iconsJson, viPath, iconImagePath, line1, line2, line3, out var refusal);
+        if (refusal is not null) return refusal;
+
+        var items = new List<(string, string)>(entries.Count);
+        foreach (var entry in entries)
+        {
+            string answer;
+            try { answer = await (SingleOverride ?? one)(entry); }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                answer = BatchAnswer.Threw(entry.ViPath, e);
+            }
+            items.Add((entry.ViPath, answer));
+        }
+        var batch = BatchAnswer.Aggregate(items, n => n["ok"]?.GetValue<bool>() == true);
+        batch["note"] = "One answer for several VIs, set one after another. `ok` means every icon was " +
+                        "VERIFIED by its read-back file; `failed` names the VIs whose were not. Each " +
+                        "VI's full single answer, read-back path included, is under `results`.";
+        return Json.Document(batch);
+    }
 
     /// <summary>
     /// The pylabview route: the same helper COMPOSED and run over LabVIEW's ActiveX server, and the

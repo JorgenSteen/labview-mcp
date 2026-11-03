@@ -14,9 +14,24 @@ internal static class Json
     private static readonly JsonFormatter Formatter =
         new(JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
 
-    private static readonly JsonSerializerOptions PlainOptions = new()
+    /// <summary>
+    /// How every answer to the client is written: indented, and with RELAXED escaping. The default
+    /// encoder writes `&lt;` as `<`, and the same for `&gt;`, `&amp;`, `'` and `+` - six characters
+    /// each, several tokens, and our answers are full of XML, AIXML and paths. Measured 2026-10-30
+    /// over every LabVIEW tool answer in this repository's transcripts: 59.5 M characters served,
+    /// 52.3 M with this encoder - 12 % less, 30 % on `lvai_run_vi_and_read_values`, whose values
+    /// are LabVIEW's flattened XML. The output is still valid JSON that any parser reads to the same
+    /// strings; what the default protects against is embedding JSON in HTML, which no answer of ours
+    /// is. Non-ASCII goes out as UTF-8 too, which stdio MCP carries. `docs/token-economy.md` §4.2.
+    /// </summary>
+    public static readonly JsonSerializerOptions Answer = new()
     {
         WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    private static readonly JsonSerializerOptions PlainOptions = new(Answer)
+    {
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
     };
 
@@ -103,12 +118,7 @@ internal static class Json
     public static JsonNode? Slim(JsonNode? answer, bool keep)
     {
         if (keep || answer is not JsonObject o) return answer;
-
-        var failed = o["ok"]?.GetValue<bool>() is false
-                     || (o["errorCode"] is { } code && code.GetValue<int>() != 0)
-                     || o["errorKind"] is not null
-                     || o["failedAtStep"] is not null;
-        if (failed) return answer;
+        if (LooksFailed(o)) return answer;
 
         string[] worthKeeping =
         [
@@ -126,6 +136,44 @@ internal static class Json
     }
 
     /// <summary>
+    /// The rule <see cref="Slim"/> uses for "this answer failed, keep it whole": `ok` false, a
+    /// non-zero `errorCode`, or any `errorKind` / `failedAtStep`. Shared so the compact batch answers
+    /// judge a step or a VI exactly as Slim does.
+    /// </summary>
+    public static bool LooksFailed(JsonObject o) =>
+        (o["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var okValue) && !okValue)
+        || (o["errorCode"] is JsonValue code && NonZero(code))
+        || o["errorKind"] is not null
+        || o["failedAtStep"] is not null;
+
+    private static bool NonZero(JsonValue v) =>
+        v.TryGetValue<int>(out var i) ? i != 0
+        : v.TryGetValue<long>(out var l) ? l != 0
+        : v.TryGetValue<double>(out var d) && d != 0;
+
+    /// <summary>
+    /// Static fields repeated per item, said ONCE: every key of <paramref name="keys"/> that ALL
+    /// <paramref name="items"/> carry with the same value is removed from each and returned. A key
+    /// whose value differs anywhere stays on every item. Measured on lvai_generate_vis and
+    /// lvai_exec_state batches (docs/ideen-schneller-und-weniger-tokens.md §4): the same notes were
+    /// most of a 32-43 k character answer.
+    /// </summary>
+    public static JsonObject Hoist(IReadOnlyList<JsonObject> items, IEnumerable<string> keys)
+    {
+        var common = new JsonObject();
+        if (items.Count == 0) return common;
+        foreach (var key in keys)
+        {
+            if (!items[0].ContainsKey(key)) continue;
+            var first = items[0][key]?.ToJsonString();
+            if (!items.All(i => i.ContainsKey(key) && i[key]?.ToJsonString() == first)) continue;
+            common[key] = items[0][key]?.DeepClone();
+            foreach (var item in items) item.Remove(key);
+        }
+        return common;
+    }
+
+    /// <summary>
     /// A failure rendered as data rather than thrown. The MCP client sees a result it
     /// can reason about instead of an opaque transport error.
     /// </summary>
@@ -138,6 +186,5 @@ internal static class Json
             ["detail"] = detail is null ? null : JsonNode.Parse(JsonSerializer.Serialize(detail)),
         });
 
-    private static string Indent(JsonNode node) =>
-        node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+    private static string Indent(JsonNode node) => node.ToJsonString(Answer);
 }

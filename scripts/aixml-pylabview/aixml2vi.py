@@ -69,10 +69,14 @@ SCALARS = {
     # a timestamp and a waveform are MeasureData with a Flavor (measured on an AIXML-generated VI)
     "timestamp": ("MeasureData.TimeStamp", "absTime"),
     "doublewaveform": ("MeasureData.Float64Waveform", "stdMeasureData"),
+    # the IQ data of an niRFSA read, as NI's export of niRFSA Fetch IQ (Complex WDT 1Rec 1Chan).vi
+    # names its `data` indicator (2026-10-30)
+    "complexdoublewaveform": ("MeasureData.Complex128Waveform", "stdMeasureData"),
 }
 # type key (lvheap.type_key) -> the front-panel class of its object
 DDO_OF_KEY = {v[0]: v[1] for v in SCALARS.values()}
 DDO_OF_KEY.update({"Refnum.LVObjCtl": "stdRefNum", "Refnum.VisaRef": "stdRefNum", "Refnum.UsrDefndTag": "stdRefNum",
+                   "Refnum.IVIRef": "stdRefNum",
                    "Refnum.Queue": "stdRefNum",
                    # a MENU refnum in a cluster (MGI's Event Cluster) and an event registration
                    # or user event refnum on a pane: the same refnum object, retyped
@@ -504,6 +508,14 @@ def refnum_type(inner, plain_class=False):
         v = ET.SubElement(el, "LVVariant", {"Index": "0", "HasVarItem2": "1", "VarType2": "0", "Version": "auto"})
         ET.SubElement(v, "DataType", {"Index": "0", "Type": "Void", "Format": "inline"})
         return el
+    m = re.fullmatch(r"IVI\.([^.{}]+)", inner)
+    if m:
+        # an IVI instrument session (niRFSA, niDMM ...): the VISA shape with RefType IVIRef and the
+        # driver's class in Ident, as NI's converter wrote probes/ptypes-ivi.xml (2026-10-30)
+        el = ET.Element("TypeDesc", {"Type": "Refnum", "RefType": "IVIRef", "Ident": m.group(1),
+                                     "FirstClient": "0", "Format": "inline"})
+        el.append(_void_variant())
+        return el
     row = _REF_CLASSES.get(inner)
     if row is None:
         # a class the probe had no control for, whose id learn_node_classes.py read off NI's own
@@ -682,7 +694,10 @@ def unverified_wire_type(tree):
                 return bad
         return None
     if t == "MeasureData":
-        return None if tree.get("Flavor") in ("Float64Waveform", "TimeStamp", "Dynamicdata") else "MeasureData." + (tree.get("Flavor") or "")
+        # Complex128Waveform: t196, Build Waveform -> Get Waveform Components carried a complex Y
+        # and dt through, no insanity (2026-10-30) - the wire of every niRFSA IQ read
+        return None if tree.get("Flavor") in ("Float64Waveform", "TimeStamp", "Dynamicdata", "Complex128Waveform") \
+            else "MeasureData." + (tree.get("Flavor") or "")
     if t == "Refnum":
         # TDMSFile: t109, TDMS Open -> TDMS Close, file written and path back (2026-10-10)
         # UDClassInst: a class object out of a subVI (DQMH's Default Module Icon.vi), through a
@@ -702,9 +717,16 @@ def unverified_wire_type(tree):
         # File replaced a longer file's content whole, read back by path (t147, 2026-10-11)
         # NotifierRef: Obtain Notifier (string) -> Send -> Wait on Notification -> Release ran with
         # the notification, `timed out?` and the last notification read back (t154, 2026-10-12)
-        if tree.get("RefType") not in ("LVObjCtl", "VisaRef", "UsrDefndTag", "TDMSFile", "UDClassInst",
+        # IVIRef: niRFSA Initialize -> niRFSA Close on the instrument handle, composed, loaded
+        # executable, no insanity (t194, 2026-10-30)
+        if tree.get("RefType") not in ("LVObjCtl", "VisaRef", "IVIRef", "UsrDefndTag", "TDMSFile", "UDClassInst",
                                        "UserEvent", "EventReg", "Menu", "Queue", "ByteStream", "NotifierRef"):
-            return "Refnum." + (tree.get("RefType") or "?")
+            # UsrDefined is a family of unrelated classes; only NI-TClk's session reference is
+            # measured - niRFSA Get Session Reference -> Build Array -> niTClk Configure For
+            # Homogeneous Triggers -> niTClk Synchronize answered NI's own build's error, no
+            # insanity (t197, 2026-10-30)
+            if not (tree.get("RefType") == "UsrDefined" and tree.get("Ident") == "sessionReferenceClass"):
+                return "Refnum." + (tree.get("RefType") or "?")
         if tree.get("RefType") == "LVObjCtl" and [f.get("Type") for f in fields(tree)] == ["Function"]:
             # a strictly typed VI reference: its pane is the callee's own (t103)
             return None if os.environ.get("AIXML2VI_STRICT_VI_REF_OK", "1") == "1" else "Refnum.StrictVI"
@@ -757,8 +779,9 @@ def signal_kind(tree):
     if t == "String":
         return 0x230
     if t == "Refnum":
-        # measured on an AIXML-generated probe: 0x170 on VI Server refnum wires, 0x237 on VISA
-        return 0x237 if tree.get("RefType") == "VisaRef" else 0x170
+        # measured on an AIXML-generated probe: 0x170 on VI Server refnum wires, 0x237 on VISA -
+        # and on an IVI session, NI's build of the niRFSA Initialize -> Close probe (2026-10-30)
+        return 0x237 if tree.get("RefType") in ("VisaRef", "IVIRef") else 0x170
     if t in ENUM_BASE.values():
         t = "Num" + t[4:]
     code = TYPE_CODE.get(t)
@@ -894,11 +917,35 @@ ANCHOR_K = "_anchor_k"
 ANCHOR_K_SANE = ((0, 200), (0, 120))
 
 
-def _anchor_k(arr):
-    """The anchor offset of a part's array, from the donor's own pair and bounds; a donor that sat
-    inside a structure or a cluster gives no usable k, and the array's index display decides."""
+def _cluster_frame_of(arr, up):
+    """An array's place in the document of the cluster pane it is a field of - own top-left minus
+    the pane's docBounds plus the pane's top-left, the frame set_array_anchors places it in - or
+    None when it is no cluster's field."""
+    e = up.get(arr)
+    while e is not None:
+        cls = e.get("class") or ""
+        if cls == "stdClust":
+            doc = e.find("paneHierarchy/docBounds")
+            if doc is None:
+                return None
+            t, l = lvheap.parse_bounds(arr.findtext("bounds"))[:2]
+            dt, dl = lvheap.parse_bounds(doc.text)[:2]
+            pt, pl = lvheap.parse_bounds(e.findtext("paneHierarchy/bounds") or "(0, 0, 0, 0)")[:2]
+            return (t - dt + pt, l - dl + pl)
+        if e.tag == "ddo" or cls in ("stdMeasureData", "indArr", "bDConstDCO"):
+            return None
+        e = up.get(e)
+    return None
+
+
+def _anchor_k(arr, frame=None):
+    """The anchor offset of a part's array, from the donor's own pair and bounds - or, for a field
+    of a cluster, from its place in the cluster pane's document (`frame`), the frame its pair is
+    set in again: read off the raw bounds, the Y array of a waveform constant's element came out
+    one pixel off and was "Insane Array Constant {graphics}" (2026-10-30). A donor that sat
+    inside a structure gives no usable k, and the array's index display decides."""
     pair = _position_pair(arr)
-    t, l = lvheap.parse_bounds(arr.findtext("bounds"))[:2]
+    t, l = frame if frame is not None else lvheap.parse_bounds(arr.findtext("bounds"))[:2]
     h, v = _pair_values(pair[0])
     k = (-h - l, -v - t)
     if all(lo <= x <= hi for x, (lo, hi) in zip(k, ANCHOR_K_SANE)):
@@ -970,7 +1017,11 @@ def tag_class(tree, node_name=None):
     refnum (RefType UsrDefndTag): `GenClassTag.<Ident>.<TypeName>` - `NetworkStream.DataExchange`,
     `nisyscfgSession.nisyscfg` - except DAQmx, whose one `Task` refnum carries five property classes
     and is named by the NODE: `GenClassTag.DAQmx Timing.NIDAQ` (learn_node_classes.py over 21 VIs,
-    98 nodes, 2026-10-21; issue #96). None for any other refnum."""
+    98 nodes, 2026-10-21; issue #96). An IVI instrument session is named by its driver,
+    `IVI.niRFSA`, as NI's export writes `type="{IVI.niRFSA}"` (2026-10-30). None for any other
+    refnum."""
+    if tree is not None and tree.get("RefType") == "IVIRef" and tree.get("Ident"):
+        return "IVI.%s" % tree.get("Ident")
     if tree is None or tree.get("RefType") != "UsrDefndTag" or not tree.get("TypeName"):
         return None
     node_name = (node_name or "").strip('"')
@@ -1204,6 +1255,14 @@ def _const_value(tree, value):
                 cb = lvheap.value_bytes(c)
                 body += struct.pack(">B", len(cb)) + cb
         return (b"PTH0" + struct.pack(">I", len(body)) + body).hex().upper()
+    if t == "Refnum" and tree.get("RefType") in ("IVIRef", "VisaRef", "UsrDefndTag"):
+        # an IVI or VISA session or a DAQmx task holds its NAME, flattened like a string: NI's
+        # converter wrote 00000007 53696D52465341 for value="SimRFSA" (probes/pivi-sim.xml),
+        # 00000010 + "GPIB0::22::INSTR" for a VISA constant and 00000009 + "OtherTask" for a
+        # DAQmx task one, the same for each control's default (probes/pvisa-values.xml,
+        # 2026-10-30); the null one is the empty name, 00000000
+        b = lvheap.value_bytes(unescape(value or ""))
+        return (struct.pack(">I", len(b)) + b).hex().upper()
     if t == "Refnum":
         # a refnum constant is the null refnum - 4 zero bytes (an AIXML-generated probe wrote
         # 0000000000: those plus the default marker); there is no literal for a live one
@@ -1560,12 +1619,13 @@ class Composer:
         # greyed elements (2026-10-12) - so an indArr keeps the donor's anchor OFFSET and gets
         # its pair back once its place is final (set_array_anchors, ANCHOR_K). Any other owner's
         # negative pair (a waveform's insides) is still stripped, as measured clean.
+        up = {c: q for q in heap.iter() for c in q}
         for p in heap.iter():
             pair = _position_pair(p)
             if not pair:
                 continue
             if p.get("class") == "indArr" and p.find("bounds") is not None:
-                p.set(ANCHOR_K, "%d,%d" % _anchor_k(p))
+                p.set(ANCHOR_K, "%d,%d" % _anchor_k(p, _cluster_frame_of(p, up)))
             for c in pair:
                 p.remove(c)
         if own_uid is not None:
@@ -1901,13 +1961,16 @@ class Composer:
                 if part.get("class") == "label" and part.findtext("partID") == "84" \
                         and part.find("textRec/text") is not None:
                     part.find("textRec/text").text = '"%s"' % self._class_of_refnum(tree)[3:]
-        if tkey == "Refnum.UsrDefndTag":
+        if tkey in ("Refnum.UsrDefndTag", "Refnum.IVIRef"):
             # a user-defined tag refnum is CLASS-specific inside: its tag ddo names the class's
             # DLL (tagDLLName "nisyscfg.*") and its STR section the class (typeClass) - a part
-            # of another class would be a refnum to the wrong library
+            # of another class would be a refnum to the wrong library. An IVI session's part
+            # names its driver ONLY in typeClass (NI's build of probes/ptypes-ivi.xml: no DLL
+            # name anywhere in the ddo), so the one part is retyped for every driver; only
+            # niRFSA has been measured (2026-10-30)
             have = next((x.get("TypeName") for d in donor_types for x in d.iter("TypeDesc")
                          if x.get("RefType") == "UsrDefndTag"), None)
-            if have != tree.get("TypeName"):
+            if tkey == "Refnum.UsrDefndTag" and have != tree.get("TypeName"):
                 raise Unsupported("no part for a %s refnum (the harvested one is %s)" % (tree.get("TypeName"), have))
             for vi_ in holder.iter("variantIndex"):
                 sec = getattr(self, "strs", {}).get(int(vi_.text))
@@ -1918,6 +1981,16 @@ class Composer:
         adapt_numeric(ddo, t)
         if is_enum(tree):
             self._set_enum(ddo, tree)
+        if prefix == "const" and in_array and ddo.get("class") == "stdMeasureData":
+            # a WAVEFORM as an array constant's element draws its t0, dt and Y through a cluster
+            # with a pane of its own, placed like a cluster element's: the donor's coordinates
+            # came along (-4525, where pclean.vi holds it) - "Insane Array Constant {graphics}"
+            # on load of NI's niRFSA Multi Record IQ example and of a one-constant probe, where
+            # NI's own build of the probe carries -(the constant's place + the element's)
+            # (2026-10-30)
+            for c in ddo.iter("SL__arrayElement"):
+                if c.get("class") == "stdClust" and c.find("paneHierarchy/origin") is not None:
+                    c.set(self.CLUSTER_ORIGIN, "1")
         if prefix == "fpdco":
             # an LED indicator flipped to a control was measured working (a plain boolean control
             # has its own part since 2026-10-13, NI's push button); a field of a cluster follows
@@ -2472,6 +2545,14 @@ class Composer:
                 q[1] += shift
                 q[3] += shift
             p.find("bounds").text = fb(tuple(q))
+        # AN ARRAY'S ELEMENT moves with its frame. It is the array's own <ddo>, not a part, and it
+        # stayed at the donor's offset while the frame moved right of the wider label: LabVIEW drew
+        # the element left of the frame as a row of greyed elements and the frame empty (the pump
+        # station's `No Previous Pressures`, 2026-11-01). NI's converter puts it 35 px into the
+        # frame's first part, every array constant of its build of the same probe.
+        inner = ddo.find("ddo") if ddo.get("class") == "indArr" else None
+        if inner is not None and shift > 0:
+            move_obj(inner, 0, shift)
         ob = ddo.find("bounds")
         if ob is not None:
             o = lvheap.parse_bounds(ob.text)
@@ -2715,7 +2796,7 @@ class Composer:
     # on NI's In Range and Coerce.vi (aggregate=true)
     NODE_ATTRS = {"_name", "inputs", "outputs", "uid", "uid_parent", "_id"}
     PRIM_MODES = {"In Range and Coerce": ("includeHigh", "includeLow", "aggregate"),   # name -> mode attributes add_node writes
-                  "Read from Text File": ("readLines",),
+                  "Read from Text File": ("readLines", "convertEol"),
                   "Array To Cluster": ("elements",)}
     # COMPARE AGGREGATES (aggregate="true") is the 0x80000 bit of a comparison prim's objFlags,
     # one boolean for two whole clusters or arrays: read off NI's 3D Graph axes_auto_range.vi
@@ -2735,7 +2816,9 @@ class Composer:
     PRIM_MODE_BITS = {"In Range and Coerce": {"includeLow": 0x200000, "includeHigh": 0x100000},
                       # Read Lines: 640 -> 67109504 on NI's converter's build of a probe pair
                       # differing only in readLines="true", 2026-10-10 (lvpane_sweep.xml uses it)
-                      "Read from Text File": {"readLines": 0x4000000}}
+                      # Convert EOL: 640 -> 33555072, the same way, 2026-11-01 (it was refused
+                      # until then, and a test helper of the PC AI DI TDMS build dropped it)
+                      "Read from Text File": {"readLines": 0x4000000, "convertEol": 0x2000000}}
     for _n in AGGREGATE_PRIMS:
         PRIM_MODE_BITS.setdefault(_n, {})["aggregate"] = 0x80000
     del _n
@@ -3094,12 +3177,24 @@ class Composer:
             a.append(copy.deepcopy(x))
             return a
         deltas = {depth(new_types[i]) - depth(donor[i]) for i in wired_in}
-        if len(deltas) == 1 and 0 not in deltas and name not in self.WHOLE_VALUE:
+        # A QUEUE's (notifier's, user event's) element is carried WHOLE: an array element does not
+        # put the primitive in array mode. Obtain Queue of array{string} made `queue out`,
+        # `created new?` and `error out` arrays, the Enqueue behind it followed through its wires,
+        # and LabVIEW died on LOAD - `DAbort 0x87FB5957: I expected a container refnum here!`,
+        # proptyp3.cpp(970) - three times in the ATM cold build of 2026-11-01 (tests/t186).
+        carries_container = any(d.get("Type") == "Refnum" and d.get("RefType") in REFNUM_CONTAINERS.values()
+                                for d in donor)
+        if len(deltas) == 1 and 0 not in deltas and name not in self.WHOLE_VALUE and not carries_container:
             k = deltas.pop()
             donor_in_depth = {depth(donor[i]) for i in wired_in}
             for j, t in enumerate(terms):
                 out = int(t.find("dco").findtext("objFlags") or 0) & 1
                 same_group = any(canon[j] == canon[i] for i in wired_in)
+                # an ERROR output is one cluster whatever shape went in: Close Reference on an
+                # array of references reports one error, and the shape rule made it an array -
+                # four NI exports in the AIXML cache, caught by the type guard (2026-11-01)
+                if canon[j].startswith(b"error terminal"):
+                    continue
                 if out and not same_group and j not in wired_in and depth(donor[j]) in donor_in_depth:
                     r = reshape(new_types[j], k)
                     if r is not None:
@@ -3154,6 +3249,7 @@ class Composer:
                     stream_types[outsd["endpoint out"]] = st
                 if name == "Read Single Element from Stream" and "data out" in by_name:
                     new_types[idx_of[id(by_name["data out"])]] = plain(lvheap.strip_label(copy.deepcopy(st)))
+        self._guard_terminal_types(el, name, terms, by_name, donor, new_types, canon)
         for tname, net in outs:
             if net:
                 self.net_type[net] = new_types[idx_of[id(by_name[tname])]]
@@ -3182,6 +3278,48 @@ class Composer:
         diag.z.insert(0, ET.Element("SL__arrayElement", {"uid": prim.get("uid")}))
         diag.placed.append((prim, el))
         self.report.append("Node %r = primResID %s <- %s" % (name, rid, src))
+
+    @staticmethod
+    def _type_kind(t):
+        """`Refnum(Queue)`, `Array`, `Cluster`, ... - what a guard compares, not the full type."""
+        t = typedef_inner(t)
+        return t.get("Type", "?") + ("(%s)" % t.get("RefType") if t.get("RefType") else "")
+
+    def _guard_terminal_types(self, el, name, terms, by_name, donor, new_types, canon):
+        """THE TYPE GUARD: the last look at a primitive's terminal types before they reach the file.
+
+        The retyping above adapts a donor's terminals to what is wired, and a wrong adaptation is
+        not a broken VI - LabVIEW can DIE loading it. Obtain Queue of an array{string} came out
+        with `queue out`, `created new?` and `error out` as arrays, and LabVIEW aborted on load
+        with `I expected a container refnum here!` (proptyp3.cpp, the ATM cold build of
+        2026-11-01, three crashes) - while NI's converter built the same document clean. What
+        the guard holds is what no adaptation may change, measured on NI's build of it:
+          - a terminal the donor types as a QUEUE, NOTIFIER or USER EVENT refnum stays exactly
+            that kind of refnum - an element type may change inside it, its kind may not. A
+            breach is REFUSED by name: a refusal costs a fallback to the grpc backend, a crash
+            costs LabVIEW and whatever else was open in it.
+          - an ERROR OUTPUT stays an error cluster. A breach is only REPORTED: Close Reference on
+            an array came out with an array `error out` (four cached NI exports), and LabVIEW
+            loaded that VI executable anyway - it re-derives the type - so refusing it would turn
+            a document LabVIEW accepts into a failure."""
+        names = {id(t): n for n, t in by_name.items() if not n.startswith("?parm")}
+        for j, t in enumerate(terms):
+            d, n = typedef_inner(donor[j]), typedef_inner(new_types[j])
+            tname = names.get(id(t), "terminal %d" % j)
+            if d.get("Type") == "Refnum" and d.get("RefType") in REFNUM_CONTAINERS.values():
+                if n.get("Type") != "Refnum" or n.get("RefType") != d.get("RefType"):
+                    raise Unsupported(
+                        "type guard: %s %s `%s` would be written as %s where the primitive carries a %s "
+                        "refnum - refused, because LabVIEW dies loading such a VI ('I expected a "
+                        "container refnum here!'). Convert this document with backend grpc."
+                        % (name, el.get("uid"), tname, self._type_kind(n), d.get("RefType")))
+            out = int(t.find("dco").findtext("objFlags") or 0) & 1
+            if out and canon[j].startswith(b"error terminal") and d.get("Type") == "Cluster" \
+                    and n.get("Type") != "Cluster":
+                self.report.append(
+                    "type guard WARNING: %s %s `%s` written as %s where it is an error cluster - "
+                    "an adaptation went wrong; LabVIEW has re-derived such a type on load"
+                    % (name, el.get("uid"), tname, self._type_kind(n)))
 
     STREAM_PASS = {"Read Single Element from Stream": ("endpoint in", "endpoint out"),
                    "Write Single Element to Stream": ("endpoint in", "endpoint out"),
@@ -3324,7 +3462,7 @@ class Composer:
 
     @staticmethod
     def _vi_server_class(el):
-        m = re.fullmatch(r"\{(LV\.[A-Za-z0-9]+|GenClassTag\.[^.{}]+\.[^{}]+)\}", (el.get("type") or "").strip())
+        m = re.fullmatch(r"\{(LV\.[A-Za-z0-9]+|GenClassTag\.[^.{}]+\.[^{}]+|IVI\.[^.{}]+)\}", (el.get("type") or "").strip())
         if not m:
             raise Unsupported("%s %s: class %r is not composable yet" % (el.get("_name"), el.get("uid"), el.get("type")))
         return m.group(1)
@@ -3487,7 +3625,8 @@ class Composer:
         class as VoidBlock{refnum} (omidTypeDesc) - measured on an AIXML-generated probe."""
         self.check_attrs(el, ("fields", "type", "link"))
         cls = self._vi_server_class(el)
-        tag = cls.startswith("GenClassTag.")
+        # an IVI session is a class named by its refnum too, and composed the same way
+        tag = cls.startswith(("GenClassTag.", "IVI."))
         if tag:
             self._tag_reference_names(el)
         table = self._vi_server_table()
@@ -3564,7 +3703,7 @@ class Composer:
             # a TAG refnum's node is typed with the refnum WIRED into it, which carries more than
             # the class - a Network Stream endpoint holds its data type in NI_VAR_DATATYPE - and
             # NI's node there reads objFlags 131584 (Simple Network Streams - Host.vi, issue #96)
-            if wired_ref is not None and wired_ref.get("RefType") == "UsrDefndTag":
+            if wired_ref is not None and wired_ref.get("RefType") in ("UsrDefndTag", "IVIRef"):
                 ref_tree = lvheap.strip_label(wired_ref)
             elif cls.endswith(".NIDAQ"):
                 # DAQmx's class names the NODE, not the refnum (a Task's Timing properties): with
@@ -3584,6 +3723,13 @@ class Composer:
                                                  "TypeName": "NIDAQ", "Format": "inline"})
             class_tree.append(_void_variant())
             node.find("objFlags").text = "4608"
+        elif tag and cls.startswith("IVI."):
+            # an IVI session: the node typed and named by the wired session (the plain class
+            # refnum when nothing is wired), objFlags 512, each item named by the AIXML field
+            # verbatim with no item flags - NI's converter's build of probes/pivi-props.xml
+            # (2026-10-30)
+            class_tree = ref_tree
+            node.find("objFlags").text = "512"
         elif strict:
             # behind a STRICTLY TYPED control reference (VI Server Reference element=...) the
             # node is typed with that refnum, its oMId names it, and its objFlags are 640, not
@@ -4281,6 +4427,13 @@ class Composer:
             # as Unbundle By Name does; its shape and element are the wrapped array's (NI's
             # grow_prop_array.vi, the XControl sweep 2026-10-22)
             wrapped = typedef_inner(atype)
+            if wrapped.get("Type") == "SubArray":
+                # a SUB-ARRAY (Transpose 2D Array, Reverse 1D Array ...) indexes like the array it
+                # is a view of, as an indexing tunnel takes it: a row of a transposed 2D array was
+                # refused here, NI's converter builds it (tank-monitor cold build, 2026-11-01)
+                wrapped = copy.deepcopy(wrapped)
+                wrapped.set("Type", "Array")
+                atype = wrapped
             n = len(wrapped.findall("Dimension")) if wrapped.get("Type") == "Array" else 0
             if n not in (1, 2):
                 raise Unsupported("Index Array %s: a %s input is not composable yet"
@@ -4949,7 +5102,12 @@ class Composer:
         if kind is None:
             raise Unsupported("structure %r is not composable yet" % el.get("_name"))
         parent = self.diag_of(el)
-        loop, donor_types, src = self.instantiate("struct/%s" % kind, own_uid=el.get("uid"))
+        shell = "struct/%s" % kind
+        if kind == "forLoop" and any(c.tag == "Condition" for c in el):
+            # a For Loop with a conditional terminal is a shell of its own, carrying lTst beside
+            # its N (NI's build of tests/t198_for_loop_conditional.xml, 2026-10-30)
+            shell = "struct/forLoop/conditional"
+        loop, donor_types, src = self.instantiate(shell, own_uid=el.get("uid"))
         for i, e in enumerate(lvheap.typeid_elements(loop)):
             e.set("_t", str(i))     # so pruning below cannot misalign donor types
         inner = Diagram(loop.find("diagramList/SL__arrayElement[@class='diag']"), owner=el)
@@ -5355,9 +5513,12 @@ class Composer:
                                       % (target, "input" if direction == "in" else "output", tname,
                                          ", ".join(sorted(set(by_dir["in"]) | set(by_dir["out"])))))
         for tname, net in listed["in"]:
-            src = self.net_type.get(net) if net else None
+            # its OWN name: as `src` it overwrote the part's source, and the report line below
+            # printed a wire type (`<Element 'TypeDesc' at 0x...>`) or `None` as where the Call
+            # came from - reported by the pump-station cold build, 2026-11-01
+            wired = self.net_type.get(net) if net else None
             t, want = by_dir["in"][tname]
-            if src is not None and want.get("Type") == "TypeDef" and src.get("Type") != "TypeDef":
+            if wired is not None and want.get("Type") == "TypeDef" and wired.get("Type") != "TypeDef":
                 # a PLAIN value into a TYPEDEF terminal is a coercion: term objFlags 0x40000 (the
                 # dot) and dsw 1024, as NI's converter wrote a uint64 control into
                 # mxLvGetProjectPath.vi's `Item` (ItemRef.ctl); a typedef into a plain sink - the
@@ -7833,6 +7994,13 @@ class Composer:
             if k not in labels:
                 raise Unsupported("Event Data Node %s: no field %r for %s" % (el.get("uid"), k, kind))
             idx = labels.index(k)
+            if kind == "User Event" and labels.count(k) > 1:
+                # a payload field named like the event's own (Source, Type, Time): the PAYLOAD,
+                # which is what a handler reads - first-match gave the event's Source, and the
+                # PC_UserEvent_CSV build needed lvai_set_event_data_fields to undo it (2026-11-01)
+                idx = len(labels) - 1 - labels[::-1].index(k)
+                self.report.append("Event Data Node %s: %r names an event field and a payload field - "
+                                   "the payload's (field %d) is read" % (el.get("uid"), k, idx))
             t = self._term_from(tpl, fs[idx], index=idx)
             node.find("termList").append(t)
             ET.SubElement(dl, "SL__arrayElement", {"uid": t.find("dco").get("uid")})
@@ -8713,6 +8881,13 @@ class Composer:
             # an UNINITIALIZED register, typed by the reader after </VI> (`srtype`) - it keeps
             # its value between calls, as the 2D Math Plots' facades keep their state
             tree = type_tree(given)
+        elif (not init or init[0] is None) and stack == 1 and right is not None and \
+                any(n in self.net_type for _, n in pairs(right.get("inputs")) if n):
+            # an UNINITIALIZED register with no hint - NI's export writes none - takes the type of
+            # the value it is GIVEN each iteration, as a Feedback Node with no initializer takes
+            # its next value's (the scheduler waits for that net); measured on niRFSA's
+            # Synchronization examples, which keep a property read in one (2026-10-30)
+            tree = unlabel(next(self.net_type[n] for _, n in pairs(right.get("inputs")) if n in self.net_type))
         elif not init or init[0] is None or init[0] not in self.net_type:
             raise Unsupported("ShiftReg %s: only an initialized register is composable" % el.get("uid"))
         else:
@@ -8914,6 +9089,13 @@ class Composer:
                 # an end nothing composed - a For Loop's conditional terminal (a <Condition> in a
                 # For Loop; the part has no stop terminal) crashed seven of NI's VIs as a KeyError
                 el0 = self._by_uid.get(missing[0][0])
+                if missing[0][0] is None:
+                    # an element WITHOUT a uid - NI's schema requires one (-2628, measured
+                    # 2026-11-01 on a <Tunnel>); this said "not composable yet" until then, which
+                    # an agent of the pump-station cold build read as a composer gap
+                    raise Unsupported("net %r ends at a %s that has no uid - every element carrying "
+                                      "inputs or outputs needs uid and uid_parent (NI's converter "
+                                      "refuses it too, Error -2628)" % (net, missing[0][1]))
                 raise Unsupported("net %r ends at %s %s of %s, which is not composable yet"
                                   % (net, missing[0][1], missing[0][0],
                                      (el0.get("_name") or el0.tag) if el0 is not None else "an element"))
@@ -9769,6 +9951,11 @@ class Composer:
                             for _, n in pairs(t.get("inputs")) if n] + ([("reg", given)] if given else [])
             if e.tag == "ShiftReg":   # a register's type comes from its initializer
                 left = next(c for c in e if isinstance(c.tag, str) and c.tag == "Left")
+                init = [(k, n) for k, n in pairs(left.get("inputs")) if n]
+                right = next((c for c in e if isinstance(c.tag, str) and c.tag == "Right"), None)
+                if not init and right is not None and e.get("uid") not in getattr(self, "sr_given", {}):
+                    # ...or, uninitialized and with no hint, from the value given each iteration
+                    return [(k, n) for k, n in pairs(right.get("inputs")) if n]
                 return pairs(left.get("inputs"))
             if e.tag == "Tunnel" and is_case(e.get("uid_parent")) and e.get("_id", "").startswith("Out"):
                 halves = case_halves.get((e.get("uid_parent"), e.get("_id")), {}).values()
@@ -9896,10 +10083,17 @@ class Composer:
             parent = {c: p for p in heap.iter() for c in p}
             self._set_cluster_frames(heap, parent)
             for arr in [e for e in heap.iter() if e.get(ANCHOR_K) is not None]:
-                k = [int(x) for x in arr.attrib.pop(ANCHOR_K).split(",")]
+                arr.attrib.pop(ANCHOR_K)
                 if heap is self.fp:
                     continue
-                t, l = lvheap.parse_bounds(arr.findtext("bounds"))[:2]
+                t, l, b, r = lvheap.parse_bounds(arr.findtext("bounds"))
+                # k IS THE CENTRE OF THE ARRAY'S FINAL BOUNDS, (w div 2, h div 2). Read off NI's
+                # build of one probe with seven array constants, 2026-11-01: top level (83, 11) for
+                # 166 x 23, (83, 10) for 166 x 20, (56, 23) for 112 x 46, (64, 23) for 129 x 46; in
+                # a cluster (25, 11), (27, 10), (29, 23) - and the older measured (25, 11) of a
+                # 51 x 23 field is the same rule. The donor's offset (or index + 23, 11) left the
+                # pump station's constants drawn with rows of greyed elements beside them.
+                k = ((r - l) // 2, (b - t) // 2)
                 frame, e = None, arr
                 while e in parent:
                     e = parent[e]
@@ -9962,6 +10156,13 @@ class Composer:
                     at_, al_ = lvheap.parse_bounds(e.findtext("bounds"))[:2]
                     t, l = t + at_, l + al_
                     continue
+                if e.get("class") == "stdMeasureData" and e.find("bounds") is not None:
+                    # the cluster inside a WAVEFORM element sits at the waveform's place in the
+                    # array: NI's build of a one-constant probe, element (3, 63) in an array at
+                    # (190, 294), carries docBounds (-193, -357) (2026-10-30)
+                    wt, wl = lvheap.parse_bounds(e.findtext("bounds"))[:2]
+                    t, l = t + wt, l + wl
+                    continue
                 if e.get("class") == "stdClust":
                     pp = e.find("paneHierarchy")
                     pdt, pdl = lvheap.parse_bounds(pp.findtext("docBounds"))[:2]
@@ -9985,6 +10186,13 @@ class Composer:
             _shift_bounds(doc, dy, dx)
             for f in pane.find("zPlaneList"):
                 _shift_bounds(f.find("bounds"), dy, dx)
+                # a field's own savedSize is in the same frame - the waveform cluster's Y array
+                # carried its donor's (-4528, -118) where NI writes docBounds less 3 (2026-10-30)
+                for s in f.iter("savedSize"):
+                    _shift_bounds(s, dy, dx)
+            for s in clus.findall("savedSize"):
+                # ...and so is the cluster's own, which NI writes equal to docBounds
+                _shift_bounds(s, dy, dx)
             dt, dl = dt + dy, dl + dx
             pt, pl, pbt, pr = lvheap.parse_bounds(pane.findtext("bounds"))
             oh = dl - pl - (pr - pl + 6) // 2
@@ -10036,6 +10244,12 @@ class Composer:
         t, l, b, r = lvheap.parse_bounds(view.text)
         top, left = min(tops) - self.DIAGRAM_VIEW_MARGIN, min(lefts) - self.DIAGRAM_VIEW_MARGIN
         view.text = "(%d, %d, %d, %d)" % (top, left, top + b - t, left + r - l)
+        # and the WINDOW's view, pBounds - a different field: the region the window shows when
+        # the VI opens. NI's examples put it round their code (Build Array: code 281/301, pBounds
+        # (270, 271, ...)); the skeleton's (243, 336, ...) stayed put, so a composed VI opened on
+        # an EMPTY diagram (the user's screenshot, 2026-10-31). lvai_layout_diagram fits it again
+        # after it moves the code (scripts/lvbd_fit_view.py).
+        lvheap.fit_window_view(self.bd)
 
     def count_bound_nodes(self):
         """A front-panel object's annex counts the IMPLICIT property and invoke nodes bound to it

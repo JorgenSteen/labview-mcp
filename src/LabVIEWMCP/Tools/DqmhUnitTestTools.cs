@@ -45,27 +45,16 @@ internal sealed class DqmhUnitTestTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_dqmh_new_unit_test", Destructive = true, OpenWorld = true,
         Title = "Create a DQMH unit test")]
     [Description("""
-        MUTATING: creates Delacor's unit test for ONE request event of a DQMH module in the ACTIVE
-        project - the result of Tools > DQMH > Testing Tools > New DQMH Unit Test, with NO dialog
-        and NO keystroke, so it is safe unattended. Writes three VIs under
-        `<project folder>\Unit Tests\<Module>\` - `Test - <Module> - <Event> <n>.vi`,
-        `<Module> setup.vi`, `<Module> teardown.vi` - and Delacor saves the .lvproj itself with a
-        `Unit Tests` folder listing them.
-
-        THE TEST VI IS NOT EXECUTABLE WHEN IT IS CREATED, and that is Delacor's design, not a
-        failure: its event frames carry `#CodeNeeded` notes asking for the module's broadcasts to be
-        configured, and Delacor's own template is broken the same way (measured). The answer
-        reports each created VI's exec state so this is visible rather than discovered.
-
-        ONLY REQUEST EVENTS get a unit test - Delacor's own filter. A name not found comes back as
-        `eventNotFound` with the request events the module has.
-
-        Names may be given bare (`Heater`, `Do Something`) or as Delacor spells them
-        (`Heater.lvlib`, `Do Something.vi`); case does not matter. Requires a project OPEN AND
-        ACTIVE and no unsaved changes in any module (Delacor refuses those, and so does this).
-
-        How: opens four of Delacor's scripting VIs (unmodified, left open) so the generated wrapper
-        `scripts/lvdqmh_new_unit_test.xml` can call them as static subVIs, then runs it.
+        DQMH: create Delacor's unit test for ONE request event of a module (Tools > DQMH > New
+        DQMH Unit Test) with no dialog - safe unattended. MUTATING. Writes
+        `Test - <Module> - <Event> <n>.vi`, `<Module> setup.vi` and `<Module> teardown.vi` under
+        `<project folder>\Unit Tests\<Module>\`; Delacor lists them in the .lvproj itself.
+        The test VI is NOT executable when created - Delacor's design (`#CodeNeeded` frames); each
+        VI's exec state is reported. Only REQUEST events qualify; an unknown name answers
+        `eventNotFound` with the module's request events. Names bare or Delacor-spelt (`Heater` /
+        `Heater.lvlib`), case-insensitive.
+        Requires a project OPEN and ACTIVE and no unsaved changes in any module. Opens four of
+        Delacor's scripting VIs and leaves them open.
         """)]
     public async Task<string> NewUnitTestAsync(
         [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
@@ -88,11 +77,10 @@ internal sealed class DqmhUnitTestTools(LvaiConnection connection)
                     $"{HelperName}.xml was not found in the scripts folder next to the exe - " +
                     "lvai_status reports that folder as scriptsDirectory.");
 
-            if (DqmhHeadless.TargetPaths(Targets) is not { } targets)
-                return Json.Error("dqmhMissing",
-                    "Delacor DQMH is not installed: Script Unit Test.vi was not found under any " +
-                    "LabVIEW installation's project\\Delacor\\DQMH folder.",
+            if (DqmhLayout.Resolve(scripts, HelperName, Targets) is not { } route)
+                return Json.Error("dqmhMissing", DqmhLayout.MissingMessage("Script Unit Test.vi"),
                     new { lookedFor = Targets });
+            var (targets, helperName) = (route.Targets, route.Helper);
 
             var stopwatch = Stopwatch.StartNew();
             var steps = new JsonArray();
@@ -108,7 +96,7 @@ internal sealed class DqmhUnitTestTools(LvaiConnection connection)
             // ---- 1. the wrapper, generated against LOADED Delacor VIs --------------------------
             var dqmh = new DqmhTools(connection);
             var headless = new DqmhHeadless(connection);
-            if (await headless.EnsureWrapperAsync(scripts, HelperName, targets, projectPath, steps,
+            if (await headless.EnsureWrapperAsync(scripts, helperName, targets, projectPath, steps,
                     timeoutSeconds, ct) is { } wrapperError)
                 return wrapperError;
 
@@ -138,12 +126,12 @@ internal sealed class DqmhUnitTestTools(LvaiConnection connection)
             {
             while (true)
             {
-                run = await dqmh.RunAsync(scripts, HelperName,
+                run = await dqmh.RunAsync(scripts, helperName,
                     new() { ["Module Name"] = module, ["Event Name"] = evt }, timeoutSeconds, ct);
                 runs++;
                 if (run is null)
                     return Json.Error("helperMissing",
-                        $"{HelperName} could not be run - the wrapper or lvai_run_and_read is missing.",
+                        $"{helperName} could not be run - the wrapper or lvai_run_and_read is missing.",
                         new { steps });
                 steps.Add(new JsonObject
                 {
@@ -215,6 +203,7 @@ internal sealed class DqmhUnitTestTools(LvaiConnection connection)
             var answer = new JsonObject
             {
                 ["ok"] = created.Count > 0,
+                ["dqmhGeneration"] = route.GenerationName,
                 ["module"] = module,
                 ["event"] = evt,
                 ["createdFiles"] = createdJson,

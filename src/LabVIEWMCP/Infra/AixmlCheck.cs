@@ -71,10 +71,38 @@ internal static class AixmlCheck
     }
 
     /// <summary>
+    /// What the document is for, which decides the connector-pane FLAGS only - every other check
+    /// runs alike.
+    ///
+    /// THE USER'S RULE OF 2026-10-31: every VI generated COMPLETELY NEW has at least one REQUIRED
+    /// input - `error in` by default, else the most important input, chosen by its author - so a VI
+    /// cannot be dropped on a diagram and forgotten: it has to be put into the data flow, or fed a
+    /// constant where that is the logical implementation. A VI that is EXTENDED or REVISED keeps
+    /// every flag exactly as it was, or code that already calls it stops running. Until that day
+    /// the rule was the opposite - `error in` had to be `recommended`, and the repair below turned
+    /// a `required` one back, an existing VI's included.
+    /// </summary>
+    internal enum PanePolicy
+    {
+        /// <summary>
+        /// Authored by a tool for its own use or as a step of a longer route - a helper, a carrier,
+        /// a class method on its way into the class (whose class input is already the required
+        /// one). Outputs are kept off `required`; the inputs are the author's.
+        /// </summary>
+        Authored,
+
+        /// <summary>A deliverable VI generated completely new: one input must be required.</summary>
+        NewVi,
+
+        /// <summary>A VI that already exists, regenerated to extend or revise it: no flag is touched.</summary>
+        KeepAsIs,
+    }
+
+    /// <summary>
     /// Checks one AIXML document. <paramref name="xml"/> is the file's text; nothing is read from
     /// disk here so the whole check is unit-testable and costs no LabVIEW time.
     /// </summary>
-    internal static List<Finding> Check(string xml)
+    internal static List<Finding> Check(string xml, PanePolicy policy = PanePolicy.Authored)
     {
         var findings = new List<Finding>();
 
@@ -106,8 +134,10 @@ internal static class AixmlCheck
         CheckNesting(root, findings);
         CheckRings(root, findings);
         CheckEnums(root, findings);
-        CheckTerminalWireRules(root, findings);
+        CheckTerminalWireRules(root, findings, policy);
         CheckIndicatorValues(root, findings);
+        CheckNestedArrays(root, findings);
+        CheckWireEndsHaveUids(root, findings);
         CheckNetAttributes(root, findings);
         CheckTimestampValues(root, findings);
         CheckNonFiniteConstants(root, findings);
@@ -342,6 +372,56 @@ internal static class AixmlCheck
     /// was honest about what it had measured, which is right - what was missing is that nobody ran
     /// the three-minute probe that would have settled it.
     /// </summary>
+    /// <summary>
+    /// An array nested in an array, <c>array{array{double}}</c>: LabVIEW has no such type. A 2D
+    /// array is <c>array.2{double}</c>. scripts/aixml_lint.py has refused it since 2026-09-09
+    /// (<c>array-nested</c>); this check did not, and the two backends then failed differently on
+    /// the same document, measured 2026-11-01 on a TDMS read-back of the tank-monitor cold build:
+    /// NI's converter answered `Error 53, Manager call not supported` and wrote nothing, while the
+    /// pylabview composer WROTE an eBad VI ("source string, sink 1D array of string" on `TDMS Read`
+    /// `channel name(s) out`, and "Polymorphic terminal cannot accept this data type"). With
+    /// `array.2{...}` the same document is executable on both and reads the file back correctly.
+    /// </summary>
+    private static void CheckNestedArrays(XElement root, List<Finding> findings)
+    {
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            if (element.Attribute("type")?.Value is not { } type ||
+                !type.Replace(" ", "").Contains("array{array{", StringComparison.Ordinal))
+                continue;
+            var name = element.Attribute("_name")?.Value ?? element.Name.LocalName;
+            findings.Add(new Finding(Severity.Error, "arrayNested",
+                $"{element.Name.LocalName} \"{name}\" has type=\"{type}\": an array nested in an " +
+                "array, which LabVIEW does not have. A multidimensional array is written " +
+                "array.N{...} - array.2{double} for 2D. NI's converter refuses the nested form " +
+                "with an Error 53 that names nothing; the pylabview composer writes a BROKEN VI.",
+                (string?)element.Attribute("uid")));
+        }
+    }
+
+    /// <summary>
+    /// An element that carries `inputs` or `outputs` - a wire end - with no `uid`. A net is named
+    /// `uid.terminal`, so such an element cannot be wired at all. Measured 2026-11-01 on a For Loop
+    /// `&lt;Tunnel&gt;` written without `uid`/`uid_parent`, as several prose examples in the
+    /// reference showed it: NI's converter refused the document (`Error -2628`, nothing written)
+    /// and the composer said "ends at in None of Tunnel, which is not composable yet", which the
+    /// pump-station cold build's Caraya agent read as a composer gap.
+    /// </summary>
+    private static void CheckWireEndsHaveUids(XElement root, List<Finding> findings)
+    {
+        foreach (var element in root.Descendants())
+        {
+            if (element.Attribute("inputs") is null && element.Attribute("outputs") is null) continue;
+            if ((string?)element.Attribute("uid") is { Length: > 0 }) continue;
+            var name = element.Attribute("_name")?.Value ?? element.Attribute("_id")?.Value ?? "";
+            findings.Add(new Finding(Severity.Error, "wireEndWithoutUid",
+                $"<{element.Name.LocalName}{(name.Length > 0 ? $" {name}" : "")}> carries inputs or " +
+                "outputs and has no uid. A net is named uid.terminal, so nothing can wire to it: " +
+                "give it uid (and uid_parent - its structure's uid, or root). NI's converter refuses " +
+                "the whole document for it with Error -2628."));
+        }
+    }
+
     private static void CheckIndicatorValues(XElement root, List<Finding> findings)
     {
         foreach (var element in root.DescendantsAndSelf())
@@ -664,8 +744,9 @@ internal static class AixmlCheck
     /// FOR AN INPUT it is merely a choice made by accident, so this is Info rather than Warning:
     /// a required input is legitimate, and only the author knows whether it was meant.
     /// </summary>
-    private static void CheckTerminalWireRules(XElement root, List<Finding> findings)
+    private static void CheckTerminalWireRules(XElement root, List<Finding> findings, PanePolicy policy)
     {
+        if (policy == PanePolicy.NewVi) CheckRequiredInput(root, findings);
         foreach (var element in root.DescendantsAndSelf())
         {
             var kind = element.Name.LocalName;
@@ -706,17 +787,44 @@ internal static class AixmlCheck
                     + "at the CALL SITE, so every caller that leaves it unwired is Error 1003 "
                     + "while this VI compiles, runs and exports perfectly. Write "
                     + "\"recommended\".", uid));
-            else if (kind == "Control" && IsHouseErrorIn(name) && !IsRecommended(connection))
-                findings.Add(new Finding(Severity.Warning, "errorInNotRecommended",
-                    $"`error in` is connection=\"{connection}\"; the house rule is "
-                    + "\"recommended\". Both `optional` and `required` behave differently from it "
-                    + "where it matters: `required` forces every caller to wire the chain, and "
-                    + "`optional` hides the terminal from Context Help's simple view. Measured "
-                    + "2026-09-16 over one build: four agent-built VIs said `recommended` and six "
-                    + "said `optional`, every pane passed lvai_connector_pane with 0 violations, "
-                    + "and the only visible consequence was five placeholder sockets cloned "
-                    + "afresh because PlaceholderTools.Signature carries the flag.", uid));
+            else if (policy == PanePolicy.NewVi && kind == "Control" && IsHouseErrorIn(name)
+                     && !IsRequired(connection))
+                findings.Add(new Finding(Severity.Warning, ErrorInNotRequired,
+                    $"`error in` is connection=\"{connection}\"; a VI generated completely new has "
+                    + "it REQUIRED (the user's rule of 2026-10-31), so every caller has to put it "
+                    + "into the error chain - no VI is dropped on a diagram and forgotten. "
+                    + "`fix: true` sets it. A VI that already exists keeps its flags: check it "
+                    + "with newVi: false.", uid));
         }
+    }
+
+    internal const string ErrorInNotRequired = "errorInNotRequired";
+    internal const string NoRequiredInput = "noRequiredInput";
+
+    /// <summary>
+    /// A NEW VI with inputs on its pane and none of them required. Only where there is no house
+    /// `error in` - that one IS the default and is repaired to required. Without it the choice is
+    /// the author's (the most important input), so this is an ERROR that is never repaired: an
+    /// input picked by position would be a guess. A VI with no input on its pane has nothing to
+    /// require. An input with NO `connection` counts as required, because LabVIEW reads it so.
+    /// </summary>
+    private static void CheckRequiredInput(XElement root, List<Finding> findings)
+    {
+        var inputs = root.DescendantsAndSelf()
+            .Where(e => e.Name.LocalName == "Control")
+            .Where(e => (string?)e.Attribute("conIdx") is { Length: > 0 })
+            .ToList();
+        if (inputs.Count == 0) return;
+        if (inputs.Any(e => IsHouseErrorIn(e.Attribute("_name")?.Value ?? ""))) return;
+        if (inputs.Any(e => (string?)e.Attribute("connection") is not { Length: > 0 } c || IsRequired(c)))
+            return;
+        findings.Add(new Finding(Severity.Error, NoRequiredInput,
+            "This VI is generated completely new, has inputs on its connector pane and no `error in`, "
+            + "and none of its inputs is connection=\"required\". The rule (the user's, 2026-10-31): "
+            + "a new VI makes `error in` required, or - without one - its MOST IMPORTANT input, so it "
+            + "has to be put into the data flow. Set connection=\"required\" on that input; which one "
+            + "it is, only the author knows. Inputs: "
+            + string.Join(", ", inputs.Select(e => $"\"{e.Attribute("_name")?.Value}\"")) + "."));
     }
 
     /// <summary>
@@ -727,8 +835,6 @@ internal static class AixmlCheck
     private static bool IsHouseErrorIn(string name) =>
         string.Equals(name, "error in", StringComparison.Ordinal);
 
-    private static bool IsRecommended(string connection) =>
-        string.Equals(connection, "recommended", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsRequired(string connection) =>
         string.Equals(connection, "required", StringComparison.OrdinalIgnoreCase);
@@ -1051,16 +1157,19 @@ internal static class AixmlCheck
     /// A duplicate that IS referenced by a <c>uid_parent</c> is also left alone: with two candidates
     /// carrying the same number there is no way to tell which one the child belongs to.
     /// </summary>
-    internal static Fixed Fix(string xml)
+    internal static Fixed Fix(string xml, PanePolicy policy = PanePolicy.Authored)
     {
         var repairs = new List<Repair>();
 
         XDocument document;
         try { document = XDocument.Parse(xml, LoadOptions.PreserveWhitespace); }
-        catch (XmlException) { return new Fixed(xml, repairs, Check(xml)); }
+        catch (XmlException) { return new Fixed(xml, repairs, Check(xml, policy)); }
 
         var root = document.Root;
-        if (root is null) return new Fixed(xml, repairs, Check(xml));
+        if (root is null) return new Fixed(xml, repairs, Check(xml, policy));
+
+        // AN EXISTING VI KEEPS EVERY CONNECTOR-PANE FLAG - no repair below may touch one.
+        var paneFlags = policy != PanePolicy.KeepAsIs;
 
         var withUid = root.DescendantsAndSelf()
                           .Where(e => (string?)e.Attribute("uid") is { Length: > 0 })
@@ -1163,6 +1272,7 @@ internal static class AixmlCheck
         // the VI that caused it. There is no intent to guess at: NI's style guide has no required
         // output, and `recommended` is what the rest of the toolchain writes.
         foreach (var indicator in root.DescendantsAndSelf()
+                     .Where(_ => paneFlags)
                      .Where(e => e.Name.LocalName == "Indicator")
                      .Where(e => (string?)e.Attribute("conIdx") is { Length: > 0 })
                      .Where(e => (string?)e.Attribute("connection") is not { Length: > 0 }))
@@ -1179,6 +1289,7 @@ internal static class AixmlCheck
         // through untouched because the pass above only looked for an ABSENT attribute. There is
         // still no intent to preserve: NI's style guide has no required output at all.
         foreach (var indicator in root.DescendantsAndSelf()
+                     .Where(_ => paneFlags)
                      .Where(e => e.Name.LocalName == "Indicator")
                      .Where(e => (string?)e.Attribute("conIdx") is { Length: > 0 })
                      .Where(e => (string?)e.Attribute("connection") is { Length: > 0 } c
@@ -1192,30 +1303,27 @@ internal static class AixmlCheck
                 + "it unwired.", (string?)indicator.Attribute("uid")));
         }
 
-        // `error in` IS `recommended`, AND THIS IS REPAIRABLE FOR THE SAME REASON THE OUTPUT CASE
-        // IS: the house rule already decides it, so there is no author intent to guess at. It is
-        // narrow on purpose - only a Control labelled exactly `error in`, which by that same rule
-        // is a terminal WE named. A callee's `error in (no error)` is not ours to touch.
-        //
-        // Measured 2026-09-16: two of four agents building the same application chose `optional`
-        // and two chose `recommended`, with nothing anywhere reporting the divergence - every pane
-        // passed the connector-pane check, and the lint was silent because the attribute was
-        // present. A rule nothing enforces is a rule agents diverge on, which is why this is a
-        // checker entry and not another sentence in CLAUDE.md: an agent's system prompt is its own
-        // definition, and CLAUDE.md is not in it.
+        // A NEW VI's `error in` IS `required`, AND THIS IS REPAIRABLE FOR THE SAME REASON THE OUTPUT
+        // CASE IS: the rule already decides it, so there is no author intent to guess at. Narrow on
+        // purpose - only a Control labelled exactly `error in`, a terminal WE named; a callee's
+        // `error in (no error)` is not ours. The user's rule of 2026-10-31, which REPLACED the one
+        // this repair enforced before (`recommended`, 2026-09-16): a required error input makes
+        // every caller put the VI into the data flow. Only for a VI generated completely new - an
+        // existing one keeps its flags, or the code that calls it stops running.
         foreach (var control in root.DescendantsAndSelf()
+                     .Where(_ => policy == PanePolicy.NewVi)
                      .Where(e => e.Name.LocalName == "Control")
                      .Where(e => (string?)e.Attribute("conIdx") is { Length: > 0 })
                      .Where(e => IsHouseErrorIn(e.Attribute("_name")?.Value ?? ""))
-                     .Where(e => (string?)e.Attribute("connection") is { Length: > 0 } c
-                                 && !IsRecommended(c)))
+                     .Where(e => (string?)e.Attribute("connection") is not { Length: > 0 } c
+                                 || !IsRequired(c)))
         {
-            var was = (string?)control.Attribute("connection");
-            control.SetAttributeValue("connection", "recommended");
-            repairs.Add(new Repair("errorInNotRecommended",
-                $"`error in` was connection=\"{was}\"; set to \"recommended\", which is the house "
-                + "rule. `required` would force every caller to wire the chain; `optional` hides "
-                + "the terminal from Context Help's simple view.",
+            var was = (string?)control.Attribute("connection") ?? "(none)";
+            control.SetAttributeValue("connection", "required");
+            repairs.Add(new Repair(ErrorInNotRequired,
+                $"`error in` was connection=\"{was}\"; set to \"required\" - a VI generated completely "
+                + "new makes its error input required, so every caller has to put it into the error "
+                + "chain (the user's rule of 2026-10-31).",
                 (string?)control.Attribute("uid")));
         }
 
@@ -1284,10 +1392,10 @@ internal static class AixmlCheck
         // NOTHING REPAIRED MEANS NOTHING RESERIALISED. Handing back a re-rendered document would
         // reformat a file that had no fault, and a caller comparing the two could not tell "clean"
         // from "rewritten". Caught by its own test rather than reasoned about.
-        if (repairs.Count == 0) return new Fixed(xml, repairs, Check(xml));
+        if (repairs.Count == 0) return new Fixed(xml, repairs, Check(xml, policy));
 
         var repaired = document.ToString(SaveOptions.DisableFormatting);
-        return new Fixed(repaired, repairs, Check(repaired));
+        return new Fixed(repaired, repairs, Check(repaired, policy));
     }
 
     /// <summary>The whole answer, ready to embed in a tool result.</summary>

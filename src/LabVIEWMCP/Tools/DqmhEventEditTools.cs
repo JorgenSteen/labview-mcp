@@ -63,17 +63,13 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_dqmh_remove_event", Destructive = true, OpenWorld = true,
         Title = "Remove a DQMH event")]
     [Description("""
-        MUTATING: removes one event from a DQMH module in the ACTIVE project with NO dialog -
-        Delacor's own Remove Event.vi, driven through a generated wrapper. Removing the REQUEST of
-        a Round Trip removes its broadcast half too, exactly as Delacor's dialog does; the answer
-        names it as `dependentBroadcast`. DELACOR LEAVES CLEAN-UP FOR A PERSON, measured
-        2026-10-06: Main.vi keeps a loose call to a removed Broadcast and a Round Trip's message
-        frame with a #Code_Review_Todo label, and the API tester keeps the removed event's frame -
-        so both are typically NOT executable afterwards (Delacor's dialog opens the Error List).
-        `completionNeeded` says what to clean up. Names may be bare or as Delacor spells them (`Heater.lvlib`,
-        `Do Something.vi`). Refused while any module has unsaved changes or is locked - Delacor's
-        dialog refuses the same. Unit tests of the removed event are NOT removed; the answer lists
-        files that were deleted.
+        DQMH: removes one event from a module in the ACTIVE project, no dialog (Delacor's Remove
+        Event.vi). Removing a Round Trip's REQUEST removes its broadcast half too
+        (`dependentBroadcast`). Delacor leaves clean-up for a person: Main.vi keeps a loose call to
+        a removed Broadcast and a #Code_Review_Todo frame, the API tester keeps the event's frame -
+        so both are typically NOT executable afterwards; `completionNeeded` says what to clean up.
+        Unit tests of the event are NOT removed; deleted files are listed. Refused while any module
+        has unsaved changes or is locked.
         """)]
     public async Task<string> RemoveEventAsync(
         [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
@@ -90,18 +86,18 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_dqmh_rename_event", Destructive = true, OpenWorld = true,
         Title = "Rename a DQMH event")]
     [Description("""
-        MUTATING: renames one event of a DQMH module in the ACTIVE project with NO dialog -
-        Delacor's own Rename Event.vi through a generated wrapper. The new name is checked first
-        the way Delacor's dialog would check it with a MODAL: not blank, a valid file name, no
-        `<new>.vi` already in the module folder, no event and no Main.vi case of that name.
-        Refused while any module has unsaved changes or is locked. Delacor does not
-        save the module's .lvlib after a rename - measured: the file on disk still listed the old
-        VIs - so this call saves it, and says so in `librarySaved`.
+        DQMH: renames one event of a module in the ACTIVE project, no dialog (Delacor's Rename
+        Event.vi). The new name is checked first (Delacor's dialog would raise a MODAL): not
+        blank, a valid file name, no `<new>.vi` in the module folder, no event or Main.vi case of
+        that name. Refused while any module has unsaved changes or is locked. Delacor does not save
+        the .lvlib after a rename, so this call does (`librarySaved`).
         """)]
     public async Task<string> RenameEventAsync(
         [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
         [Description("Event to rename, e.g. 'Do Something' or 'Do Something.vi'")] string eventName,
         [Description("New event name, without .vi")] string newEventName,
+        [Description("DQMH 7.x only: the event's new description. Empty keeps the event VI's own " +
+                     "description, as Delacor's dialog pre-fills it")] string description = "",
         [Description("Local budget in seconds")] int timeoutSeconds = 600,
         [Description(DqmhTools.BackendDescription)] string? backend = null,
         CancellationToken ct = default) =>
@@ -113,42 +109,67 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
                 return Json.Error("badArguments", problem.Replace("The event name", "newEventName"));
             return await RunAsync(new EditAction(
                 "rename", "lvdqmh_rename_event", RenameTargets, moduleName, eventName,
-                new() { ["New Event Name"] = newName }, [],
+                new() { ["New Event Name"] = newName, ["Event Description"] = description ?? "" }, [],
                 ctx => RenameConflict(ctx, newName), SubHelpers: EventSubHelpers,
-                SaveLibrary: true, Completion: RenameCompletion), timeoutSeconds, ct);
+                SaveLibrary: true, Completion: RenameCompletion,
+                ClassicOnly: string.IsNullOrEmpty(description) ? null
+                    : "description is a DQMH 7.x option - the classic Rename Event.vi keeps the " +
+                      "event's description and takes none."), timeoutSeconds, ct);
         }));
 
     [McpServerTool(Name = "lvai_dqmh_convert_event", Destructive = true, OpenWorld = true,
         Title = "Convert a DQMH request into Request and Wait for Reply")]
     [Description("""
-        MUTATING: converts a plain DQMH Request into a Request and Wait for Reply, in the ACTIVE
-        project, with NO dialog - Delacor's own Convert Event.vi through a generated wrapper. That
-        is the only conversion Delacor offers, so `eventNotFound` lists the plain requests the
-        module has. Delacor's converter raises a MODAL when it meets a non-standard wiring in
-        Main.vi's event loop; a module Delacor scripted does not, and a run that does not return is
-        answered as `scriptingTimedOut` naming the windows on screen. Refused while any module has
-        unsaved changes or is locked. Delacor KEEPS the old message frame, labelled
-        #Code_Review_Todo, beside the new one of the same name - measured - and that frame is for a
-        person to delete; `completionNeeded` says so.
+        DQMH: converts a plain Request into a Request and Wait for Reply - or, on DQMH 7.x only,
+        a Round Trip - in the ACTIVE project, no dialog (Delacor's Convert Event.vi).
+        `eventNotFound` lists the module's plain requests. Non-standard wiring in Main.vi's event
+        loop makes Delacor raise a MODAL; a run that does not return answers `scriptingTimedOut`
+        naming the windows on screen. Delacor KEEPS the old message frame (#Code_Review_Todo)
+        beside the new one for a person to delete; `completionNeeded` says so. Refused while any
+        module has unsaved changes or is locked.
         """)]
     public async Task<string> ConvertEventAsync(
         [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
         [Description("Plain Request to convert, e.g. 'Set Speed'")] string eventName,
+        [Description("'Request and Wait for Reply' (default, every DQMH version) or 'Round Trip' " +
+                     "(DQMH 7.x only)")] string toEventType = "Request and Wait for Reply",
+        [Description("Round Trip only: the name of the broadcast half the conversion creates")]
+        string roundTripBroadcastName = "",
         [Description("Local budget in seconds")] int timeoutSeconds = 600,
         [Description(DqmhTools.BackendDescription)] string? backend = null,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(() => DqmhTools.WithBackendAsync(backend, "lvai_dqmh_convert_event",
-            () => RunAsync(new EditAction(
-            "convert", "lvdqmh_convert_event", ConvertTargets, moduleName, eventName, [], [],
-            null, SubHelpers: EventSubHelpers, Completion: ConvertCompletion), timeoutSeconds, ct)));
+            () =>
+            {
+                var target = DqmhTools.ParseEventType(toEventType ?? "");
+                bool? roundTrip = target switch { 2 => false, 3 => true, _ => null };
+                if (roundTrip is null)
+                    return Task.FromResult(Json.Error("badArguments",
+                        $"toEventType '{toEventType}' - a Request converts into 'Request and Wait for " +
+                        "Reply' or 'Round Trip'."));
+                var broadcast = (roundTripBroadcastName ?? "").Trim();
+                if (roundTrip is true
+                    && DqmhHeadless.EventRequestProblem(eventName ?? "", 3, broadcast, [], []) is { } problem)
+                    return Task.FromResult(Json.Error("badArguments", problem));
+                return RunAsync(new EditAction(
+                    "convert", "lvdqmh_convert_event", ConvertTargets, moduleName, eventName,
+                    roundTrip is true
+                        ? new() { ["New Event Type"] = "1", ["Broadcast Event Name"] = broadcast }
+                        : [],
+                    [], roundTrip is true ? ctx => RenameConflict(ctx, broadcast) : null,
+                    SubHelpers: EventSubHelpers, Completion: ConvertCompletion,
+                    ClassicOnly: roundTrip is true
+                        ? "Converting into a Round Trip is a DQMH 7.x conversion - the classic " +
+                          "Convert Event.vi makes a Request and Wait for Reply only."
+                        : null), timeoutSeconds, ct);
+            }));
 
     [McpServerTool(Name = "lvai_dqmh_validate_module", ReadOnly = true, OpenWorld = true,
         Title = "Validate the DQMH modules of a project")]
     [Description("""
-        READ-ONLY: runs Delacor's own `Validate DQMH Module (Headless).vi` over a project - the
-        checks of Tools > DQMH > Module > Validate DQMH Module, with no dialog (its error handlers
-        are wired to "no dialog"). Returns Delacor's `Validation Results` text as it reports it.
-        Nothing is fixed: Delacor's fixers belong to its interactive validator.
+        DQMH: validates a project's DQMH modules with Delacor's `Validate DQMH Module
+        (Headless).vi`, no dialog. Returns Delacor's `Validation Results` text. Read-only, nothing
+        is fixed. It checks STRUCTURE, not executability - use lvai_exec_state for that.
         """)]
     public async Task<string> ValidateModuleAsync(
         [Description("The .lvproj to validate; empty means the ACTIVE project")] string projectPath = "",
@@ -198,22 +219,21 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
                 ["validationResults"] = results,
                 ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
                 ["note"] = "Delacor's validator checks DQMH STRUCTURE - required nodes, folders, " +
-                           "tagging. It answered PASS for a module whose Main.vi and tester were " +
-                           "not executable (measured 2026-10-06), so read lvai_exec_state for that.",
+                           "tagging. DQMH 5 answered PASS for a module whose Main.vi and tester were " +
+                           "not executable (measured 2026-10-06); DQMH 7.x reports them as `Main VI " +
+                           "broken` / `Tester VI broken` (measured 2026-10-30). lvai_exec_state says " +
+                           "WHY a VI is broken.",
             });
         }));
 
     [McpServerTool(Name = "lvai_dqmh_rename_module", Destructive = true, OpenWorld = true,
         Title = "Rename a DQMH module")]
     [Description("""
-        MUTATING: renames a DQMH module in the ACTIVE project with NO dialog - Delacor's own
-        Scripter - Rename Module.vi through a generated wrapper. The new name is checked first the
-        way Delacor's dialog checks it with a MODAL: not blank, a valid file name, and no library of
-        that name already in the project. Refused while any module has unsaved changes or is
-        locked. The answer reads the module back under its new name. DELACOR SAVES THE WHOLE
-        PROJECT at the end (Save All This Project) - measured: 52 files in other modules re-saved -
-        so `modifiedFiles` is long; the project's virtual folder keeps the OLD `<Name> Module`
-        label.
+        DQMH: renames a module in the ACTIVE project, no dialog (Delacor's Scripter - Rename
+        Module.vi). The new name is checked first: not blank, a valid file name, no library of
+        that name in the project. Refused while any module has unsaved changes or is locked. The
+        answer reads the module back under its new name. Delacor SAVES THE WHOLE PROJECT, so
+        `modifiedFiles` is long; the project's virtual folder keeps the OLD `<Name> Module` label.
         """)]
     public async Task<string> RenameModuleAsync(
         [Description("DQMH module to rename, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
@@ -235,17 +255,133 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
                 Completion: RenameModuleCompletion), timeoutSeconds, ct);
         }));
 
+    [McpServerTool(Name = "lvai_dqmh_duplicate_module", Destructive = true, OpenWorld = true,
+        Title = "Duplicate a DQMH module")]
+    [Description("""
+        DQMH: copies a module of the ACTIVE project into a NEW module, no dialog - DQMH 7.x only
+        (`needsDqmh7` on 5/6). Events, API tester and Main.vi are copied and renamed; the RT tester
+        is not. The module goes into `<saveFolder>\<newModuleName>` and the project lists it. The
+        name is checked first: not blank, a valid file name, no library of that name, no non-empty
+        folder of that name. A source Main.vi still calling a VI that no longer exists makes
+        LabVIEW open a file dialog - remove such leftovers first. Refused while any module has
+        unsaved changes or is locked.
+        """)]
+    public async Task<string> DuplicateModuleAsync(
+        [Description("DQMH module to copy, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
+        [Description("Name of the new module, without .lvlib")] string newModuleName,
+        [Description("PARENT folder of the new module's folder, relative to the project folder or " +
+                     "absolute; empty means the folder that holds the source module's folder")]
+        string saveFolder = "",
+        [Description("Description of the new module's library")] string description = "",
+        [Description("Local budget in seconds")] int timeoutSeconds = 600,
+        [Description(DqmhTools.BackendDescription)] string? backend = null,
+        CancellationToken ct = default) =>
+        await Rpc.GuardAsync(() => DqmhTools.WithBackendAsync(backend, "lvai_dqmh_duplicate_module", async () =>
+        {
+            var newName = (newModuleName ?? "").Trim();
+            if (newName.EndsWith(".lvlib", StringComparison.OrdinalIgnoreCase)) newName = newName[..^6];
+            if (DqmhHeadless.EventRequestProblem(newName, 0, "", [], []) is { } problem)
+                return Json.Error("badArguments", problem.Replace("The event name", "newModuleName"));
+            var (_, _, projectPath) = await new ActionTools(connection).ProjectIsActiveAsync(timeoutSeconds, ct);
+            var projectDirectory = Path.GetDirectoryName(projectPath ?? "") ?? "";
+            string? folder = string.IsNullOrWhiteSpace(saveFolder) ? null
+                : Path.GetFullPath(Path.Combine(projectDirectory, saveFolder.Trim()));
+            return await RunAsync(new EditAction(
+                "duplicate module", "lvdqmh_duplicate_module", DuplicateModuleTargets, moduleName, null,
+                new()
+                {
+                    ["New Module Name"] = newName,
+                    ["Module Description"] = description ?? "",
+                    ["Save Folder"] = folder ?? "",
+                },
+                [], ctx => Task.FromResult(DuplicateModuleConflict(ctx, newName, folder)),
+                PostModuleName: newName + ".lvlib", SubHelpers: EventSubHelpers,
+                Completion: DuplicateModuleCompletion, V7Only: true,
+                LateInputs: ctx => folder is null
+                    ? new() { ["Save Folder"] = Path.GetDirectoryName(ctx.Folder.TrimEnd('\\')) ?? "" }
+                    : []), timeoutSeconds, ct);
+        }));
+
+    [McpServerTool(Name = "lvai_dqmh_add_helper_loop", Destructive = true, OpenWorld = true,
+        Title = "Add a helper loop to a DQMH module")]
+    [Description("""
+        DQMH: adds a helper loop to a module's Main.vi in the ACTIVE project, no dialog - DQMH 7.x
+        only (`needsDqmh7` on 5/6). The loop gets its own event structure, so a PRIVATE request can
+        name it as its consuming loop (lvai_dqmh_new_event requestScoping + consumingLoop). A name
+        Main.vi already has is refused. Refused while any module has unsaved changes or is locked.
+        """)]
+    public async Task<string> AddHelperLoopAsync(
+        [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
+        [Description("Name of the new helper loop, e.g. 'Acquisition Loop'")] string helperLoopName,
+        [Description("Local budget in seconds")] int timeoutSeconds = 600,
+        [Description(DqmhTools.BackendDescription)] string? backend = null,
+        CancellationToken ct = default) =>
+        await Rpc.GuardAsync(() => DqmhTools.WithBackendAsync(backend, "lvai_dqmh_add_helper_loop", () =>
+        {
+            var loop = (helperLoopName ?? "").Trim();
+            if (loop.Length == 0)
+                return Task.FromResult(Json.Error("badArguments", "helperLoopName is required."));
+            return RunAsync(new EditAction(
+                "add helper loop", "lvdqmh_add_helper_loop", HelperLoopTargets, moduleName, null,
+                new() { ["Helper Loop Name"] = loop }, [],
+                ctx => Task.FromResult(HelperLoopConflict(ctx, loop)),
+                SubHelpers: EventSubHelpers, Completion: HelperLoopCompletion, V7Only: true),
+                timeoutSeconds, ct);
+        }));
+
+    internal static readonly string[] DuplicateModuleTargets =
+    [
+        DqmhLayout.Support + "Parse Project for DQMH Modules.vi",
+        DqmhLayout.Support + "Close Scripting References.vi",
+        DqmhLayout.Support + "Get All Events in Module.vi",
+        @"project\Delacor\DQMH\_DQMH Duplicate Module\Scripter - Duplicate Module.vi",
+    ];
+
+    internal static readonly string[] HelperLoopTargets =
+    [
+        DqmhLayout.Support + "Parse Project for DQMH Modules.vi",
+        DqmhLayout.Support + "Close Scripting References.vi",
+        DqmhLayout.Support + "Get All Events in Module.vi",
+        DqmhLayout.Support + "Get Private Event Consuming Loops.vi",
+        @"project\Delacor\DQMH\_DQMH Add Helper Loop\Script New Helper Loop.vi",
+    ];
+
+    /// <summary>Delacor's OK to Proceed.vi: a free library name, and no folder full of files.</summary>
+    private static string? DuplicateModuleConflict(Context ctx, string newName, string? saveFolder)
+    {
+        if (LibraryNameTaken(ctx, newName) is { } taken) return taken;
+        var parent = saveFolder ?? Path.GetDirectoryName(ctx.Folder.TrimEnd('\\'));
+        var target = parent is null ? null : Path.Combine(parent, newName);
+        return target is not null && Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any()
+            ? $"The folder {target} already exists and is not empty - the new module's files would go there."
+            : null;
+    }
+
+    /// <summary>Delacor's dialog refuses a loop name Main.vi already has.</summary>
+    private static string? HelperLoopConflict(Context ctx, string loop)
+    {
+        var loops = DqmhHeadless.Listed(ctx.Dry, "Loop Names");
+        return DqmhHeadless.FindListed(loops, loop) is { } taken
+            ? $"Main.vi of {ctx.Module} already has a loop '{taken}' (loops: {string.Join(", ", loops)})."
+            : null;
+    }
+
+    private const string DuplicateModuleCompletion =
+        "Delacor copies the module as it is - a Main.vi or tester that was not executable stays that " +
+        "way in the copy - and does not copy the RT tester; create one with lvai_dqmh_create_rt_tester.";
+
+    private const string HelperLoopCompletion =
+        "Delacor's helper loop is a template: its event structure and case structure carry " +
+        "#CodeNeeded labels for the loop's own work.";
+
     [McpServerTool(Name = "lvai_dqmh_create_rt_tester", Destructive = true, OpenWorld = true,
         Title = "Create a DQMH RT tester")]
     [Description("""
-        MUTATING: creates the Real-Time API tester (`Test <Module> API-RT.vi`) of a DQMH module in
-        the ACTIVE project with NO dialog - Delacor's own Scripter - Create RT Tester.vi through a
-        generated wrapper. Delacor offers it for Singleton and Cloneable modules alike (measured:
-        its menu VI asks Parse for Both). Its scripter answers two cases with a MODAL - an RT tester
-        that already exists, and a standard tester it cannot find - so the dry run asks Delacor's
-        own finders first and refuses both by name. THE NEW RT TESTER IS NOT EXECUTABLE, by
-        Delacor's design: each request frame carries #CodeNeeded for its required inputs. Refused
-        while any module has unsaved changes or is locked.
+        DQMH: creates a module's Real-Time API tester (`Test <Module> API-RT.vi`) in the ACTIVE
+        project, no dialog; Singleton and Cloneable alike. An existing RT tester or a missing
+        standard tester is refused by name. THE NEW RT TESTER IS NOT EXECUTABLE by Delacor's
+        design: each request frame carries #CodeNeeded for its required inputs. Refused while any
+        module has unsaved changes or is locked.
         """)]
     public async Task<string> CreateRtTesterAsync(
         [Description("Cloneable DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
@@ -261,12 +397,10 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
     [McpServerTool(Name = "lvai_dqmh_remove_do_something", Destructive = true, OpenWorld = true,
         Title = "Remove a DQMH module's Do Something examples")]
     [Description("""
-        MUTATING: removes the "Do Something" example events from a DQMH module in the ACTIVE
-        project with NO dialog - Delacor's own Remove Do Something.vi, the step Add New DQMH
-        Module runs when its Do Something box is cleared, through a generated wrapper. It rescripts
-        Main.vi and the API tester, which stay executable (measured). A module that has no Do
-        Something event left is refused from the dry run - Delacor's VI answers Error 1055 for it.
-        Refused while any module has unsaved changes or is locked.
+        DQMH: removes the "Do Something" example events from a module in the ACTIVE project, no
+        dialog (Delacor's Remove Do Something.vi). Main.vi and the API tester are rescripted and
+        stay executable. A module with no Do Something event left is refused. Refused while any
+        module has unsaved changes or is locked.
         """)]
     public async Task<string> RemoveDoSomethingAsync(
         [Description("DQMH module, e.g. 'Heater' or 'Heater.lvlib'")] string moduleName,
@@ -358,11 +492,19 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
     /// it; the result is then read under that name.</param>
     /// <param name="Completion">What Delacor's scripter leaves for a person, said in the answer
     /// whenever Main.vi or the tester are not executable afterwards.</param>
+    /// <param name="V7Only">The function exists for DQMH 7.x only - its wrapper is the `_dqmh7`
+    /// document alone and `Targets` are 7.x locations.</param>
+    /// <param name="LateInputs">Inputs that depend on the dry run - the module's folder - added to
+    /// the scripted run only.</param>
+    /// <param name="ClassicOnly">The refusal when the call asks for something only DQMH 7.x
+    /// scripts and the station has the classic layout; null when the call works on both.</param>
     private sealed record EditAction(
         string Verb, string Helper, string[] Targets, string ModuleName, string? EventName,
         Dictionary<string, string> ExtraInputs, string[] ExtraOutputs,
         Func<Context, Task<string?>>? PreCheck, string? PostModuleName = null,
-        string[]? SubHelpers = null, bool SaveLibrary = false, string? Completion = null);
+        string[]? SubHelpers = null, bool SaveLibrary = false, string? Completion = null,
+        string? ClassicOnly = null, bool V7Only = false,
+        Func<Context, Dictionary<string, string>>? LateInputs = null);
 
     /// <summary>The two helpers every event-edit wrapper calls - see EnsureWrapperAsync.</summary>
     private static readonly string[] EventSubHelpers = ["lvdqmh_close_modules", "lvdqmh_pick_event"];
@@ -377,14 +519,27 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
             return Json.Error("badArguments", "moduleName is required.");
         if (action.EventName is not null && string.IsNullOrWhiteSpace(action.EventName))
             return Json.Error("badArguments", "eventName is required.");
+        var shippedHelper = action.V7Only ? action.Helper + DqmhLayout.Suffix : action.Helper;
         if (StatusTools.ScriptsDirectory() is not { } scripts
-            || !File.Exists(Path.Combine(scripts, action.Helper + ".xml")))
+            || !File.Exists(Path.Combine(scripts, shippedHelper + ".xml")))
             return Json.Error("scriptsMissing",
-                $"{action.Helper}.xml was not found in the scripts folder next to the exe.");
-        if (DqmhHeadless.TargetPaths(action.Targets) is not { } targets)
-            return Json.Error("dqmhMissing",
-                "Delacor DQMH is not installed, or this version lacks one of the scripting VIs.",
+                $"{shippedHelper}.xml was not found in the scripts folder next to the exe.");
+        var classicInstalled = false;
+        var route = action.V7Only
+            ? DqmhLayout.ResolveV7Only(scripts, action.Helper, action.Targets, action.SubHelpers,
+                out classicInstalled)
+            : DqmhLayout.Resolve(scripts, action.Helper, action.Targets, action.SubHelpers);
+        if (route is null && classicInstalled)
+            return Json.Error("needsDqmh7",
+                $"Delacor's {action.Verb} is driven for DQMH 7.x only, and this station has the classic " +
+                "DQMH layout (5.x/6.x). Use Delacor's own menu entry there.");
+        if (route is null)
+            return Json.Error("dqmhMissing", DqmhLayout.MissingMessage("one of the scripting VIs"),
                 new { lookedFor = action.Targets });
+        if (action.ClassicOnly is { } classicOnly && route.Generation == DqmhGeneration.Classic)
+            return Json.Error("badArguments", classicOnly);
+        var targets = route.Targets;
+        var helper = route.Helper;
 
         var stopwatch = Stopwatch.StartNew();
         var steps = new JsonArray();
@@ -398,8 +553,8 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
 
         var headless = new DqmhHeadless(connection);
         var dqmh = new DqmhTools(connection);
-        if (await headless.EnsureWrapperAsync(scripts, action.Helper, targets, projectPath, steps,
-                timeoutSeconds, ct, action.SubHelpers) is { } wrapperError)
+        if (await headless.EnsureWrapperAsync(scripts, helper, targets, projectPath, steps,
+                timeoutSeconds, ct, route.SubHelpers) is { } wrapperError)
             return wrapperError;
 
         // ---- 1. dry run, with Delacor's own spelling retried once per name ------------------
@@ -408,10 +563,10 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         IReadOnlyList<LvValuesXml.Value>? dry = null;
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            var (values, helperError) = await dqmh.RunDetailedAsync(scripts, action.Helper,
+            var (values, helperError) = await dqmh.RunDetailedAsync(scripts, helper,
                 Inputs(action, module, evt, script: false), timeoutSeconds, ct);
             if (values is null)
-                return Json.Error("helperMissing", $"{action.Helper} could not be run.", new { steps });
+                return Json.Error("helperMissing", $"{helper} could not be run.", new { steps });
             if (helperError is not null)
                 return Json.Error("helperFailed",
                     "The run helper stopped before the wrapper ran - an input could not be set.",
@@ -468,13 +623,13 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         var folder = DqmhTools.Scalar(dry!, "Library Owning Folder") ?? "";
         var mainVi = Path.Combine(folder, "Main.vi");
         var tester = Path.Combine(folder, $"Test {Path.GetFileNameWithoutExtension(module)} API.vi");
-        if (action.PreCheck is not null
-            && await action.PreCheck(new Context(module, evt, folder, events, dry!, async () =>
-            {
-                var (frames, code) = await headless.MainViCaseNamesAsync(mainVi, timeoutSeconds, ct);
-                steps.Add(new JsonObject { ["step"] = "readMainViFrames", ["errorCode"] = code, ["frames"] = frames.Count });
-                return frames;
-            })) is { } conflict)
+        var context = new Context(module, evt, folder, events, dry!, async () =>
+        {
+            var (frames, code) = await headless.MainViCaseNamesAsync(mainVi, timeoutSeconds, ct);
+            steps.Add(new JsonObject { ["step"] = "readMainViFrames", ["errorCode"] = code, ["frames"] = frames.Count });
+            return frames;
+        });
+        if (action.PreCheck is not null && await action.PreCheck(context) is { } conflict)
             return Json.Error("nameInUse", conflict, detail);
 
         // ---- 2. script ----------------------------------------------------------------------
@@ -500,8 +655,9 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         try
         {
             string? runHelperError;
-            (run, runHelperError) = await dqmh.RunDetailedAsync(scripts, action.Helper,
-                Inputs(action, module, evt, script: true), Math.Min(timeoutSeconds, 300), ct);
+            (run, runHelperError) = await dqmh.RunDetailedAsync(scripts, helper,
+                Late(Inputs(action, module, evt, script: true), action.LateInputs?.Invoke(context)),
+                Math.Min(timeoutSeconds, 300), ct);
             if (runHelperError is not null)
                 return Json.Error("helperFailed",
                     "The run helper stopped before the wrapper ran; nothing was scripted.",
@@ -525,7 +681,7 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
             await watch.DisposeAsync();
         }
         if (run is null)
-            return Json.Error("helperMissing", $"{action.Helper} could not be run.", new { steps });
+            return Json.Error("helperMissing", $"{helper} could not be run.", new { steps });
         steps.Add(Step("script", module, evt, run));
         if (DqmhTools.Failed(run) is { } error)
             return Json.Error("scriptingFailed",
@@ -540,7 +696,7 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         // A RENAMED module is read back under its new name - its folder, Main.vi and tester.
         if (action.PostModuleName is { } renamed)
         {
-            var (post, _) = await dqmh.RunDetailedAsync(scripts, action.Helper,
+            var (post, _) = await dqmh.RunDetailedAsync(scripts, helper,
                 Inputs(action, renamed, evt, script: false), timeoutSeconds, ct);
             if (post is not null)
             {
@@ -596,6 +752,8 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         {
             ["ok"] = true,
             ["action"] = action.Verb,
+            ["dqmhGeneration"] = route.GenerationName,
+            ["wrapper"] = helper,
             ["module"] = module,
             ["event"] = evt,
             ["mainViExecStateBefore"] = mainExecBefore,
@@ -616,6 +774,15 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         };
         foreach (var output in action.ExtraOutputs)
             answer[Camel(output)] = DqmhTools.Scalar(run, output);
+        // 7.x answers the dependent broadcasts of a removed request as a LIST - a request may take
+        // several with it - where the classic check named one.
+        if (route.Generation == DqmhGeneration.V7
+            && action.ExtraOutputs.Contains("Dependent Broadcast Name"))
+        {
+            var names = DqmhHeadless.Listed(run, "Dependent Broadcast Names");
+            answer["dependentBroadcastNames"] = DqmhHeadless.Array(names);
+            answer["dependentBroadcastName"] = names.Count == 0 ? "" : string.Join(", ", names);
+        }
         if (mainExec is 0 && mainExecBefore is not 0)
             answer["warning"] = "Main.vi was executable before and is NOT after this call - read " +
                                 "its errors before going on.";
@@ -679,6 +846,14 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
                 string.Equals(f, newName, StringComparison.OrdinalIgnoreCase)) is { } frame)
             return $"Main.vi already has a case named '{frame}'.";
         return null;
+    }
+
+    /// <summary>The scripted run's inputs with the ones that depended on the dry run added.</summary>
+    private static Dictionary<string, string> Late(Dictionary<string, string> inputs,
+        Dictionary<string, string>? late)
+    {
+        foreach (var (key, value) in late ?? []) inputs[key] = value;
+        return DqmhHeadless.Sendable(inputs);
     }
 
     private static Dictionary<string, string> Inputs(EditAction action, string module, string? evt, bool script)

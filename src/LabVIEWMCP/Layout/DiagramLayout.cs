@@ -226,9 +226,18 @@ internal static class DiagramLayout
         var plain = ArrangeCore(ctx, d, isTop, useBands: false, out var plainScore, out var bandsPossible, out var chains, extraGap);
         if (!bandsPossible || !ctx.Bands) return plain;
         var banded = ArrangeCore(ctx, d, isTop, useBands: true, out var bandedScore, out _, out _, extraGap);
+        // THE SIZE BUDGET DECIDES FIRST, when exactly one of the two fits it. Measured 2026-11-01 on
+        // a generated test of the pump-station build: three cases with three assertions laid out in
+        // columns at 1432 x 350; the same with a fourth assertion was banded at 1033 x 1110 - over
+        // the 1080 px budget, beside a column arrangement that fits - because bands won on
+        // crossings. Crossings still decide when both fit, or neither.
+        if (isTop && Fits(plain) != Fits(banded)) return Fits(plain) ? plain : banded;
         return bandedScore.Crossings < plainScore.Crossings
                || (chains && bandedScore.Crossings == plainScore.Crossings && bandedScore.Vertical < plainScore.Vertical)
             ? banded : plain;
+
+        static bool Fits(Arrangement a) =>
+            a.W <= LabVIEWMcp.Infra.DiagramSize.MaxWidth && a.H <= LabVIEWMcp.Infra.DiagramSize.MaxHeight;
     }
 
     private static Arrangement ArrangeCore(Context ctx, Diagram d, bool isTop, bool useBands,
@@ -279,6 +288,15 @@ internal static class DiagramLayout
         var notes = new List<DObject>();
         foreach (var t in labels)
         {
+            // a comment with an ARROW hangs on what the arrow points at, however far off it sat:
+            // as a note it went to a corner and its arrow ran across the diagram (DQMH 7.x loose
+            // #CodeNeeded calls, 2026-10-30)
+            if (CommentArrows.TargetOf(t, layoutNodes, ctx.Model.Arrows) is { } pointed)
+            {
+                if (!anchored.TryGetValue(pointed, out var own)) anchored[pointed] = own = [];
+                own.Add(t);
+                continue;
+            }
             // a frame's own note goes to the top of the frame whatever it sits next to: NI's
             // clean-up puts such blocks beside any node, so nearness says nothing about them
             if (d.Owner is not null && (t.Box.H >= FrameNoteHeight || t.Box.W > NoteWidth))
