@@ -129,7 +129,7 @@ internal static class AixmlCheck
                            .Where(e => (string?)e.Attribute("uid") is { Length: > 0 })
                            .ToList();
 
-        CheckDuplicateUids(elements, findings);
+        CheckDuplicateUids(root, elements, findings);
         CheckParents(root, elements, findings);
         CheckNesting(root, findings);
         CheckRings(root, findings);
@@ -538,25 +538,44 @@ internal static class AixmlCheck
     /// Two elements sharing a uid. NOT caught by LabVIEW, which silently renumbers one of them -
     /// measured: a file written with 9010 / 9020 / 9010 came back as 9045 / 9020 / 9010.
     ///
-    /// A WARNING RATHER THAN AN ERROR, because nothing breaks: the VI generated and ran. What you
-    /// lose is the correspondence between the file you wrote and the file you get back, and WHICH
-    /// of the two is renumbered is the generator's choice. <c>uid="0"</c> is exempt: it asks for no
-    /// number at all and was measured reusable.
+    /// A WARNING when nothing is nested inside the uid, because nothing breaks: the VI generated and
+    /// ran, and Fix renumbers it. What you lose is the correspondence between the file you wrote and
+    /// the file you get back. <c>uid="0"</c> is exempt: it asks for no number at all and was
+    /// measured reusable.
+    ///
+    /// AN ERROR (<c>duplicateParentUid</c>) when some element names the uid as its uid_parent: which
+    /// twin is the parent cannot be told, Fix leaves it alone, and the pylabview composer resolved
+    /// uid_parent through a map that keeps the LAST twin - so the children landed in the later
+    /// structure. Session-7 report M9, 2026-11-03: a new loop reused a later Case Structure's uids,
+    /// composed with only this warning, and the VI failed elsewhere. The composer refuses it now too.
     /// </summary>
-    private static void CheckDuplicateUids(List<XElement> elements, List<Finding> findings)
+    private static void CheckDuplicateUids(XElement root, List<XElement> elements, List<Finding> findings)
     {
         var duplicates = elements
             .Select(e => (string)e.Attribute("uid")!)
             .Where(uid => uid != Sentinel)
             .GroupBy(uid => uid, StringComparer.Ordinal)
             .Where(group => group.Count() > 1);
+        var parents = root.DescendantsAndSelf()
+            .Select(e => (string?)e.Attribute("uid_parent"))
+            .Where(p => p is { Length: > 0 })
+            .ToHashSet(StringComparer.Ordinal);
 
         foreach (var group in duplicates)
-            findings.Add(new Finding(Severity.Warning, "duplicateUid",
-                $"uid \"{group.Key}\" is used by {group.Count()} elements. LabVIEW accepts this and "
-                + "silently renumbers one of them, so the export will not match this file. "
-                + "Only uid=\"0\" may legally repeat.", group.Key));
+            findings.Add(parents.Contains(group.Key)
+                ? new Finding(Severity.Error, DuplicateParentUid,
+                    $"uid \"{group.Key}\" is used by {group.Count()} elements AND something is nested " +
+                    "inside it (a uid_parent names it), so which of them is the parent cannot be " +
+                    "told: LabVIEW renumbers one in silence, and the pylabview composer puts the " +
+                    "children into the LAST one. Give each element its own uid.", group.Key)
+                : new Finding(Severity.Warning, "duplicateUid",
+                    $"uid \"{group.Key}\" is used by {group.Count()} elements. LabVIEW accepts this and "
+                    + "silently renumbers one of them, so the export will not match this file. "
+                    + "Only uid=\"0\" may legally repeat.", group.Key));
     }
+
+    /// <summary>A shared uid something is nested inside - an error, see CheckDuplicateUids.</summary>
+    internal const string DuplicateParentUid = "duplicateParentUid";
 
     /// <summary>
     /// A <c>uid_parent</c> naming no element. THE ONE THAT SILENTLY CHANGES THE DIAGRAM - see the

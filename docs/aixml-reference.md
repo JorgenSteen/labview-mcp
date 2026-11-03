@@ -2306,7 +2306,8 @@ Built 2026-09-04 out of the negative-test matrix above. It covers ONLY the three
 | finding | severity | why |
 |---|---|---|
 | `danglingParent` — a `uid_parent` naming no element | **error** | LabVIEW silently reparents the element to the TOP-LEVEL diagram. A node meant to sit inside a For Loop ends up outside it, changing what the diagram does, with nothing reported at validate, convert or run |
-| `duplicateUid` | warning | LabVIEW renumbers one of them silently, so the export stops matching the file. `uid="0"` is exempt - it asks for no number and was measured reusable |
+| `duplicateUid` | warning, **repaired** when nothing is nested inside it | LabVIEW renumbers one of them silently, so the export stops matching the file. `uid="0"` is exempt - it asks for no number and was measured reusable |
+| `duplicateParentUid` — a shared uid that a `uid_parent` names | **error** (since 2026-11-03) | which twin is the parent cannot be told, so it is not repaired; the pylabview composer put the children into the LAST twin in silence and refuses it now. Found when a new loop reused a later Case Structure's uids (session-7 report M9) |
 | `ringValueNotInValues` | warning | accepted with `errorCode 0` |
 | `enumValueIsALabel` — `value="open or create"` where the type lists that label | warning, **repaired** to the index | LabVIEW DISCARDS the label and writes `0`, `errorCode 0`. Repairable because a label names exactly one item |
 | `enumValueOutOfRange` — an index past the last item | warning, not repaired | LabVIEW CLAMPS it — measured, 9 became 4 on a five-item enum. Which item was meant is not knowable |

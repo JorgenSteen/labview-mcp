@@ -2340,6 +2340,23 @@ type is the table's enum, `uint16{Share clones between instances,Preallocate clo
 Not measured on LabVIEW 2025 itself, where the report came from - the composer's table is the same
 for every release.
 
+## A shared uid with something nested in it, and a bare property refusal (fixed 2026-11-03)
+
+Session-7 report M9. **A uid two elements share AND a `uid_parent` names** was composed in silence:
+the composer resolves `uid_parent` through a map that keeps the LAST twin, so a new loop that reused
+a later Case Structure's uids had its children put into the case structure, and the VI failed
+elsewhere. `lvai_check_aixml` only warned `duplicateUid`, and `lvai_generate_vi` - whose repair
+renumbers a twin only when nothing is nested in it - went ahead. Now the composer refuses it ("uid N
+is used by more than one element and something is nested inside it") and the check reports
+`duplicateParentUid` as an ERROR, so lvai_generate_vi stops before writing. A twin nothing is nested
+in still composes and is still only a warning. Swept first: none of 526 AIXML documents in the
+repository nor of 2169 cached NI exports has either kind.
+
+**A refused property names the one meant** when one is close: spaces, colons, dots and case are
+ignored first, then difflib over the class's names - `read+ClassName` on `{LV.VI}` is refused with
+"did you mean 'Class Name'?". On `{LV.Control}` the table carries `ClassName` as the short name of
+`Class Name`, so it composes there and the check's `propertyNameNotKnown` is only a prompt.
+
 ## Not covered, and not measured
 
 - **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the

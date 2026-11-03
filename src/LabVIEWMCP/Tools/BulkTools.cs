@@ -278,6 +278,8 @@ internal sealed class BulkTools(LvaiConnection connection)
                         "fault rather than fix it. Name the structure's real uid. " +
                         "`uidParentContradictsNesting` is its converse: an element written INSIDE " +
                         "a structure whose uid_parent names something else lands inside it anyway. " +
+                        "`duplicateParentUid`: two elements share a uid that something is nested " +
+                        "in, so its parent is a guess - give each its own uid. " +
                         "`noRequiredInput` is the rule for a VI generated completely new: one input " +
                         "must be required - `error in`, or without one its most important input. " +
                         "lvai_convert_aixml_to_vi still generates it if you want LabVIEW's own " +

@@ -343,7 +343,8 @@ internal sealed class AixmlTools(LvaiConnection connection)
         `outputs="value:"`) - each costs the WHOLE document as `Error -2628` with nothing written;
         `propertyNameUnknown`, a property name with its category dropped (`read+Version Number` on
         {LV.Application} killed LabVIEW; lvai_convert_aixml_to_vi and lvai_validate_aixml REFUSE such
-        a document before the RPC); `noRequiredInput` on a new VI.
+        a document before the RPC); `noRequiredInput` on a new VI; `duplicateParentUid`, a shared
+        `uid` something is nested inside (which twin is the parent cannot be told).
         WARNINGS: a duplicate `uid` (renumbered silently); a Ring default not in its `values`; an
         enum `value` given as a LABEL (written as 0) or past the last item (clamped); a pane terminal
         with no `connection` (read as REQUIRED - a required output breaks every caller with 1003); a
