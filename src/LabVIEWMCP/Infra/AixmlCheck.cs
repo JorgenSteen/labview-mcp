@@ -143,6 +143,7 @@ internal static class AixmlCheck
         CheckNonFiniteConstants(root, findings);
         CheckCommentLength(root, findings);
         CheckControlReadBeforeWait(root, findings);
+        CheckStopModuleNotLast(root, findings);
         CheckWebBrowserReference(root, findings);
         CheckReservedRange(elements, findings);
         CheckMalleableName(root, findings);
@@ -1075,6 +1076,111 @@ internal static class AixmlCheck
                 + "Harmless for a setting POLLED once per iteration, such as a stop button or a "
                 + "delay - 5 of 739 NI examples do that on purpose; wrong for data a command acts on.",
                 (string?)control.Attribute("uid")));
+        }
+    }
+
+    /// <summary>
+    /// A call into a DQMH module's library that is not wired BEFORE that library's
+    /// <c>Stop Module.vi</c> on the same diagram. WARNING, code <c>stopModuleNotLast</c>.
+    ///
+    /// Nothing orders two nodes that no wire connects, so Stop Module then runs in parallel with
+    /// the request, and the module may stop before it answers. Session-7 report M7, 2026-11-03:
+    /// every Request and Wait for Reply of a headless caller timed out (403686 after the module's
+    /// 5 s), on the user's module and on Delacor's untouched template alike, and the run route was
+    /// suspected. The cause was the caller: Stop Module took its `error in` from Synchronize Module
+    /// Events, beside the request. Measured on LabVIEW 2026 over the same ActiveX route: wired that
+    /// way, 403686 after 5.4 s; with Stop Module wired after the request's `error out`, the reply in
+    /// 1.2 s, twice. Each structure on the diagram counts as one node - anything wired out of it
+    /// waits for all of it - and a call in another diagram than Stop Module's is not judged.
+    /// </summary>
+    private static void CheckStopModuleNotLast(XElement root, List<Finding> findings)
+    {
+        foreach (var stop in root.Descendants("Call"))
+        {
+            if (DqmhCall(stop) is not { IsStop: true } stopCall || stop.Parent is not { } diagram) continue;
+
+            XElement? On(XElement e)
+            {
+                var x = e;
+                while (x.Parent is not null && x.Parent != diagram) x = x.Parent;
+                return x.Parent == diagram ? x : null;
+            }
+
+            var producer = new Dictionary<string, XElement>(StringComparer.Ordinal);
+            foreach (var e in diagram.Descendants())
+                if (On(e) is { } rep)
+                    foreach (var net in NetsOf((string?)e.Attribute("outputs")))
+                        producer[net] = rep;
+            var next = new Dictionary<XElement, HashSet<XElement>>();
+            foreach (var e in diagram.Descendants())
+                if (On(e) is { } rep)
+                    foreach (var net in NetsOf((string?)e.Attribute("inputs")))
+                        if (producer.TryGetValue(net, out var from) && from != rep)
+                        {
+                            if (!next.TryGetValue(from, out var set)) next[from] = set = [];
+                            set.Add(rep);
+                        }
+
+            bool Reaches(XElement from, XElement to)
+            {
+                var seen = new HashSet<XElement> { from };
+                var queue = new Queue<XElement>([from]);
+                while (queue.TryDequeue(out var x))
+                    foreach (var y in next.GetValueOrDefault(x) ?? [])
+                    {
+                        if (y == to) return true;
+                        if (seen.Add(y)) queue.Enqueue(y);
+                    }
+                return false;
+            }
+
+            foreach (var call in diagram.Descendants("Call"))
+            {
+                if (call == stop || DqmhCall(call) is not { IsStop: false } other
+                    || !string.Equals(other.Library, stopCall.Library, StringComparison.OrdinalIgnoreCase)
+                    || On(call) is not { } rep || Reaches(rep, stop))
+                    continue;
+                var after = Reaches(stop, rep);
+                findings.Add(new Finding(Severity.Warning, StopModuleNotLast,
+                    $"{other.Vi} of {other.Library} is not wired before its Stop Module.vi (uid " +
+                    $"{(string?)stop.Attribute("uid")}): " +
+                    (after
+                        ? "it runs AFTER the module was stopped. "
+                        : "no wire orders the two, so they run in parallel and the module may stop " +
+                          "before it answers - a Request and Wait for Reply then times out (403686) " +
+                          "after the module's timeout. ") +
+                    "Measured 2026-11-03 on Delacor's own template: 403686 after 5.4 s with Stop " +
+                    "Module wired beside the request, the reply in 1.2 s with it wired after. Wire " +
+                    "Stop Module's error in from the last call's error out.",
+                    (string?)call.Attribute("uid")));
+            }
+        }
+    }
+
+    /// <summary>The code of <see cref="CheckStopModuleNotLast"/>.</summary>
+    internal const string StopModuleNotLast = "stopModuleNotLast";
+
+    /// <summary>A Call into a library, `Lib.lvlib\3AVI.vi`, split; null for any other target.</summary>
+    private static (string Library, string Vi, bool IsStop)? DqmhCall(XElement call)
+    {
+        var target = ((string?)call.Attribute("target") ?? "").Replace("\\3A", ":", StringComparison.OrdinalIgnoreCase);
+        var colon = target.IndexOf(".lvlib:", StringComparison.OrdinalIgnoreCase);
+        if (colon < 0) return null;
+        var library = target[..(colon + ".lvlib".Length)];
+        var vi = target[(colon + ".lvlib:".Length)..];
+        return (library, vi, string.Equals(vi, "Stop Module.vi", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The net names of an `inputs`/`outputs` list: what follows each entry's last colon.</summary>
+    private static IEnumerable<string> NetsOf(string? list)
+    {
+        if (string.IsNullOrEmpty(list)) yield break;
+        foreach (var entry in list.Split(','))
+        {
+            var colon = entry.LastIndexOf(':');
+            if (colon < 0) continue;
+            var net = entry[(colon + 1)..].Trim();
+            if (net.Length > 0) yield return net;
         }
     }
 

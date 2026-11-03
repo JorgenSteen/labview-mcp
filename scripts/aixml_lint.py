@@ -1747,6 +1747,102 @@ def check_web_browser_reference(elements: list[_El]) -> list[Finding]:
     return findings
 
 
+def _dqmh_call(el) -> tuple[str, str, bool] | None:
+    """A Call into a library, `Lib.lvlib\\3AVI.vi`, split; None for any other target."""
+    target = re.sub(r"\\3[Aa]", ":", el.get("target") or "")
+    at = target.lower().find(".lvlib:")
+    if at < 0:
+        return None
+    library, vi = target[: at + len(".lvlib")], target[at + len(".lvlib:"):]
+    return library, vi, vi.lower() == "stop module.vi"
+
+
+def _nets_of(value: str | None) -> list[str]:
+    out = []
+    for entry in (value or "").split(","):
+        colon = entry.rfind(":")
+        if colon >= 0 and entry[colon + 1:].strip():
+            out.append(entry[colon + 1:].strip())
+    return out
+
+
+def check_stop_module_not_last(elements: list[_El]) -> list[Finding]:
+    """A call into a DQMH module's library that is not wired BEFORE that library's Stop
+    Module.vi on the same diagram.
+
+    No wire orders the two, so Stop Module runs in parallel and the module may stop before it
+    answers. Session-7 report M7, 2026-11-03: every Request and Wait for Reply of a headless
+    caller timed out (403686 after the module's 5 s), Delacor's untouched template included,
+    because Stop Module took its error in from Synchronize Module Events. Measured on LabVIEW
+    2026: 403686 after 5.4 s wired that way, the reply in 1.2 s with Stop Module after the
+    request. Each structure on the diagram is one node; a call in another diagram is not judged.
+
+    Kept equal to AixmlCheck.CheckStopModuleNotLast on the C# side.
+    """
+    findings: list[Finding] = []
+    for stop in elements:
+        if stop.tag != "Call" or stop.lexical_parent is None:
+            continue
+        parsed = _dqmh_call(stop.el)
+        if parsed is None or not parsed[2]:
+            continue
+        diagram = stop.lexical_parent
+
+        def on(e, diagram=diagram):
+            x = e
+            while x.lexical_parent is not None and x.lexical_parent is not diagram:
+                x = x.lexical_parent
+            return x if x.lexical_parent is diagram else None
+
+        under = [(e, on(e)) for e in elements if e is not diagram]
+        under = [(e, rep) for e, rep in under if rep is not None]
+        producer = {}
+        for e, rep in under:
+            for net in _nets_of(e.el.get("outputs")):
+                producer[net] = rep
+        nxt: dict[int, list] = collections.defaultdict(list)
+        for e, rep in under:
+            for net in _nets_of(e.el.get("inputs")):
+                src = producer.get(net)
+                if src is not None and src is not rep:
+                    nxt[id(src)].append(rep)
+
+        def reaches(a, b, nxt=nxt) -> bool:
+            seen, todo = {id(a)}, [a]
+            while todo:
+                for y in nxt.get(id(todo.pop()), ()):
+                    if y is b:
+                        return True
+                    if id(y) not in seen:
+                        seen.add(id(y))
+                        todo.append(y)
+            return False
+
+        for call, rep in under:
+            if call.tag != "Call" or call is stop:
+                continue
+            other = _dqmh_call(call.el)
+            if other is None or other[2] or other[0].lower() != parsed[0].lower() or reaches(rep, stop):
+                continue
+            after = reaches(stop, rep)
+            findings.append(
+                Finding(
+                    "warning",
+                    "stop-module-not-last",
+                    call.uid,
+                    call.label(),
+                    call.path,
+                    f"{other[1]} of {other[0]} is not wired before its Stop Module.vi (uid {stop.uid}): "
+                    + ("it runs AFTER the module was stopped. " if after else
+                       "no wire orders the two, so they run in parallel and the module may stop "
+                       "before it answers - a Request and Wait for Reply then times out (403686) "
+                       "after the module's timeout. ")
+                    + "Wire Stop Module's error in from the last call's error out.",
+                )
+            )
+    return findings
+
+
 def lint_file(path: str, new_vi: bool = False) -> list[Finding]:
     try:
         root = ET.parse(path).getroot()
@@ -1792,6 +1888,7 @@ def lint_file(path: str, new_vi: bool = False) -> list[Finding]:
     findings += check_comment_length(elements)
     findings += check_control_read_before_wait(elements)
     findings += check_web_browser_reference(elements)
+    findings += check_stop_module_not_last(elements)
     findings += check_value_escapes(elements)
     findings += check_case_tunnels(elements)
     findings += check_raw_colons(elements)

@@ -350,7 +350,9 @@ internal sealed class AixmlTools(LvaiConnection connection)
         with no `connection` (read as REQUIRED - a required output breaks every caller with 1003); a
         non-empty `timestamp` value (silently discarded - a round-trip test then compares empty with
         empty and passes); `propertyNameNotKnown`/`methodNameNotKnown`/`viServerClassUnknown` with the
-        nearest known name (a prompt to verify, not a verdict). INFO: uids in LabVIEW's reserved range.
+        nearest known name (a prompt to verify, not a verdict); `stopModuleNotLast`, a call into a
+        DQMH module not wired before its Stop Module.vi (a reply then times out, 403686). INFO: uids
+        in LabVIEW's reserved range.
         Not checked: an attribute the schema does not declare (`text` on FreeLabel) - ValidateAIXML
         names it with line and column.
         `fix` writes a missing value literal for a Control/Indicator but NEVER for a Constant (the

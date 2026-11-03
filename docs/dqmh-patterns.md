@@ -382,6 +382,13 @@ Unregister For Events
 Stop Module.vi
 ```
 
+**`Stop Module.vi` goes LAST BY WIRE**, its `error in` from the last request's `error out` - not
+from `Synchronize Module Events.vi`. Two nodes no wire connects run in parallel, so the stop
+can reach the module before a request does, and a Request and Wait for Reply then times out
+with 403686 after the module's timeout. Measured 2026-11-03 on Delacor's own template (LabVIEW
+2026, a headless caller): 403686 after 5.4 s with Stop Module wired beside the request, the
+reply in 1.2 s with it wired after. `lvai_check_aixml` warns `stopModuleNotLast`.
+
 Requests need no ceremony: a request VI is just a subVI call
 (`<Module>.lvlib\3AShow Panel.vi`), because the event refnums are obtained inside it.
 
