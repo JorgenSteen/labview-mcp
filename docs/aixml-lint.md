@@ -334,6 +334,7 @@ So that a local call is enough to release a document:
 | `conn-required-output` | error | an explicit `connection="required"` on an Indicator does the same damage as omitting it |
 | `case-frame-missing-out-tunnel` | error | an `Out` tunnel a frame does not assign leaves that case's output unwired |
 | `case-frame-orphan-tunnel` | error | a frame-level `_id` the structure never declared connects to nothing outside |
+| `stop-module-not-last` | warning | a call into a DQMH module's library that no wire orders BEFORE that library's `Stop Module.vi` on the same diagram (C#: `stopModuleNotLast`). They run in parallel and the module may stop first: a Request and Wait for Reply then times out with 403686. Session-7 report M7, 2026-11-03 - measured on LabVIEW 2026 with Delacor's template, 403686 after 5.4 s wired that way, the reply in 1.2 s with Stop Module after the request. Over 2563 documents (repository and every cached NI export, 11 calling Stop Module) it flags none |
 
 ## Four checks were proposed; the corpus rewrote two of them and exposed a fifth
 

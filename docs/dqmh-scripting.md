@@ -1476,10 +1476,20 @@ Accepted over raw stdio on a fresh Singleton module (`C:\temp\DQMH_PlaceFix`, on
 `errorChain` `spliced;1;` for the Request, Main.vi `execState 1`, and the rendered diagram shows
 both handlers inside their frames with the error wire running through the Request's handler.
 
-**Still open: the `#DQMH_CodeNeeded` label of a DQMH 7.1 frame is NOT deleted.** The dry run
-lists no such text among the frame's decorations, so the cause is not only the pattern - it
-was `^#CodeNeeded` and is `^#[A-Z_]*CodeNeeded` now, because `Match Pattern` has no groups and
-`^#(DQMH_)?CodeNeeded` would match neither spelling. Where 7.1 keeps that label is not measured.
+**The `#DQMH_CodeNeeded` label of a DQMH 7.x frame IS deleted, and was all along once the
+pattern was `^#[A-Z_]*CodeNeeded`** (`Match Pattern` has no groups, so `^#(DQMH_)?CodeNeeded`
+would match neither spelling). This section said until 2026-11-03 that it was NOT deleted,
+because the dry run seemed to list no such text. That reading was the C# side's: the label is
+`#DQMH_CodeNeeded` + LF + Delacor's instructions, and `DqmhTools.Strings` read the helper's
+`Decoration Texts` array one LINE at a time, so an element with a line break had its `<Val>` and
+`</Val>` on different lines and was dropped in silence - `codeNeededTextsBefore` answered 0 while
+the helper's own `Match Pattern` saw the whole text and deleted it. Found by a user running the
+helper directly (session-7 report M8); the reader parses the array as XML now (with Dimsize, so an
+empty array is no strings), and the tool reads the frame again after placing:
+`codeNeededTextsAfter`. Measured on LabVIEW 2026 over gRPC, a fresh DQMH 7 Singleton with two plain
+Requests: the installed build answered `codeNeededTextsBefore: 0` for one frame, the fixed build
+`1` and `codeNeededTextsAfter: 0` for the other, and the saved Main.vi's export carried no
+`CodeNeeded` text in either frame - only Delacor's three template labels in its other frames.
 
 ### 9i. Every DQMH tool on the pylabview backend - no NI service, measured 2026-10-13
 

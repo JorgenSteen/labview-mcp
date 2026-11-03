@@ -35,9 +35,9 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     /// nothing and said `codeNeededTextsBefore: 0` (found in the DQMH_EscapingTest build of
     /// 2026-10-31). A pattern for the helper's Match Pattern, which is NOT a full regular
     /// expression: it has no groups, so `^#(DQMH_)?CodeNeeded` would match neither spelling.
-    /// A character class with `*` it does have. Whether the 7.x labels are reached at all is not
-    /// measured: the dry run listed no #DQMH_CodeNeeded text in a 7.1 frame, so the deletion may
-    /// need the label's class too.
+    /// A character class with `*` it does have. The 7.x label IS reached and deleted (session-7
+    /// report M8, 2026-11-03): it holds a line break, and the dry run only seemed to list no such
+    /// text because DqmhTools.Strings read the answer one line at a time.
     /// </summary>
     internal const string CodeNeededPattern = "^#[A-Z_]*CodeNeeded";
 
@@ -65,7 +65,8 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         `ok` is false when the handler lands OUTSIDE the frame (`placement` is read back) or its
         error out reaches nothing. An input or field with no partner is reported, never guessed;
         a frame already holding a subVI is refused. The #CodeNeeded text is deleted and Main.vi
-        saved; its exec state before and after is reported. Use `dryRun` first.
+        saved; the frame is read again (codeNeededTextsAfter) and Main.vi's exec state before and
+        after is reported. Use `dryRun` first.
         Needs the module's project OPEN and ACTIVE.
         """)]
     public async Task<string> PlaceHandlerAsync(
@@ -210,6 +211,15 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             var connected = DqmhHeadless.Listed(placed, "Connected");
             var missing = DqmhHeadless.Listed(placed, "Missing");
             var error = DqmhTools.Failed(placed);
+            // the frame read again: the helper reports no deletion of its own, and "deleted" was
+            // only ever inferred from the pattern (session-7 report M8)
+            var (after, _) = await dqmh.RunDetailedAsync(scripts, Helper, new()
+            {
+                ["Main VI Path"] = mainVi,
+                ["Frame Name"] = frameName,
+                ["Dry Run"] = "true",
+            }, timeoutSeconds, ct);
+            var textsAfter = after is null ? null : DqmhHeadless.Listed(after, "Decoration Texts");
             var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
             var expected = plan.Arguments.Count + (plan.ErrorIn && !splice ? 1 : 0) + plan.Replies.Count
                            + (mergeErrors ? 1 : 0);
@@ -232,6 +242,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["missing"] = DqmhHeadless.Array(missing),
                 ["error"] = error,
                 ["codeNeededTextsBefore"] = texts.Count(IsCodeNeeded),
+                ["codeNeededTextsAfter"] = textsAfter?.Count(IsCodeNeeded),
                 ["mainViExecStateBefore"] = mainBefore,
                 ["mainViExecState"] = mainAfter,
                 ["note"] = mainAfter is 1

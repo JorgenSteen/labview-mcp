@@ -343,13 +343,16 @@ internal sealed class AixmlTools(LvaiConnection connection)
         `outputs="value:"`) - each costs the WHOLE document as `Error -2628` with nothing written;
         `propertyNameUnknown`, a property name with its category dropped (`read+Version Number` on
         {LV.Application} killed LabVIEW; lvai_convert_aixml_to_vi and lvai_validate_aixml REFUSE such
-        a document before the RPC); `noRequiredInput` on a new VI.
+        a document before the RPC); `noRequiredInput` on a new VI; `duplicateParentUid`, a shared
+        `uid` something is nested inside (which twin is the parent cannot be told).
         WARNINGS: a duplicate `uid` (renumbered silently); a Ring default not in its `values`; an
         enum `value` given as a LABEL (written as 0) or past the last item (clamped); a pane terminal
         with no `connection` (read as REQUIRED - a required output breaks every caller with 1003); a
         non-empty `timestamp` value (silently discarded - a round-trip test then compares empty with
         empty and passes); `propertyNameNotKnown`/`methodNameNotKnown`/`viServerClassUnknown` with the
-        nearest known name (a prompt to verify, not a verdict). INFO: uids in LabVIEW's reserved range.
+        nearest known name (a prompt to verify, not a verdict); `stopModuleNotLast`, a call into a
+        DQMH module not wired before its Stop Module.vi (a reply then times out, 403686). INFO: uids
+        in LabVIEW's reserved range.
         Not checked: an attribute the schema does not declare (`text` on FreeLabel) - ValidateAIXML
         names it with line and column.
         `fix` writes a missing value literal for a Control/Indicator but NEVER for a Constant (the

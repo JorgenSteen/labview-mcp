@@ -3603,6 +3603,23 @@ class Composer:
             self._cat = cat
         return cat
 
+    def _nearest_property(self, cls, name):
+        """The known property name `name` most likely meant, for a refusal's text, or None. The
+        refusal named none, so `read+ClassName` cost a round trip where lvai_check_aixml had already
+        said `Class Name` (session-7 report M9, 2026-11-03). Spaces, colons, dots and case are
+        ignored first - that is the usual slip - then difflib over the class's own names."""
+        import difflib
+        table = self._vi_server_table()["props"]
+        own = set(table.get(cls, {})) | {n for c, n in self._catalogue() if c == cls}
+        every = own | {n for props in table.values() for n in props}
+        squash = lambda s: re.sub(r"[\s:._?]", "", s).lower()
+        for pool in (own, every):
+            same = sorted(n for n in pool if squash(n) == squash(name))
+            if same:
+                return same[0]
+        close = difflib.get_close_matches(name, sorted(own), n=1, cutoff=0.75)
+        return close[0] if close else None
+
     def _hgrow_terms(self, node):
         """The four fixed terminals of a property/invoke node by role: their DCO objFlags are
         0x10000 reference, 0x40001 reference out, 0x20000 error in, 0x80001 error out."""
@@ -3678,7 +3695,10 @@ class Composer:
                 if items_sub is not None:
                     cls, items, crow = sub, items_sub, table["classes"][sub]
         if items is None:
-            raise Unsupported("Property Node %s: property %r of %s is not in the harvested table" % (el.get("uid"), missing, cls))
+            near = self._nearest_property(cls, missing) if isinstance(missing, str) else None
+            raise Unsupported("Property Node %s: property %r of %s is not in the harvested table%s"
+                              % (el.get("uid"), missing, cls,
+                                 " - did you mean %r?" % near if near and near != missing else ""))
         diag = self.diag_of(el)
         got = self.instantiate("node/propNode/implicit" if linked else "node/propNode", own_uid=el.get("uid"))
         if got is None:
@@ -9888,6 +9908,22 @@ class Composer:
                 labels.append(el)
             else:
                 raise Unsupported("element <%s> is not composable yet" % el.tag)
+        # A uid two elements share AND something names as its uid_parent is ambiguous: this map
+        # keeps the LAST twin, so the children went into the later structure in silence (session-7
+        # report M9, 2026-11-03 - a new loop reused a later Case Structure's uids and the VI failed
+        # elsewhere). lvai_check_aixml calls it duplicateParentUid, an error. A shared uid nothing
+        # is nested in harmed nothing here and is renumbered by the C# side's repair; uid="0" asks
+        # for no number. None of 526 shipped AIXML documents nor 2169 cached NI exports has one.
+        seen, twins = set(), set()
+        for e in elements:
+            u = e.get("uid")
+            if u and u != "0":
+                (twins if u in seen else seen).add(u)
+        nested_twins = sorted(twins & {e.get("uid_parent") for e in elements + labels})
+        if nested_twins:
+            raise Unsupported("uid %s is used by more than one element and something is nested "
+                              "inside it (a uid_parent names it), so which one is the parent cannot "
+                              "be told - give each element its own uid" % ", ".join(nested_twins))
         by_uid = {e.get("uid"): e for e in elements}
         self._by_uid = by_uid
         self._elements = elements
