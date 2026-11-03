@@ -2357,6 +2357,37 @@ ignored first, then difflib over the class's names - `read+ClassName` on `{LV.VI
 "did you mean 'Class Name'?". On `{LV.Control}` the table carries `ClassName` as the short name of
 `Class Name`, so it composes there and the check's `propertyNameNotKnown` is only a prompt.
 
+## The project above the VI resolves its classes (fixed 2026-11-03)
+
+**The symptom** (session-7 report M2): a DQMH handler generated into
+`<repo>\DQMH\Libraries\Multiplexer\Message Handlers\` was refused "Call 112: no
+Multiplexer.lvclass in the installation or near the caller"; generated one level up, "Call 113: no
+Instrument.lvclass" - a call to the PARENT class's method, whose class lives in a sibling
+repository. The near index reaches the caller's folder three levels down, its parent two and its
+grandparent one, and the server's project folder search (`AixmlTools.NearestProjectFolder`) looks
+three levels up; the handler sits four below its `.lvproj`. The workaround was the composer's
+`--search`, which no tool passed.
+
+**The fix, three parts.**
+- The server passes every `.lvproj` of the nearest folder at or above the VI - up to eight levels,
+  never in `%TEMP%\LabVIEWMCP` - and above the AIXML (validation composes into scratch) as
+  `--project`. The resolver then finds an OWNER (`X.lvclass:`, `Y.lvlib:`) among the classes and
+  libraries that project lists and every listed class's ancestors, after the near index and before
+  the installation. A bare-name Call never looks there, so what one resolves to does not change.
+- A class's ancestors are its `Parent` items - or, for a class file that has none (a LabVIEW 18
+  save, like that `Multiplexer.lvclass`), its `NI.LVClass.ParentClassLinkInfo`: the six-bit
+  encoded link holds a PTH0 path ref of type 1, relative to the class file treated as a directory,
+  each empty component one level up. Decoded on that file: three empty components, then
+  `hal-framework-60298070\Driver Classes\Instrument\Parent\Instrument.lvclass`, where the file is.
+- `searchFolders` (one per line) on `lvai_generate_vi`, `lvai_generate_vis` and
+  `lvai_convert_aixml_to_vi` adds folders searched like the VI's own, for project-local code a
+  project does not list; pylabview only.
+
+**Measured** on copies of the user's two repositories, the handler converted at its real depth:
+the installed build refused "Call 112: no Multiplexer.lvclass", the fixed one wrote the VI with
+both calls resolved, no `searchFolders` given. `PylabviewProjectOwnersTests` pins the same with the
+repository's own class fixtures (and a link-info-only variant, which fails with the fallback off).
+
 ## Not covered, and not measured
 
 - **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the
