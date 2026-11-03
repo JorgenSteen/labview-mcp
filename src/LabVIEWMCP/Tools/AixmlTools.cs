@@ -735,12 +735,14 @@ internal sealed class AixmlTools(LvaiConnection connection)
             """)]
         bool allowUnknownPropertyNames = false,
         [Description(AixmlBackend.ParameterDescription)] string? backend = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [Description(AixmlComposer.SearchFoldersDescription)] string? searchFolders = null)
     {
         // Resolved OUTSIDE the guard, so an answer the guard writes - LabVIEW not
         // reachable, say - still names the backend it was trying.
         if (!AixmlBackend.TryResolve(backend, "lvai_convert_aixml_to_vi", out var choice, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
+        if (AixmlComposer.UseSearchFolders(searchFolders) is { } badFolders) return badFolders;
         return WithBackend(await Rpc.GuardAsync(async () =>
         {
             // BEFORE THE RPC, because after it there may be no LabVIEW left to answer: the preCheck

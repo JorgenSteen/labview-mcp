@@ -112,8 +112,10 @@ internal sealed class BulkTools(LvaiConnection connection)
             none.
             """)]
         string? icon = null,
-        [Description("Return every step's full answer even on success")] bool verbose = false)
+        [Description("Return every step's full answer even on success")] bool verbose = false,
+        [Description(AixmlComposer.SearchFoldersDescription)] string? searchFolders = null)
     {
+        if (AixmlComposer.UseSearchFolders(searchFolders) is { } badFolders) return badFolders;
         var answer = await GenerateViAsync(aiXmlFilePath, viPath, openVI, measurePane, panePattern,
                                            timeoutSeconds, ct, measureDiagram, backend, cleanUpDiagram,
                                            cleanUpPanel, icon);
@@ -1104,8 +1106,10 @@ internal sealed class BulkTools(LvaiConnection connection)
         [Description("Local budget in seconds, per VI")] int timeoutSeconds = 300,
         [Description(AixmlBackend.ParameterDescription)] string? backend = null,
         CancellationToken ct = default,
-        [Description("Return every step's full answer even on success")] bool verbose = false)
+        [Description("Return every step's full answer even on success")] bool verbose = false,
+        [Description(AixmlComposer.SearchFoldersDescription)] string? searchFolders = null)
     {
+        if (AixmlComposer.UseSearchFolders(searchFolders) is { } badFolders) return badFolders;
         var answer = await GenerateVisAsync(pairsJson, openVI, measurePane, keepAixml, timeoutSeconds,
                                             backend, ct);
         return verbose ? answer : CompactGenerateVisAnswer(answer);

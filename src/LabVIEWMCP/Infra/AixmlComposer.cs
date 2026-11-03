@@ -212,6 +212,17 @@ internal static class AixmlComposer
             args.Add(extra);
         }
         if (ProjectFolderOf(context.Root) is { } project) { args.Add("--search"); args.Add(project); }
+        // THE PROJECT THE VI LIVES IN, for OWNER lookups only: the classes and libraries its
+        // .lvproj lists, and every listed class's ancestors. A DQMH handler four folders below its
+        // repository could not call its own module's class, nor the parent class in a sibling
+        // repository (session-7 report M2, 2026-11-03). Bare-name Calls never use these.
+        // the AIXML's too: validation composes into a scratch VI, which belongs to no project
+        foreach (var lvproj in NearestProjects(target).Concat(NearestProjects(aixmlPath))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            args.Add("--project");
+            args.Add(lvproj);
+        }
         args.Add(Path.GetFullPath(aixmlPath));
         args.Add(target);
 
@@ -371,6 +382,59 @@ internal static class AixmlComposer
     /// of opening anything.
     /// </summary>
     public static readonly AsyncLocal<string[]?> ExtraSearch = new();
+
+    /// <summary>The `searchFolders` parameter text of the tools that compose a document.</summary>
+    internal const string SearchFoldersDescription = """
+        pylabview only: more folders to resolve Calls in, ONE PER LINE, searched like the VI's own
+        folder (bare names and owners, three levels down). The classes and libraries of the .lvproj
+        above the VI, and their parent classes, are found without this.
+        """;
+
+    /// <summary>
+    /// Adds a tool's `searchFolders` (one per line) to <see cref="ExtraSearch"/> for the rest of
+    /// this call - the AsyncLocal flows into the compose and is undone when the tool returns.
+    /// Answers a refusal for a folder that does not exist, null otherwise.
+    /// </summary>
+    internal static string? UseSearchFolders(string? searchFolders)
+    {
+        var folders = (searchFolders ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(f => f.Trim('"')).Where(f => f.Length > 0).ToList();
+        if (folders.Count == 0) return null;
+        var missing = folders.Where(f => !Path.IsPathFullyQualified(f) || !Directory.Exists(f)).ToList();
+        if (missing.Count > 0)
+            return Json.Error("badArguments",
+                "searchFolders names a folder that is not an existing absolute path: " +
+                string.Join(", ", missing), new { searchFolders });
+        ExtraSearch.Value = [.. (ExtraSearch.Value ?? []).Concat(folders.Select(Path.GetFullPath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+        return null;
+    }
+
+    /// <summary>How far above a VI the project it belongs to is looked for.</summary>
+    internal const int ProjectLevels = 8;
+
+    /// <summary>
+    /// The .lvproj files of the nearest folder at or above the VI's, up to
+    /// <see cref="ProjectLevels"/> levels, that holds any - none for a VI in our own scratch tree,
+    /// which is never a project. Deeper than AixmlTools.NearestProjectFolder's three, because these
+    /// feed only owner lookups: a DQMH handler sits four folders below its repository's .lvproj.
+    /// </summary>
+    internal static IReadOnlyList<string> NearestProjects(string viPath)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(Path.GetFullPath(viPath));
+            for (var level = 0; level <= ProjectLevels && dir is { Length: > 0 }; level++)
+            {
+                if (Tools.AixmlTools.IsOurScratch(dir)) return [];
+                var found = Directory.EnumerateFiles(dir, "*.lvproj").Order(StringComparer.OrdinalIgnoreCase).ToArray();
+                if (found.Length > 0) return found;
+                dir = Path.GetDirectoryName(dir);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        return [];
+    }
 
     /// <summary>The project\ folder of that LabVIEW's installation, or null - the context's, not
     /// the newest installed one's, which a LabVIEW 2024 beside a 2026 would not be.</summary>

@@ -327,30 +327,35 @@ INSTALL_INDEX_SECONDS = 600
 # The LabVIEW the server works for (issue #99) - set by configure() from the server's
 # --labview-root / --addon-locations, per request, so the resident worker follows a switch.
 # None: not configured, and the old discovery applies.
-_CONFIGURED = {"lv_root": None, "locations": None}
+_CONFIGURED = {"lv_root": None, "locations": None, "projects": []}
 
 
-def configure(lv_root=None, locations=None):
+def configure(lv_root=None, locations=None, projects=None):
     """The installation and the LVAddons locations to resolve against. `locations` is a list, the
     base location first and the additional ones after it; [] means LabVIEW loads no add-ons;
-    None falls back to the default root."""
+    None falls back to the default root. `projects` are .lvproj files whose classes and libraries
+    an owner lookup may use (see Resolver._project_owners)."""
     _CONFIGURED["lv_root"] = lv_root or None
     _CONFIGURED["locations"] = list(locations) if locations is not None else None
+    _CONFIGURED["projects"] = list(projects or [])
 
 
 def parse_args(argv):
-    """Remove --labview-root R and --addon-locations L1;L2 from argv and configure() with them.
-    An EMPTY --addon-locations is "no add-ons"; leaving the flag out keeps the default root."""
-    root, locations, rest, i = None, None, [], 0
+    """Remove --labview-root R, --addon-locations L1;L2 and every --project P from argv and
+    configure() with them. An EMPTY --addon-locations is "no add-ons"; leaving the flag out keeps
+    the default root."""
+    root, locations, projects, rest, i = None, None, [], [], 0
     while i < len(argv):
         if argv[i] == "--labview-root" and i + 1 < len(argv):
             root, i = argv[i + 1], i + 2
         elif argv[i] == "--addon-locations" and i + 1 < len(argv):
             locations, i = [p for p in argv[i + 1].split(";") if p.strip()], i + 2
+        elif argv[i] == "--project" and i + 1 < len(argv):
+            projects.append(argv[i + 1]); i += 2
         else:
             rest.append(argv[i])
             i += 1
-    configure(root, locations)
+    configure(root, locations, projects)
     return rest
 
 
@@ -397,6 +402,50 @@ class Resolver:
         self._owners = None
         self._llbs = None    # .llb CONTAINER files, installation first
         self._near = {}
+        self.projects = list(_CONFIGURED.get("projects") or [])
+        self._proj_owners = None
+
+    def _project_owners(self):
+        """lower(file name) -> [paths] of the libraries and classes the --project files list, every
+        listed class's ANCESTOR classes included. A DQMH handler sits four folders below its
+        repository, beyond the near index, and its class's parent lives in a sibling repository
+        the project does not list at all - `Instrument.lvclass`, linked only by Multiplexer.lvclass's
+        Parent item: the composer refused "no Multiplexer.lvclass in the installation or near the
+        caller", then the same for Instrument.lvclass (session-7 report M2, 2026-11-03). Only OWNER
+        lookups use this - a bare-name Call never does, so what it resolves to stays as it was."""
+        if self._proj_owners is not None:
+            return self._proj_owners
+        out = {}
+
+        def add(path):
+            out.setdefault(os.path.basename(path).lower(), [])
+            if path not in out[os.path.basename(path).lower()]:
+                out[os.path.basename(path).lower()].append(path)
+
+        for proj in self.projects:
+            try:
+                root = ET.parse(proj).getroot()
+            except (OSError, ET.ParseError):
+                continue
+            for item in root.iter("Item"):
+                url = item.get("URL")
+                if item.get("Type") not in ("Library", "LVClass") or not url:
+                    continue
+                if url.startswith("/<"):
+                    anchor, _, rest = url[1:].partition("/")
+                    path = next((p for p in (os.path.normpath(os.path.join(d, *rest.split("/")))
+                                             for a, d in self.roots if a == anchor) if exists(p)), None)
+                else:
+                    # relative to the .lvproj FILE treated as a directory, as in a library
+                    path = os.path.normpath(os.path.join(proj, *url.split("/")))
+                if not path or not exists(path):
+                    continue
+                add(path)
+                if path.lower().endswith(".lvclass"):
+                    for parent in self.class_parents(path):
+                        add(parent)
+        self._proj_owners = out
+        return out
 
     # ---- indexes, built on first use ------------------------------------------------------
     def _index(self):
@@ -482,6 +531,45 @@ class Resolver:
         rel = os.path.relpath(os.path.abspath(path), best[1])
         return best[0], rel.split(os.sep)
 
+    def _parent_from_link_info(self, cls_file, root):
+        """The parent class file NI.LVClass.ParentClassLinkInfo names, or None. The property is
+        LabVIEW's flattened link in its six-bit text encoding (offset 0x21, most significant bits
+        first - LvClass.Decode on the C# side); the link holds the parent's qualified name and a
+        PTH0 path ref - type 1 relative to the class FILE treated as a directory, each empty
+        component one level up, the way linked_file reads a link record. Measured on the session-7
+        Multiplexer.lvclass: three empty components, then hal-framework-60298070\\Driver
+        Classes\\Instrument\\Parent\\Instrument.lvclass - the file that is there."""
+        text = next((p.text for p in root.iter("Property")
+                     if p.get("Name") == "NI.LVClass.ParentClassLinkInfo" and p.text), None)
+        if not text:
+            return None
+        bits = held = 0
+        blob = bytearray()
+        for ch in text.strip():
+            bits = ((bits << 6) | ((ord(ch) - 0x21) & 0x3F)) & 0xFFFF
+            held += 6
+            if held >= 8:
+                held -= 8
+                blob.append((bits >> held) & 0xFF)
+        at = blob.find(b"PTH0")
+        if at < 0 or at + 12 > len(blob):
+            return None
+        tp = int.from_bytes(blob[at + 8:at + 10], "big")
+        count = int.from_bytes(blob[at + 10:at + 12], "big")
+        comps, i = [], at + 12
+        for _ in range(count):
+            if i >= len(blob) or i + 1 + blob[i] > len(blob):
+                return None
+            comps.append(bytes(blob[i + 1:i + 1 + blob[i]]).decode("latin-1"))
+            i += 1 + blob[i]
+        if tp == 1:
+            cand = self.linked_file("1", comps, [cls_file])
+        elif tp == 0 and comps:
+            cand = os.path.join(comps[0] + ":\\", *comps[1:])
+        else:
+            cand = None
+        return cand if cand and exists(cand) and cand.lower().endswith(".lvclass") else None
+
     def class_parents(self, cls_file, depth=8):
         """The ancestor CLASS files of a .lvclass, nearest first - its `Parent` items' URLs, symbolic
         (/<vilib>/...) or relative to the class file treated as a directory; interfaces skipped."""
@@ -514,6 +602,11 @@ class Resolver:
                 if not iface:
                     nxt = cand
                     break
+            if nxt is None:
+                # a class file with no Parent items carries its parent only as
+                # NI.LVClass.ParentClassLinkInfo - Multiplexer.lvclass of the session-7 report M2,
+                # whose Instrument.lvclass parent lives in a sibling repository
+                nxt = self._parent_from_link_info(cur, root)
             if nxt is None:
                 break
             out.append(nxt)
@@ -590,6 +683,8 @@ class Resolver:
         near = []
         for d in (caller_dirs or []):
             near += self._near_index(d)[1].get(name.lower(), [])
+        # then the owners the caller's PROJECT lists (and their ancestors), then the installation's
+        near += [p for p in self._project_owners().get(name.lower(), []) if p not in near]
         found = near + self._owners.get(name.lower(), [])
         if found:
             return found
