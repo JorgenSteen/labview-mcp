@@ -5508,6 +5508,11 @@ class Composer:
                     listed[direction].append((tname, net))
                 elif net is None and tname in other:
                     continue        # listed on the wrong side and unwired: nothing to place
+                elif net is None:
+                    # listed, unwired, and not on this callee's pane: a terminal a NEWER release of
+                    # the callee added. Clear Errors.vi's `specific error code to clear` is not on
+                    # LabVIEW 2020's, so the AF hook helpers would not compose there (B10, 2026-10-30)
+                    continue
                 else:
                     raise Unsupported("Call %r has no %s %r on its pane (has: %s)"
                                       % (target, "input" if direction == "in" else "output", tname,
