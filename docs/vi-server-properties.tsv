@@ -6068,6 +6068,8 @@ class	property	access	source
 {LV.VI}	Execution:Is Reentrant	read
 {LV.VI}	Execution:Preferred Exec System	read
 {LV.VI}	Execution:Priority	read
+{LV.VI}	Execution:Reentrancy Type	read	LabVIEW 2026 resource\lvserver.rsc id 0x288; composed write+read measured 2026-11-03 (session-7 report M4)
+{LV.VI}	Execution:Reentrancy Type	write	LabVIEW 2026 resource\lvserver.rsc id 0x288; composed write+read measured 2026-11-03 (session-7 report M4)
 {LV.VI}	Execution:Run When Opened	read
 {LV.VI}	Execution:Show Front Panel On Call	read
 {LV.VI}	Execution:Show Front Panel On Load	read

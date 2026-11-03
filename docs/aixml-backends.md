@@ -2317,6 +2317,29 @@ needs NI's service and is not built.
 - Read every line it prints: a refusal there is either a false alarm to fix in the guard, or a
   defect the guard found.
 
+## `Execution:Reentrancy Type` composes (fixed 2026-11-03)
+
+**The symptom** (session-7 report M4, LabVIEW 2025): the composer refused
+`write+Execution\3AReentrancy Type` - *property 'Execution:Reentrancy Type' of LV.VI is not in the
+harvested table* - and NI's ValidateAIXML is `Unimplemented` on 2025, so a cloneable DQMH module's
+new handlers could be made reentrant (`Execution:Is Reentrant` composes) but their TYPE could not be
+set. DQMH's validator needs every member of a cloneable module reentrant.
+
+**The cause.** The table holds the property only under the short name of the VI it was harvested
+from, `Exec.ReentrancyType` (code 648, `SetUpClassControls.vi` of the NewAccessors scripter), and no
+class tables both spellings, so no alias formed. `Execution:Is Reentrant` composed only because LV.VI
+tables it beside `Exec.IsReentrant` with one code (525). LabVIEW's own `resource\lvserver.rsc` pairs
+the long and the short name under id 0x288 = 648, so the pair went into `parts/property-names.json`,
+and `docs/vi-server-properties.tsv` got its read and write rows, which is what `lvai_check_aixml` and
+`aixml_lint.py` judge names by.
+
+**Measured on LabVIEW 2026** over the gRPC run route: a probe wrote `Is Reentrant` TRUE and
+`Reentrancy Type` 0 (`Share clones between instances`) on a VI whose default was 1, saved it, and a
+second probe read 0 back after the VI was loaded again; the file's write time was that run's. The
+type is the table's enum, `uint16{Share clones between instances,Preallocate clone for each instance}`.
+Not measured on LabVIEW 2025 itself, where the report came from - the composer's table is the same
+for every release.
+
 ## Not covered, and not measured
 
 - **A DAQmx call has still not been RUN through a COMPOSED VI** - the probes above stop at the
