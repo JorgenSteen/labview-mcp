@@ -30,6 +30,16 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     private const string SpliceHelper = "lvbd_splice_by_names";
 
     /// <summary>
+    /// Puts the handler IN SERIES into the frame's module-data pass-through - the user's measured
+    /// session-7 helper (report M1, 2026-11-03), shipped as is but for its uids.
+    /// </summary>
+    private const string ModuleDataHelper = "lvdqmh_splice_module_data";
+
+    /// <summary>The handler terminal names that carry the module data when the call names none.</summary>
+    internal const string DefaultModuleDataIn = "Module Data in";
+    internal const string DefaultModuleDataOut = "Module Data out";
+
+    /// <summary>
     /// Delacor's placeholder text in a message frame: `#CodeNeeded` in DQMH 5 and 6, and
     /// `#DQMH_CodeNeeded` in 7.x - the tool matched only the first, so on a 7.x module it deleted
     /// nothing and said `codeNeededTextsBefore: 0` (found in the DQMH_EscapingTest build of
@@ -61,9 +71,11 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         inputs, Variant To Data's error out to `error in`. Request and Wait for Reply: outputs go
         to same-named reply fields, `error out` to `<Event>_error` AND the frame's Merge Errors
         (its unwired input otherwise keeps Main.vi broken). Plain Request: the handler goes in
-        series into the frame's error wire.
-        `ok` is false when the handler lands OUTSIDE the frame (`placement` is read back) or its
-        error out reaches nothing. An input or field with no partner is reported, never guessed;
+        series into the frame's error wire. MODULE DATA: a handler with BOTH `Module Data in` and
+        `Module Data out` (or the names given) goes in series into the frame's module-data
+        pass-through, so a handler can reach the class the module data carries (`moduleData`).
+        `ok` is false when the handler lands OUTSIDE the frame (`placement` is read back), its
+        error out reaches nothing, or its module data could not be spliced. An input or field with no partner is reported, never guessed;
         a frame already holding a subVI is refused. The #CodeNeeded text is deleted and Main.vi
         saved; the frame is read again (codeNeededTextsAfter) and Main.vi's exec state before and
         after is reported. Use `dryRun` first.
@@ -76,9 +88,15 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         [Description("Report what would be wired and change nothing")] bool dryRun = false,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
         [Description(DqmhTools.BackendDescription)] string? backend = null,
-        CancellationToken ct = default) =>
+        CancellationToken ct = default,
+        [Description("The handler input that takes the frame's module data; omit for 'Module Data in'")]
+        string? moduleDataIn = null,
+        [Description("The handler output that gives it back; omit for 'Module Data out'")]
+        string? moduleDataOut = null) =>
         await Rpc.GuardAsync(() => DqmhTools.WithBackendAsync(backend, "lvai_dqmh_place_handler", async () =>
         {
+            var dataIn = string.IsNullOrWhiteSpace(moduleDataIn) ? DefaultModuleDataIn : moduleDataIn.Trim();
+            var dataOut = string.IsNullOrWhiteSpace(moduleDataOut) ? DefaultModuleDataOut : moduleDataOut.Trim();
             var handler = Path.GetFullPath((handlerViPath ?? "").Trim());
             if (!File.Exists(handler))
                 return Json.Error("fileNotFound", $"No handler VI at {handler}.");
@@ -146,7 +164,9 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             // handler for it refused every Request and Wait for Reply frame (2026-10-30)
             var (replyTerminals, replyAlreadyFed) = SplitReplySinks(DqmhHeadless.Listed(dry, "Reply Sink Terminals"));
             var texts = DqmhHeadless.Listed(dry, "Decoration Texts");
-            var plan = Plan(eventBare, inputs, outputs, argTerminals, replyTerminals);
+            var moduleData = ModuleDataPlan(inputs, outputs, dataIn, dataOut);
+            var plan = Plan(eventBare, inputs, outputs, argTerminals, replyTerminals,
+                            moduleData.Names);
             var detail = new JsonObject
             {
                 ["mainVi"] = mainVi,
@@ -158,6 +178,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["handlerInputs"] = DqmhHeadless.Array(inputs),
                 ["handlerOutputs"] = DqmhHeadless.Array(outputs),
                 ["plan"] = plan.ToJson(),
+                ["moduleDataPlan"] = moduleData.Describe(),
             };
             if (nodeClasses.Contains("SubVI"))
                 return Json.Error("frameAlreadyHasCode",
@@ -211,6 +232,26 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             var connected = DqmhHeadless.Listed(placed, "Connected");
             var missing = DqmhHeadless.Listed(placed, "Missing");
             var error = DqmhTools.Failed(placed);
+
+            // ---- 4. module data: the handler in series into the frame's pass-through -------------
+            // The pair is the frame's only wire from an inner SOURCE tunnel terminal straight to an
+            // inner SINK tunnel terminal, paired by Position; the helper refuses unless it finds
+            // exactly one of each and both handler terminals (session-7 report M1).
+            JsonObject? moduleDataAnswer = null;
+            var moduleDataSpliced = true;
+            if (moduleData.Splice && error is null)
+            {
+                var (md, mdError) = await dqmh.RunDetailedAsync(scripts, ModuleDataHelper, new()
+                {
+                    ["Main VI Path"] = mainVi,
+                    ["Frame Name"] = frameName,
+                    ["In Name"] = dataIn,
+                    ["Out Name"] = dataOut,
+                    ["Dry Run"] = "false",
+                }, timeoutSeconds, ct);
+                moduleDataAnswer = ModuleDataAnswer(md, mdError);
+                moduleDataSpliced = moduleDataAnswer["spliced"]?.GetValue<bool>() is true;
+            }
             // the frame read again: the helper reports no deletion of its own, and "deleted" was
             // only ever inferred from the pattern (session-7 report M8)
             var (after, _) = await dqmh.RunDetailedAsync(scripts, Helper, new()
@@ -231,10 +272,11 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             var answer = new JsonObject
             {
                 ["ok"] = error is null && missing.Count == 0 && connected.Count == expected
-                         && visible && spliced,
+                         && visible && spliced && moduleDataSpliced,
                 ["placement"] = placement,
                 ["handlerVisible"] = visible,
                 ["errorChain"] = splice ? spliceAnswer : mergeErrors ? "into the frame's Merge Errors" : null,
+                ["moduleData"] = moduleDataAnswer ?? (moduleData.Splice ? null : moduleData.Describe()),
                 ["module"] = DqmhHeadless.DelacorModuleName(moduleName ?? ""),
                 ["event"] = eventBare,
                 ["handler"] = handler,
@@ -257,6 +299,8 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                     "The handler is NOT inside its frame - LabVIEW clips it out of sight, so a person " +
                     "reading Main.vi cannot see the call. Main.vi was saved; move the node into the frame " +
                     "or delete it and place the handler again.";
+            if (!moduleDataSpliced)
+                answer["moduleDataProblem"] = moduleDataAnswer?["problem"]?.DeepClone();
             if (!spliced)
                 answer["errorChainProblem"] =
                     "The handler's error out could not be put into the frame's error wire - an error from " +
@@ -282,6 +326,62 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     }
 
     /// <summary>
+    /// Whether the handler takes the frame's MODULE DATA: both terminals present means splice it
+    /// into the pass-through; one alone is a warning and neither is wired by this step - a handler
+    /// may simply not need the module data. <see cref="Names"/> are kept out of the argument check.
+    /// </summary>
+    internal sealed record ModuleData(string In, string Out, bool HasIn, bool HasOut)
+    {
+        internal bool Splice => HasIn && HasOut;
+
+        internal IReadOnlyCollection<string> Names =>
+            [.. new[] { HasIn ? In : null, HasOut ? Out : null }.OfType<string>()];
+
+        internal JsonObject Describe() => new()
+        {
+            ["in"] = In,
+            ["out"] = Out,
+            ["splice"] = Splice,
+            ["note"] = Splice
+                ? "The handler goes in series into the frame's module-data pass-through."
+                : HasIn || HasOut
+                    ? $"The handler has only '{(HasIn ? In : Out)}' - both '{In}' and '{Out}' are needed " +
+                      "to put it into the module-data wire, so neither is wired."
+                    : "The handler takes no module data.",
+        };
+    }
+
+    internal static ModuleData ModuleDataPlan(IReadOnlyCollection<string> handlerInputs,
+        IReadOnlyCollection<string> handlerOutputs, string dataIn, string dataOut) =>
+        new(dataIn, dataOut, handlerInputs.Contains(dataIn), handlerOutputs.Contains(dataOut));
+
+    /// <summary>The splice helper's answer: spliced only when it says so and reports no error.</summary>
+    internal static JsonObject ModuleDataAnswer(IReadOnlyList<LvValuesXml.Value>? values, string? helperError)
+    {
+        if (values is null || helperError is not null)
+            return new JsonObject { ["spliced"] = false, ["helperError"] = helperError ?? "the helper did not run" };
+        int? Number(string name) => int.TryParse(DqmhTools.Scalar(values, name), out var n) ? n : null;
+        var spliced = HousekeepingHelpers.IsTrue(values, "spliced") && Number("code") is 0 or null;
+        var answer = new JsonObject
+        {
+            ["spliced"] = spliced,
+            ["sources"] = Number("sources"),
+            ["sinks"] = Number("sinks"),
+            ["handlerInFound"] = Number("handler in found"),
+            ["handlerOutFound"] = Number("handler out found"),
+            ["code"] = Number("code"),
+            ["source"] = DqmhTools.Scalar(values, "source"),
+        };
+        if (!spliced)
+            answer["problem"] = "The handler is in its frame but NOT in the module-data wire. The helper " +
+                "splices only when the frame has exactly one wire from an inner source tunnel straight to " +
+                "an inner sink tunnel and the handler has both terminals - `sources`, `sinks` and " +
+                "`handlerInFound`/`handlerOutFound` say which was not one. Main.vi was saved with the " +
+                "handler placed; wire the module data in the IDE.";
+        return answer;
+    }
+
+    /// <summary>
     /// Which wires to make. Every handler input except `error in` must be a request argument of
     /// the same name, and every reply field must be a handler output of the same name - a gap on
     /// either side is a PROBLEM, because guessing would wire the wrong value. A reply's error
@@ -291,15 +391,18 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     /// </summary>
     internal static WiringPlan Plan(string eventName, IReadOnlyCollection<string> handlerInputs,
         IReadOnlyCollection<string> handlerOutputs, IReadOnlyCollection<string> argTerminals,
-        IReadOnlyCollection<string> replyTerminals)
+        IReadOnlyCollection<string> replyTerminals, IReadOnlyCollection<string>? moduleData = null)
     {
         var args = argTerminals.Except(PlumbingTerminals).ToList();
         var replies = replyTerminals.Except(PlumbingTerminals).ToList();
         var errorField = $"{eventName}_error";
         var problems = new List<string>();
         var warnings = new List<string>();
+        // the module-data terminals are wired by their own step, never as arguments or replies
+        moduleData ??= [];
+        handlerOutputs = [.. handlerOutputs.Except(moduleData)];
 
-        var wired = handlerInputs.Where(i => i != "error in").ToList();
+        var wired = handlerInputs.Where(i => i != "error in" && !moduleData.Contains(i)).ToList();
         foreach (var input in wired.Where(i => !args.Contains(i)))
             problems.Add($"Handler input '{input}' is not an argument of the message ({string.Join(", ", args)}).");
         foreach (var arg in args.Where(a => !wired.Contains(a)))
