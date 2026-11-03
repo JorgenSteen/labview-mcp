@@ -1491,6 +1491,27 @@ Requests: the installed build answered `codeNeededTextsBefore: 0` for one frame,
 `1` and `codeNeededTextsAfter: 0` for the other, and the saved Main.vi's export carried no
 `CodeNeeded` text in either frame - only Delacor's three template labels in its other frames.
 
+**MODULE DATA (2026-11-03, session-7 report M1).** A handler that needs the module data - the class
+travels in it, as in every PSU/HAL frame - has `Module Data in` and `Module Data out`. The tool
+refused it: *"Handler input 'Module Data in' is not an argument of the message"*, and nothing wired
+the frame's module-data pass-through. Those two names (or `moduleDataIn` / `moduleDataOut`) are now
+kept out of the argument check, and a handler with BOTH goes in series into that wire after the
+placement, through `scripts/lvdqmh_splice_module_data.xml` - the user's own session-7 helper
+(`s7_splice_module_data_v3`), shipped unchanged but for its uids. It finds the frame's only wire
+running straight from an inner SOURCE tunnel terminal to an inner SINK tunnel terminal, pairing
+them by `Position` (matching by `Type Descriptor` failed there: the handler's terminal read 38 words,
+the tunnel 37, because the descriptor carries the label), deletes it and wires source -> handler ->
+sink, and saves Main.vi. It splices only with exactly one of each; the answer's `moduleData` carries
+`spliced`, `sources`, `sinks` and `handlerInFound`/`handlerOutFound`, and `ok` requires `spliced`.
+A handler with only one of the two terminals gets neither wired, and says so.
+
+Measured on LabVIEW 2026 over gRPC on a fresh DQMH 7 Singleton (module data a typedef cluster with
+one string, `Status`) and a Request `M1 Probe` with one argument `Note`; the handler bundled `Note`
+into `Status`. The installed build refused it `namesDoNotMatch` as reported; the fixed build answered
+`ok`, `moduleData.spliced: true` with one source and one sink, `errorChain: spliced;1;`, Main.vi
+`execState 1 -> 1`, and the saved Main.vi's export wires `Module Data in` from the frame's `In3`
+tunnel and `Module Data out` into its `Out2`.
+
 ### 9i. Every DQMH tool on the pylabview backend - no NI service, measured 2026-10-13
 
 The user asked for a DQMH demo with NO gRPC, and every `lvai_dqmh_*` tool but the reference takes
