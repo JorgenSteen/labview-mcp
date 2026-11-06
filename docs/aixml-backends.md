@@ -54,39 +54,52 @@ Highest wins:
 | 2 | `--aixml-backend <grpc\|pylabview\|auto>` on the server's command line | `--aixml-backend` |
 | 3 | `LABVIEWMCP_AIXML_BACKEND` in the server's environment (same three values) | `LABVIEWMCP_AIXML_BACKEND` |
 | 4 | **`"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json`** - THE place to choose | `settings file <path>` |
-| 5 | the LabVIEW in use is OLDER than 2026 → `pylabview` | `LabVIEW <year> is older than 2026 - …` |
-| 6 | nothing set | `default` (grpc) |
+| 5 | nothing set | `default` (**pylabview**, since 2026-11-05) |
+
+**pylabview is the default on every LabVIEW - the user's decision of 2026-11-05.** Before it, an
+omitted backend was grpc, and pylabview only on a LabVIEW older than 2026 (the rule of 2026-10-12,
+which the new default covers and replaces).
 
 **The settings file is the user's decision of 2026-10-13: the choice is an entry that is ALWAYS in
 a file, with every allowed value and what it means written beside it.** The server creates the file
-on its first start - with `"aixmlBackend": "auto"`, today's behaviour - and never rewrites it, so an
-edit and its comments stay. It is read on EVERY call (cached by write time), so a change takes
-effect without a restart. The comments are JSON comments, read with comments skipped:
+on its first start - with `"aixmlBackend": "pylabview"` and `"setDefaultDone": true` - and otherwise
+rewrites it ONCE (below), so an edit and its comments stay. It is read on EVERY call (cached by
+content), so a change takes effect without a restart. The comments are JSON comments, read with
+comments skipped:
 
 ```jsonc
 {
+  //   "pylabview"  The DEFAULT. Our own composer and reader (scripts\aixml-pylabview). Needs NO NI service ...
   //   "grpc"       NI's AI service inside LabVIEW (Nigel). ...
-  //   "pylabview"  Our own composer and reader (scripts\aixml-pylabview). Needs NO NI service ...
-  //   "auto"       "grpc", except "pylabview" when the LabVIEW in use is older than 2026.
-  "aixmlBackend": "auto"
+  //   "auto"       The server's default - today "pylabview".
+  "aixmlBackend": "pylabview",
+  "setDefaultDone": true
 }
 ```
+
+**The one-time switch (`setDefaultDone`).** An EXISTING file whose `setDefaultDone` is not `true`
+- every installation from before 2026-11-05 - is switched at the next server start:
+`"aixmlBackend"` becomes `"pylabview"` whatever it said, `"setDefaultDone": true` is added, the old
+template's comment promising grpc for `auto` is reworded, and everything else (comments,
+`labviewExe`, `labviewPref`) stays. The old file is kept as `settings.json.bak`, and the server logs
+one `info:` line to stderr. From then on the marker stops it: a user who sets `"grpc"` afterwards
+keeps it. A file that does not parse is left alone (the resolver refuses it by name anyway).
+`ServerSettings.MigrateDefaultOnce`, tested in `ServerSettingsMigrationTests`.
 
 It lives beside the cache under `%USERPROFILE%` rather than beside the exe: a plugin update replaces
 the exe's folder and would take the choice with it, and `%LOCALAPPDATA%` is redirected for a server
 the desktop app starts (`CacheDirectory`). `LABVIEWMCP_SETTINGS` points at another file - the test
 suite uses it to read none. **`auto` - in the file, the flag or the variable - makes NO choice**, so
-the rules below it decide; that is the only way rule 5 is reached. A file that does not parse, an
+the default decides. A file that does not parse, an
 entry that is not a string, or a value that is none of the three is REFUSED by name with the
 file's path, like an unknown name anywhere else. Rules 2 and 3 stay as overrides for a host that
 cannot edit the profile (CI, a shared registration); `pylv_status` shows the file's path, whether it
 exists, its entry and the default in force.
 
-**Rule 5 is the user's of 2026-10-12, and it holds even for LabVIEW 2025, which HAS NI's service**
-(`NI Nigel AI Advisor for LabVIEW 2025`). "In use" is the newest RUNNING LabVIEW, else the newest
-INSTALLED one - the one `lvai_ensure_labview` would start; with neither readable the rule does not
-apply. It is asked only when rules 1-4 are silent, and only for a tool the client called, like rules
-2-4. `pylv_status` shows both releases it compares, `labviewInUse` and `partsRelease`.
+**The former rule 5 (2026-10-12 to 2026-11-05)** made pylabview the default on a LabVIEW older
+than 2026, even LabVIEW 2025, which HAS NI's service. The default now covers it. "In use" - the
+newest RUNNING LabVIEW, else the newest INSTALLED - still decides which file version the composer
+writes; `pylv_status` shows `labviewInUse` and `partsRelease`.
 
 **AND THE COMPOSER WRITES FOR SUCH A LabVIEW AS THAT RELEASE - since the same evening, after the
 user's LabVIEW 2025 station refused every composed VI with `Error 1125, File version is later
@@ -2387,6 +2400,109 @@ three levels up; the handler sits four below its `.lvproj`. The workaround was t
 the installed build refused "Call 112: no Multiplexer.lvclass", the fixed one wrote the VI with
 both calls resolved, no `searchFolders` given. `PylabviewProjectOwnersTests` pins the same with the
 repository's own class fixtures (and a link-info-only variant, which fails with the fallback off).
+
+## A cloned input lay on the one before it (fixed 2026-11-04)
+
+**Symptom** (the user's screenshot of `MP3 Parse Frames.vi`, composed on pylabview): a Compound
+Arithmetic AND with six wires coming in drew five inputs. The heap showed why: the node had seven
+terminals, the last two with the same `termBounds` `(32, 0, 40, 12)`, and the node and its
+result terminal were 41 px high, the five-input template's height.
+
+**Cause.** A template node of a growable kind (Compound Arithmetic, Merge Errors, Concatenate
+Strings, Format Into String) needing more inputs than its largest template gets them by cloning
+its last input, and the clone kept the copied terminal's place. The largest Compound Arithmetic
+template has five inputs, the largest Format Into String two: a four-input Format Into String put
+inputs 3 and 4 on input 2. Wiring and execution were never affected - only the drawing.
+
+**Fix.** `_restack_growable` in `aixml2vi.py`: after cloning or removing inputs, the repeated
+inputs are stacked again at the template's pitch (8 px), a terminal below them moves down by the
+difference, a terminal spanning them (the result of Compound Arithmetic) and the node grow by it.
+A template whose inputs are not stacked evenly is left as it was.
+
+Measured on composed probes: the six-input AND renders six rows on a 49 px node and answers false
+with one input false and true with all true; the four-input Format Into String renders four rows
+and formats `1-2-3-4`. Test: `PylabviewGrowableNodeTests.A_cloned_input_gets_a_row_of_its_own_and_the_node_grows`.
+A VI composed before the fix keeps its drawing until it is composed again.
+
+## The reader dropped wires into inputs flagged 0x4000 (fixed 2026-11-04)
+
+**Symptom.** Exported by the reader, `MP3 Parse Frames.vi` came back with everything left of its
+loop unwired: the five-input Add and the three-input AND without a single terminal, the first
+`MP3 Read Fields.vi` call without `Data`, and `File Data` itself `outputs="value:"`. The export
+ended in 24 notes `signal ... has 2 sources`. A regeneration from that export would have lost
+the wiring of half the diagram, which is why the composer fix of the same day was patched into
+that VI's heap instead.
+
+**Cause.** The reader tells a wire's direction by the terminal bit `0x8000` (`SINK`): every
+terminal without it counts as a source, and a signal with more than one source is dropped. Every
+input of that part of the diagram carried **`0x4000` instead of `0x8000`** (`0x4000`, or `0x4040`
+on the growable nodes). What `0x4000` means to LabVIEW is not known. Measured over 400 NI
+examples: 36 signals have such a terminal, and in 33 of them exactly one terminal carries neither
+bit. The other three are a dangling one-terminal signal and two two-terminal signals that both
+carry it.
+
+**Fix.** `SOFT_SINK = 0x4000` in `vi2aixml.py`, used only as a fallback. When `SINK` leaves a
+signal more than one source, and exactly one of them lacks `0x4000`, that one is the source and
+the others are inputs. `0x4000` never decides a direction on its own.
+
+**Verified on the real VI:**
+
+- The export carries no notes (24 before), and every one of those nodes is wired.
+- Recomposed, it is executable.
+- Read back again, it matches the first export fact for fact: 134 elements, each terminal wired
+  or unwired as before.
+
+Test: `PylabviewSoftSinkTests`, fixture `Fixtures/reader/MP3 Parse Frames.vi`.
+
+## Compound literals: refused when they do not fit, quoted items verbatim (fixed 2026-11-05)
+
+**Symptom.** A colleague's ATM cold build on plugin 2.4.5 (pylabview backend, LUnit) reported two
+test expectations that came out of the composer as different values, with no error: an
+`array{bool}` read as `[FALSE]`, and an expected string array as `{",,","",""}`. One failed run,
+a re-add and a re-run, about 100 s. The build's AIXML is not available, so the literals it
+used are unknown.
+
+**What reproduced and what did not.** The plain spellings were already right, as constants and
+as run inputs, read back by LabVIEW (`lvai_run_vi_and_read_values` over ActiveX): `[true,false,true]`,
+`[,,]` for an `array{string}` and for a three-string cluster, `[true,7,]`. These were wrong, all
+of them silently:
+
+| literal | type | composed as |
+|---|---|---|
+| `[[true,false,true]]` | `array{bool}` | `[FALSE]` - one element, the inner list read as a boolean |
+| `[T,F,T]` | `array{bool}` | `[FALSE,FALSE,FALSE]` - any token but true/1 was false |
+| `{true,false}`, `true,false` | `array{bool}` | `[]` - a value without `[` was the empty array |
+| `[",,"]` | `array{string}` | three strings `"`, empty, `"` - split at the commas inside the quotes |
+| `["","",""]` | `array{string}` | three strings of two quote characters each |
+| `[[1,2],[3]]` | `array.2{int32}` | 2 x 2, the missing element read from the next row |
+
+The quote rows are why a run and a composition disagreed: since the fourth CSV cold build
+(2026-10-27) the run tool's `ComValues.SplitItems` takes an item in double quotes verbatim, and
+the composer did not.
+
+**Fix** (`aixml2vi.py`):
+
+- `split_items` ports `SplitItems`/`QuoteEnd`: a quote counts only where an item starts and where
+  it ends (followed by a comma, the end, or in a nested list a closing bracket). The item is a
+  `Verbatim` and is never unescaped.
+- A literal that does not fit its type is refused by name (`value ... does not fit ...`): nesting
+  deeper or shallower than the array's rank, a ragged multi-dimensional array, more items than
+  the cluster has fields, a list where a scalar belongs, a boolean other than
+  `true`/`false`/`1`/`0` in any case, and an array or cluster value without brackets. A
+  control's DEFAULT stays as before: it is reported (`default value of ... not composed`) and the
+  control keeps its type's default.
+- `0` and the empty value stay accepted as the default of an array or cluster: the reader wrote
+  `0` for a cluster until 2026-10, and fixtures still carry it (`Sensor Event Demo.xml`).
+
+**Measured before the change was kept:** every `value=` of a Constant, Control and Indicator in
+`scripts\`, `tests\`, `experiments\` and the export cache, 8 477 values in 9 568 files. None is
+refused (two were before the `0` exception). Composed, `[",,","",""]`, `["a,b",c]` and
+`[TRUE, False, 1]` ran in LabVIEW 2026 as `",,"`/empty/empty, `a,b`/`c` and true/false/true.
+
+**On NI's backend** a quote is still an ordinary character (`docs/aixml-reference.md` §6), and
+`TRUE` still runs as false (§11). This section changes only the composer.
+
+Test: `PylabviewLiteralTests`.
 
 ## Not covered, and not measured
 

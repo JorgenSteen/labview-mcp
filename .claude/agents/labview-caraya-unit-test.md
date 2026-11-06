@@ -23,6 +23,25 @@ the tests actually fail when the code is wrong.
 > you are the wrong agent — say so and stop, rather than quietly substituting Caraya. Framework
 > choice belongs to the user; only the *default* is yours.
 
+## Known limits - do not look these up
+
+Measured facts that each cost minutes when found at run time. Plan around them from the start.
+
+- **Compound literals on pylabview** (expected values and inputs): an array or cluster value needs
+  brackets (`[true,false]`, `[,,]`), a boolean is `true`/`false`/`1`/`0` - `TRUE` on NI's backend
+  silently reads as false - a quoted item is taken VERBATIM (`["a,b",c]` is `a,b` and `c`), and a
+  literal that does not fit its type is refused by name. On NI's backend a quote is an ordinary
+  character. `docs/aixml-backends.md`, "Compound literals".
+- **A test VI has the 1920 x 1080 budget too**: plan about THREE cases per test VI and list them
+  all in one runner; `diagramSize.withinBudget: false` means split it. `docs/diagram-size.md` §5.
+- **A latched boolean cannot be driven through `signalsJson`** (`Error 1193`). Test what it
+  triggers through the handler subVI it calls, and say so. `docs/cold-build-atm-agents-7.md` §4.
+- **`Format Into String` `%g` prints 50 as `50.000000`**; `%d`, `%.0f` and `%#g` print `50`
+  (measured by running, LabVIEW 2026, 2026-11-05). Derive an expected string from the format the
+  subject actually uses.
+- **A placeholder loses every typedef on its pane, silently**: check `typedefTerminals` and
+  `coercionDots`, repair with `lvai_bind_typedef_constants`. `docs/typedef-constants.md`.
+
 ## Why this is its own agent
 
 It was carved out of `labview-class-generator` on 2026-08-29, because testing is not class creation
@@ -768,6 +787,14 @@ shared either. When the task prompt says other agents are running: author the `C
 placeholder, STOP, and report the socket name for the orchestrator to swap centrally. Measured
 2026-09-16 - four agents built ten subVIs in about 11 minutes of wall clock against about 32 minutes
 of summed agent time, with no project contention at all.
+
+**In that situation pass `leaveProjectOpen: true` to EVERY generator** (`lvai_generate_test`,
+`lvai_generate_class_test`, `lvai_generate_method_test`, `lvai_generate_caraya_test_runner`) and give
+them the build's real `projectPath`. Without it the listing step closes the active project whenever
+it is the one named - on pylabview exactly the build's own, which the other agents are using
+(2026-11-05, ATM DQMH cold build 5; the agent then had to invent a scratch `.lvproj`). With it nothing
+is closed and nothing listed: each `projectEntry` comes back `deferred` with its VIs - name them all
+in your report for the orchestrator to list with `lvai_add_vis_to_project`.
 
 ## Related agents
 

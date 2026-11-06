@@ -27,6 +27,10 @@ The agent definitions carry rules a session working directly never reads. Relay 
 `NEEDS CLARIFICATION` block to the user verbatim and continue THAT agent via `SendMessage`; never
 answer it on the user's behalf.
 
+**A plugin user's main session never sees this file**: it reads `docs/orchestrator-brief.md`, the
+server's MCP `instructions`. Keep that brief in step with every change to this section.
+`docs/server-instructions.md`.
+
 **A MULTI-VI APPLICATION STARTS WITH A BUILD CONTRACT, written by the orchestrator BEFORE the first
 agent** (the user's decision of 2026-11-01). `build-contract.json` in the build folder names every
 VI with its path, owner, builder, connector pane and callees; `lvai_check_build_contract mode=plan`
@@ -325,8 +329,9 @@ can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconn
 
 **The AIXML tools have two backends**, NI's gRPC service and our pylabview composer, chosen by
 `"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json` (or `--aixml-backend`,
-`LABVIEWMCP_AIXML_BACKEND`); a LabVIEW older than 2026 defaults to pylabview and the composer
-writes that release's file version. What needs a running LabVIEW goes over ActiveX there, which
+`LABVIEWMCP_AIXML_BACKEND`). **pylabview is the default** (the user's decision of 2026-11-05; it
+was grpc, pylabview only below LabVIEW 2026); an existing settings file is switched to it once,
+marked by `"setDefaultDone": true`. The composer writes the file version of the LabVIEW in use. What needs a running LabVIEW goes over ActiveX there, which
 only ATTACHES, never starts LabVIEW. Pass `backend` only when you mean it.
 `docs/aixml-backends.md`.
 

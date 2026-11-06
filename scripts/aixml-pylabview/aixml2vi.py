@@ -1136,16 +1136,98 @@ def const_value(tree, value):
     return h + "00" if set(h) <= {"0"} else h
 
 
+class Verbatim(str):
+    """A literal item written in DOUBLE QUOTES: its text as it stands, never unescaped."""
+
+
+def _text(value):
+    """A scalar literal's text: a quoted item verbatim, anything else with AIXML's \\XX undone."""
+    return value if isinstance(value, Verbatim) else unescape(value or "")
+
+
+def _quote_end(s, open_, nested):
+    """The index of the quote closing the one at `open_`: the first later quote followed, past
+    spaces, by a comma or the end - or, inside a nested list, a closing bracket. None when there
+    is none, and the quote is then an ordinary character. ComValues.QuoteEnd's rule."""
+    q = s.find('"', open_ + 1)
+    while q >= 0:
+        a = q + 1
+        while a < len(s) and s[a] == " ":
+            a += 1
+        if a >= len(s) or s[a] == "," or (nested and s[a] in "]}"):
+            return q
+        q = s.find('"', q + 1)
+    return None
+
+
+def split_items(s):
+    """Top-level items of a literal's inside, QUOTE-AWARE: an item in double quotes comes back
+    as a Verbatim without its quotes, and a quoted element of a NESTED list is skipped whole, so
+    a comma or bracket inside it is not structure at this level either. The same rule as the run
+    tool's ComValues.SplitItems: until 2026-11-05 the composer split `[",,"]` into three items
+    while a run took it as one string."""
+    items, i = [], 0
+    while True:
+        k = i
+        while k < len(s) and s[k] == " ":
+            k += 1
+        close = _quote_end(s, k, False) if k < len(s) and s[k] == '"' else None
+        if close is not None:
+            items.append(Verbatim(s[k + 1:close]))
+            a = close + 1
+            while a < len(s) and s[a] == " ":
+                a += 1
+            if a >= len(s):
+                return items
+            i = a + 1
+            continue
+        depth, j, at_elem = 0, i, False
+        while j < len(s):
+            c = s[j]
+            if at_elem and c == " ":
+                j += 1
+                continue
+            if at_elem and c == '"' and depth > 0:
+                end = _quote_end(s, j, True)
+                if end is not None:
+                    j, at_elem = end + 1, False
+                    continue
+            at_elem = False
+            if c in "[{":
+                depth, at_elem = depth + 1, True
+            elif c in "]}":
+                depth -= 1
+            elif c == "," and depth == 0:
+                break
+            elif c == ",":
+                at_elem = True
+            j += 1
+        items.append(s[i:j])
+        if j >= len(s):
+            return items
+        i = j + 1
+
+
 def parse_literal(s):
     """An AIXML compound value - '[7,true]', '[1,2,3]', '[[1,2],[3,4]]', '[false,0,]' - into
-    nested lists of still-escaped scalar strings. Commas inside a string arrive as \\2C."""
+    nested lists of still-escaped scalar strings. Commas inside a string arrive as \\2C, or the
+    item is written in double quotes and taken verbatim (`["a,b",c]` is two strings)."""
+    if isinstance(s, Verbatim):
+        return s
     s = (s or "").strip()
     if not s.startswith("["):
         return s
-    inner = s[1:-1] if s.endswith("]") else s[1:]
+    if not s.endswith("]"):
+        raise Unsupported("literal %r opens a list it never closes" % s)
+    inner = s[1:-1]
     if inner == "":
         return []
-    return [parse_literal(x) for x in split_top(inner)]
+    return [parse_literal(x) for x in split_items(inner)]
+
+
+def _bad_literal(tree, value, why):
+    return Unsupported("value %r does not fit %s: %s - a wrong literal used to compose in silence "
+                       "as the type's default" % (value, tree.get("Type"), why))
 
 
 def _flat(tree, value):
@@ -1157,29 +1239,47 @@ def _flat(tree, value):
     if t == "Cluster":
         vals = parse_literal(value) if isinstance(value, str) else value
         if not isinstance(vals, list):
+            if vals not in ("", "0"):   # `0`: the reader's default for a cluster until 2026-10
+                raise _bad_literal(tree, value, "a cluster is written [field,field,...]")
             vals = []
         fs = fields(tree)
+        if len(vals) > len(fs):
+            raise _bad_literal(tree, value, "%d items for %d fields" % (len(vals), len(fs)))
         return "".join(_flat(f, vals[i] if i < len(vals) else "") for i, f in enumerate(fs))
     if t == "Array":
         vals = parse_literal(value) if isinstance(value, str) else value
         if not isinstance(vals, list):
+            if vals not in ("", "0"):   # `0`: as for a cluster, the reader's old default
+                raise _bad_literal(tree, value, "an array is written [item,item,...]")
             vals = []
         ndims = len(tree.findall("Dimension"))
+        elem = elem_of(tree)
+        compound = elem.get("Type") in ("Cluster", "Array")
         dims, cur = [], vals
         for _ in range(ndims):
             dims.append(len(cur) if isinstance(cur, list) else 0)
             cur = cur[0] if isinstance(cur, list) and cur else []
 
-        def leaves(v, depth):
+        def leaves(v, depth, shape):
+            # the nesting must match the rank: `[[true,false,true]]` for a 1D bool array composed
+            # as [FALSE] (one element, the inner list read as a boolean), and a ragged 2D literal
+            # as rows of the wrong length - both silently, found by an ATM build's LUnit tests
             if depth == 0:
+                if isinstance(v, list) and not compound:
+                    raise _bad_literal(tree, value, "nested deeper than the array's %d dimension(s)" % ndims)
                 return [v]
-            return [x for item in (v if isinstance(v, list) else []) for x in leaves(item, depth - 1)]
-        elem = elem_of(tree)
+            if not isinstance(v, list):
+                raise _bad_literal(tree, value, "%r where a list of %d dimension(s) belongs" % (v, depth))
+            if len(v) != shape[0]:
+                raise _bad_literal(tree, value, "ragged - rows of %d and %d items" % (shape[0], len(v)))
+            return [x for item in v for x in leaves(item, depth - 1, shape[1:])]
         return "".join(struct.pack(">i", d).hex().upper() for d in dims) + \
-            "".join(_flat(elem, x) for x in leaves(vals, ndims))
+            "".join(_flat(elem, x) for x in leaves(vals, ndims, dims))
+    if isinstance(value, list):
+        raise _bad_literal(tree, value, "a list where a scalar belongs")
     if t in ENUM_BASE.values():
         labels = [e.text for e in tree.findall("EnumLabel")]
-        v = unescape(value or "0")
+        v = _text(value or "0")
         idx = labels.index(v) if v in labels else int(float(v or 0))
         return struct.pack(INT_FMT["Num" + t[4:]], idx).hex().upper()
     return _const_value(tree, value)
@@ -1212,6 +1312,8 @@ def _const_value(tree, value):
     t = tree.get("Type")
     if t in ("Cluster", "Array") or t in ENUM_BASE.values():
         return _flat(tree, value)
+    if isinstance(value, list):
+        raise _bad_literal(tree, value, "a list where a scalar belongs")
     if t == "NumFloat64":
         return struct.pack(">d", float(value or 0)).hex().upper()
     if t == "NumFloat32":
@@ -1219,7 +1321,12 @@ def _const_value(tree, value):
     if t in INT_FMT:
         return struct.pack(INT_FMT[t], int(float(value or 0))).hex().upper()
     if t == "Boolean":
-        return "01" if str(value).lower() in ("true", "1") else "00"
+        # true/false (NI's exports), 1/0; anything else - T, yes, a stray list - was false in
+        # silence until 2026-11-05
+        b = (value or "").strip().lower()
+        if b not in ("true", "false", "1", "0", ""):
+            raise _bad_literal(tree, value, "a boolean is true or false")
+        return "01" if b in ("true", "1") else "00"
     if t == "LVVariant" and not value:
         # an EMPTY variant, the only one NI's exports write (value=""): flattened with the
         # version stamp of the LabVIEW that wrote it, read off probes/pclean.xml's constant
@@ -1227,7 +1334,7 @@ def _const_value(tree, value):
     if t in ("String", "Tag"):
         # a Tag constant (a DAQmx terminal name ...) is flattened like a string: measured
         # 0000000C 4F6E626F617264436C6F636B for "OnboardClock"
-        b = lvheap.value_bytes(unescape(value or ""))
+        b = lvheap.value_bytes(_text(value))
         return (struct.pack(">I", len(b)) + b).hex().upper()
     if t == "NumFloatExt":
         return _quad(float(value or 0))
@@ -1239,7 +1346,7 @@ def _const_value(tree, value):
         # AIXML cannot carry a timestamp literal (LabVIEW's own converter discards it): zero
         return "00" * 16
     if t == "Path":
-        v = unescape(value or "")
+        v = _text(value)
         if not v:
             # LabVIEW's empty path, as NI's own constants carry it: type 0, no components
             body = struct.pack(">HH", 0, 0)
@@ -4861,6 +4968,50 @@ class Composer:
                      root.get("outs").split("|") if root.get("outs") else []))
         return self._tcache.get(name, [])
 
+    @staticmethod
+    def _restack_growable(node, tl, before, after):
+        """A growable node's repeated inputs after cloning or removing some: one below the other
+        at the template's pitch, what lies below them moved down (Format Into String's error out),
+        what spans them (Compound Arithmetic's result) and the node itself as much taller.
+        A clone is a copy of the last input, termBounds included, so without this a sixth input
+        lay on top of the fifth and the node kept the five-input template's height: MP3 Parse
+        Frames.vi's six-input AND drew five inputs with six wires (the user's screenshot,
+        2026-11-04). Inputs the template does not stack evenly are left as they were."""
+        if not before or len(after) == len(before):
+            return
+
+        def tb(t):
+            e = t.find("dco/termBounds")
+            return lvheap.parse_bounds(e.text) if e is not None and e.text else None
+
+        old = [tb(t) for t in before]
+        if any(b is None for b in old):
+            return
+        tops = [b[0] for b in old]
+        pitch = (tops[1] - tops[0]) if len(tops) > 1 else old[0][2] - old[0][0]
+        if pitch <= 0 or any(tops[i + 1] - tops[i] != pitch for i in range(len(tops) - 1)):
+            return
+        top, bottom = tops[0], old[-1][2]
+        height = old[0][2] - old[0][0]
+        delta = (len(after) - len(before)) * pitch
+        for i, t in enumerate(after):
+            b = tb(t)
+            if b is None:
+                continue
+            t.find("dco/termBounds").text = lvheap.fmt_bounds((top + i * pitch, b[1], top + i * pitch + height, b[3]))
+        for t in tl:
+            if any(t is a for a in after):
+                continue
+            b = tb(t)
+            if b is None:
+                continue
+            if b[0] >= bottom:
+                t.find("dco/termBounds").text = lvheap.fmt_bounds((b[0] + delta, b[1], b[2] + delta, b[3]))
+            elif b[0] <= top and b[2] >= bottom:
+                t.find("dco/termBounds").text = lvheap.fmt_bounds((b[0], b[1], b[2] + delta, b[3]))
+        b = lvheap.parse_bounds(node.find("bounds").text)
+        node.find("bounds").text = lvheap.fmt_bounds((b[0], b[1], b[2] + delta, b[3]))
+
     def _clone_replace_chunks(self, node, tl, by_key, chunks):
         """Replace Array Subset's element groups 2..n, each a clone of group 1's terminals shifted
         down by one group (8 px per index, 8 for the element - 16 on a 1D array, measured on
@@ -4985,6 +5136,13 @@ class Composer:
         by_key = {t.get("aixml"): t for t in tl if t.get("aixml")}
         if len(chunks) > 1:
             self._clone_replace_chunks(node, tl, by_key, chunks)
+        # the template's repeated inputs, per kind, before any is cloned or removed: their
+        # stacking is re-laid below (_restack_growable)
+        grown = {}
+        if name in self.GROWABLE:
+            for kk, t in by_key.items():
+                if kk in t_in:
+                    grown.setdefault(grow_base(kk), []).append(t)
         # growable: clone the last input of the repeated kind until every wanted key exists
         for k in want_in:
             if k in by_key:
@@ -5022,6 +5180,8 @@ class Composer:
                         dl.remove(e)
                     dl.set("elements", str(len(dl)))
         tl.set("elements", str(len(tl)))
+        for base, before in grown.items():
+            self._restack_growable(node, tl, before, [t for kk, t in by_key.items() if grow_base(kk) == base])
 
         def donor(t):
             e = t.find("dco/typeDesc")
