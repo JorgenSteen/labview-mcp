@@ -14,8 +14,9 @@ marketplace next to it:
 
 ```
 C:\project\claude\labview-mcp-local-plugin\
-  .claude-plugin\marketplace.json   marketplace "labview-local", plugin "labview-mcp", source ./labview-mcp
-  labview-mcp\                      the plugin folder (bin\LabVIEWMCP.exe, agents\, hooks\, .mcp.json, ...)
+  .claude-plugin\marketplace.json   marketplace "labview-local", plugin "labview-mcp", source ./<last build's folder>
+  labview-mcp\                      a plugin folder (bin\LabVIEWMCP.exe, agents\, hooks\, .mcp.json, ...)
+  labview-mcp-b\                    its sibling: updates alternate between the two, see "Every later update"
 ```
 
 It never installs, enables or disables anything. The version is
@@ -34,7 +35,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File local\Update-LocalPlugin.ps1
   version `.dirty`.
 - It reuses `tools\pylabview\runtime` when that is complete and patched; `-Reprovision`
   (optionally `-PythonSource <CPython folder with Pillow>`) rebuilds it with `provision.ps1`.
-- It refuses to replace the folder while a `LabVIEWMCP.exe` from it is running.
+- It refuses to replace the folder while a `LabVIEWMCP.exe` from it is running; build into the
+  sibling folder then (`-Destination`, see "Every later update").
 
 ## One-time swap (store plugin -> local build)
 
@@ -52,19 +54,33 @@ the same tool names.
 
 ## Every later update
 
-**Close every Claude Code session first.** Measured 2026-10-10: Claude Code runs a local-directory plugin straight
-from the build folder (`claude plugin list` shows "Read from: …\labview-mcp-local-plugin\labview-mcp"), so while any
-session is open its `bin\LabVIEWMCP.exe` is running and locked, and the script cannot replace the folder.
+**Build into the folder NO session runs from, and no session has to close.** Claude Code runs a
+local-directory plugin straight from the build folder (measured 2026-10-10; `claude plugin list` shows
+"Read from: …\labview-mcp-local-plugin\<folder>"), so while a session is open its `bin\LabVIEWMCP.exe`
+is running and locked, and the script refuses to replace that folder. It does not have to: build
+into the sibling instead. `-Destination` sets the folder, and the script points the marketplace's
+`source` at it.
 
 ```
 git checkout main            # with the change merged in, see below
-powershell -NoProfile -ExecutionPolicy Bypass -File local\Update-LocalPlugin.ps1
+claude plugin list           # "Read from:" names the folder in use - build into the OTHER one
+powershell -NoProfile -ExecutionPolicy Bypass -File local\Update-LocalPlugin.ps1 -Destination C:\project\claude\labview-mcp-local-plugin\labview-mcp-b
 claude plugin marketplace update labview-local
 claude plugin update labview-mcp@labview-local
 ```
 
-Then restart Claude Code (`claude plugin update` says "restart required to apply"). Every build has a
-new version, which is what `update` compares.
+(When "Read from" names `labview-mcp-b`, leave `-Destination` out: the default is `labview-mcp`.)
+
+Measured 2026-11-06 with two sessions running their servers from `labview-mcp`: the build, both
+`claude plugin` commands and the pre-push gate left both servers running, and `claude plugin list`
+then read from `labview-mcp-b`. Each session keeps the build it started with; a session restarted
+afterwards gets the new one (`claude plugin update` says "Restart to apply changes"). `update`
+compares versions, and every build has a new one. It copies each version into its own folder under
+`%USERPROFILE%\.claude\plugins\cache\labview-local\labview-mcp\` and removes none of them.
+
+The folder left behind is the next update's destination: once no `LabVIEWMCP.exe` runs from it, the
+script replaces it. To clean up earlier, delete it only when no `LabVIEWMCP.exe` runs from it
+(`Get-Process LabVIEWMCP | Select-Object Id, Path`).
 
 ## Switching back to the store plugin
 
