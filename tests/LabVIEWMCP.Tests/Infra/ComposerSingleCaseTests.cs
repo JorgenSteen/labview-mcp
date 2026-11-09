@@ -373,8 +373,14 @@ public sealed class ComposerSingleCaseTests : IDisposable
     {
         var setup = AixmlComposer.Locate(out _);
         var vi = ExampleVi(example);
+        // the instance of the LabVIEW the composer resolves against - the RUNNING one when one
+        // runs. A fixed 2026(32-bit) guard failed both cases with LabVIEW 2025 open, whose
+        // ExtraVILib holds no Stream-i32 (fork, 2026-11-09)
+        var context = LabViewContext.Resolve(Path.Combine(_dir, "Channel.vi"));
+        if (context.Major is not { } major || context.Bits is not { } bits) return;
         var instances = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "LabVIEW Data", "2026(32-bit)", "ExtraVILib", "ChannelInstances", "Stream-i32.lvlib");
+            "LabVIEW Data", $"{(major < 100 ? 2000 + major : major)}({bits}-bit)", "ExtraVILib",
+            "ChannelInstances", "Stream-i32.lvlib");
         if (setup is null || vi is null || !File.Exists(instances)) return;
         var xml = Path.Combine(_dir, "channel.xml");
         var read = await AixmlComposer.ReadAsync(setup, vi, xml, 120, default);
