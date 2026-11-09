@@ -3042,6 +3042,11 @@ With the reader at NI's level the composer was taken on next, by the census's fi
   the bare `ref{Queue}{T}`, and composed so it did not wire to the instance (`two terminals of
   different types`, 18 of 20 broken). Of the 75 channel examples refused before, 23 compose and 22
   run; the 23rd, AI Configure.vi, calls an instance that is not executable itself.
+  `Documents` is the folder WINDOWS names (`SHGetFolderPathW`, CSIDL_PERSONAL), not
+  `%USERPROFILE%\Documents`: on a station whose Documents is redirected to OneDrive
+  (`OneDrive - <org>\Dokumenter`), LabVIEW keeps `LabVIEW Data` there, and `resolve.py` reading the
+  profile path found no ExtraVILib and refused every channel call as a template - both cases of
+  `A_channel_call_composes_against_the_linked_instance` failed (fork, 2026-11-09).
 - **A PRIMITIVE WITH AN INPUT AND AN OUTPUT OF ONE NAME** - Rotate Right With Carry's `value` -
   composed both wires onto one terminal, and LabVIEW DIED loading the channel example that has
   one (Lossy Stream.vi). `out_key` keys a primitive's output `name + NUL + "out"` where an input

@@ -91,9 +91,24 @@ def extra_vilib(version, bits):
     if not version or not bits:
         return None
     year = 2000 + version[0] if version[0] < 100 else version[0]
-    docs = os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), "Documents")
-    d = os.path.join(docs, "LabVIEW Data", "%d(%d-bit)" % (year, bits), "ExtraVILib")
+    d = os.path.join(documents_dir(), "LabVIEW Data", "%d(%d-bit)" % (year, bits), "ExtraVILib")
     return d if os.path.isdir(d) else None
+
+
+def documents_dir():
+    r"""The user's Documents folder as Windows (and LabVIEW) resolves it. It is often REDIRECTED -
+    to OneDrive, under a localised name (`OneDrive - <org>\Dokumenter`) - and LabVIEW keeps its
+    `LabVIEW Data` there; `%USERPROFILE%\Documents` then holds no ExtraVILib, and every channel call
+    was refused as a template on such a station (2026-11-09). Falls back to that path off Windows."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        # SHGetFolderPathW(hwnd, CSIDL_PERSONAL = 5, token, SHGFP_TYPE_CURRENT = 0, path)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:
+            return buf.value
+    except (ImportError, AttributeError, OSError):
+        pass
+    return os.path.join(os.environ.get("USERPROFILE") or os.path.expanduser("~"), "Documents")
 
 
 def labview_identity(lv_root):
