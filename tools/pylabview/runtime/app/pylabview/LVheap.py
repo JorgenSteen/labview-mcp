@@ -1902,7 +1902,7 @@ class HeapNodePStrList(HeapNode):
 
     def initContentWithXML(self, tagText):
         count = None
-        tagParse = re.match(r"^[(]([0-9A-Fx]+)[)](\".*\")$", tagText, re.MULTILINE|re.DOTALL)
+        tagParse = re.match(r"^[(]([0-9A-Fx]+)[)](\".*\")?$", tagText, re.MULTILINE|re.DOTALL)
         if tagParse is not None:
             count = int(tagParse.group(1), 0)
         if count is None:

@@ -117,6 +117,25 @@ def run_pylabview(args, timeout=120):
     return p.returncode, out + err
 
 
+def _failure_text(out, limit):
+    """pylabview's output for an error message: its own SyntaxWarnings dropped (LVheap.py:1757
+    filled the whole tail of 6 of 11 failures in the vi.lib sweep, 2026-11-08, hiding the cause)
+    and the LAST `Error:` line put first, so a truncated message still names it."""
+    lines = out.splitlines()
+    keep, skip = [], False
+    for ln in lines:
+        if "SyntaxWarning" in ln:
+            skip = True          # the warning and the source line it quotes after it
+            continue
+        if skip and ln.startswith((" ", "\t")):
+            continue
+        skip = False
+        keep.append(ln)
+    errs = [ln for ln in keep if ln.startswith("Error:") or re.match(r"\w+Error: ", ln)]
+    text = "\n".join(keep)[-limit:]
+    return (errs[-1] + " | " + text) if errs else text
+
+
 def extract(vi_path, out_dir, timeout=120):
     """VI -> bundle. Returns the main xml path."""
     os.makedirs(out_dir, exist_ok=True)
@@ -124,21 +143,21 @@ def extract(vi_path, out_dir, timeout=120):
     main = os.path.join(out_dir, base + ".xml")
     code, out = run_pylabview(["-x", "-i", vi_path, "-m", main], timeout=timeout)
     if code != 0 or not os.path.exists(main):
-        raise RuntimeError("extract failed for %s: %s" % (vi_path, out[-2000:]))
+        raise RuntimeError("extract failed for %s: %s" % (vi_path, _failure_text(out, 2000)))
     return main
 
 
 def rebuild(main_xml, vi_path):
     code, out = run_pylabview(["-c", "-m", main_xml, "-i", vi_path])
     if code != 0 or not os.path.exists(vi_path):
-        raise RuntimeError("rebuild failed: %s" % out[-3000:])
+        raise RuntimeError("rebuild failed: %s" % _failure_text(out, 3000))
     return out
 
 
 class Bundle:
     """Read-only view of an extracted bundle: main tree, both heaps, the type chain."""
 
-    def __init__(self, main_xml):
+    def __init__(self, main_xml, collections=False):
         self.main_xml = main_xml
         self.dir = os.path.dirname(main_xml)
         self.main = ET.parse(main_xml).getroot()
@@ -146,10 +165,45 @@ class Bundle:
         self.bd = self._heap("BDHb")
         vctp = self.main.find("VCTP/Section")
         self.flat = [td for td in vctp if td.tag == "TypeDesc"]
+        if collections:
+            # the READER's view only: the composer copies a callee's types as they stand, and a
+            # rewritten set would no longer serialize
+            self._collections()
         self.toplevel = {int(t.get("Index")): int(t.get("FlatTypeID"))
                          for t in vctp.find("TopLevel")}
         dthp = self.main.find("DTHP/Section/TypeDescSlice")
         self.index_shift = int(dthp.get("IndexShift")) if dthp is not None else 0
+
+    def _collections(self):
+        """SET and MAP types (0x73, 0x74), which pylabview keeps raw (patch ref-family-non-refnum-raw):
+        their bytes are the element's index into this flat list - a map a count and then the key's
+        and the value's - and a Pascal label. Rewritten here as Type="Set"/"Map" with TypeID
+        children, so tree() inlines them like any other container; measured on NI's Set and Map
+        Collection examples, whose export writes set{string} and map{string.word,uint64.count}
+        where the reader said ?115 and ?116 (2026-11-06)."""
+        for td in self.flat:
+            kind = {"115": "Set", "116": "Map"}.get(td.get("Type"))
+            if kind is None or not td.get("File"):
+                continue
+            try:
+                b = open(os.path.join(self.dir, td.get("File")), "rb").read()
+            except OSError:
+                continue
+            if kind == "Set" and len(b) >= 2:
+                idx, pos = [int.from_bytes(b[0:2], "big")], 2
+            elif kind == "Map" and len(b) >= 6:
+                idx, pos = [int.from_bytes(b[2:4], "big"), int.from_bytes(b[4:6], "big")], 6
+            else:
+                continue
+            if any(i >= len(self.flat) for i in idx):
+                continue
+            td.set("Type", kind)
+            td.set("Format", "inline")
+            if td.get("HasLabel") == "1" and pos < len(b):
+                n = b[pos]
+                td.set("Label", b[pos + 1:pos + 1 + n].decode("cp1252", "replace"))
+            for i in idx:
+                ET.SubElement(td, "TypeDesc", {"TypeID": str(i)})
 
     def _heap(self, block):
         sec = self.main.find(block + "/Section")
