@@ -172,8 +172,11 @@ if ($dirty -and -not $AllowDirty) {
 if (-not $dotnet) { $refuse += 'no .NET 8 SDK, neither in %USERPROFILE%\.dotnet nor in a dotnet on PATH' }
 # Never replace the folder under a running server: the exe would be locked, and pulling files out
 # from under a live session is the kind of surprise this script must not cause. It is not killed.
+# Matched with a trailing separator: a bare prefix took ...\labview-mcp-b\bin for ...\labview-mcp
+# and refused the free sibling folder while the servers ran from the other one (2026-11-09).
+$destPrefix = $Destination.TrimEnd('\') + '\'
 $live = @(Get-Process -Name 'LabVIEWMCP' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($Destination, [StringComparison]::OrdinalIgnoreCase) })
+    Where-Object { $_.Path -and $_.Path.StartsWith($destPrefix, [StringComparison]::OrdinalIgnoreCase) })
 if ($live) { $refuse += "a LabVIEWMCP.exe is running from $Destination (pid $($live.Id -join ', ')); close that Claude Code session first" }
 
 if ($Check) {
