@@ -9,7 +9,7 @@ namespace LabVIEWMcp.Tests.Infra;
 /// <summary>
 /// Session-7 report M7, 2026-11-03: every Request and Wait for Reply of a headless caller timed
 /// out (403686) - on the user's module and on Delacor's untouched template - and the MCP's run
-/// route was suspected. The FIXTURE IS THE USER'S CALLER, verbatim (driverupdate
+/// route was suspected. The FIXTURE IS THE USER'S CALLER, verbatim (a field project's
 /// mcp_temp\s7\run\s7_run_fresh.xml): Stop Module takes its `error in` from Synchronize Module
 /// Events (111.err), beside the request, so nothing orders the two. Measured on LabVIEW 2026 over
 /// the same ActiveX run route: this file, 403686 after 5.4 s; with Stop Module on 113.err, the
