@@ -307,25 +307,40 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                 ["waitSecondsRequested"] = waitSeconds,
                 ["waitSecondsUsed"] = (int)budget.TotalSeconds,
                 ["lastError"] = last?.Message,
-                // "LabVIEW is up" was asserted unconditionally here, and it was wrong exactly when
-                // it mattered: with runningProcesses 0 the advice sent the reader after the AI
-                // service while the IDE itself was gone.
-                ["next"] = stillRunning == 0
-                    ? "No LabVIEW process is running any more - it was started and did not stay up. " +
-                      "Start LabVIEW by hand and call this tool again; the README's Troubleshooting " +
-                      "table has the measurement behind this."
-                    : "LabVIEW is up but its AI gRPC service is not answering yet. THIS IS THE " +
-                      "NORMAL COLD-START ANSWER, not a fault - CALL THIS TOOL AGAIN and it will " +
-                      "almost certainly answer `ready` at once. Measured four times on 2026-09-01: " +
-                      "the first call spent its whole 45 s budget and the second answered ready in " +
-                      "1.2 s, 12.1 s, 27.7 s and 1.2 s. Do NOT read `lastError: \"The operation " +
-                      "was canceled.\"` as a failure; it is this call's own budget expiring. Only " +
-                      "if a SECOND call also comes back `starting` is something wrong - the service " +
-                      "comes up with LabVIEW itself, about 45 s after a cold start (measured " +
-                      "2026-10-17); if it is still missing after about two minutes, ask the user to " +
-                      "open Nigel, or use the CLI --ensure-labview for an unattended long wait.",
+                ["next"] = NextAfterStarting(stillRunning, overCom),
             }.ToJsonString(Indented);
         });
+
+    /// <summary>
+    /// What a `starting` answer tells the caller to do. "LabVIEW is up" was asserted
+    /// unconditionally once, and it was wrong exactly when it mattered: with runningProcesses 0 the
+    /// advice sent the reader after the AI service while the IDE itself was gone. And on the
+    /// pylabview backend readiness is ActiveX, not NI's service - measured 2026-11-13, the first
+    /// call of a cold LabVIEW 2026 start answered "its AI gRPC service is not answering yet" beside
+    /// a `lastError` that named the start-up splash; the second call answered ready in 4.4 s.
+    /// </summary>
+    internal static string NextAfterStarting(int stillRunning, bool overCom) =>
+        stillRunning == 0
+            ? "No LabVIEW process is running any more - it was started and did not stay up. " +
+              "Start LabVIEW by hand and call this tool again; the README's Troubleshooting " +
+              "table has the measurement behind this."
+            : overCom
+                ? "LabVIEW is up but does not answer over ActiveX yet - `lastError` says why, usually " +
+                  "its start-up splash. THIS IS THE NORMAL COLD-START ANSWER, not a fault - CALL THIS " +
+                  "TOOL AGAIN and it will almost certainly answer `ready`: measured 2026-11-13, the " +
+                  "second call of a cold LabVIEW 2026 start answered ready in 4.4 s. NI's gRPC service " +
+                  "is not needed on this backend. Only if a SECOND call also comes back `starting` is " +
+                  "something wrong: read lvai_labview_state for a dialog."
+                : "LabVIEW is up but its AI gRPC service is not answering yet. THIS IS THE " +
+                  "NORMAL COLD-START ANSWER, not a fault - CALL THIS TOOL AGAIN and it will " +
+                  "almost certainly answer `ready` at once. Measured four times on 2026-09-01: " +
+                  "the first call spent its whole 45 s budget and the second answered ready in " +
+                  "1.2 s, 12.1 s, 27.7 s and 1.2 s. Do NOT read `lastError: \"The operation " +
+                  "was canceled.\"` as a failure; it is this call's own budget expiring. Only " +
+                  "if a SECOND call also comes back `starting` is something wrong - the service " +
+                  "comes up with LabVIEW itself, about 45 s after a cold start (measured " +
+                  "2026-10-17); if it is still missing after about two minutes, ask the user to " +
+                  "open Nigel, or use the CLI --ensure-labview for an unattended long wait.";
 
     // ---- for lvai_restart_labview (fork-only: upstream did not port the restart) ----
 
