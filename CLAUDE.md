@@ -453,6 +453,15 @@ it, and say what the old text claimed. When a measurement contradicts a number, 
 PRODUCES the number. A rule that has to survive into a shipped build belongs here or in a served
 document; `experiments/` does not ship.
 
+**NO CUSTOMER, PROJECT OR PERSON NAME IN ANYTHING THAT CAN BE PUSHED** (the user's rule of
+2026-11-13). That covers code comments, docs, tests, helper AIXML descriptions, `patches.json` notes,
+fixture paths and every commit message - and a project's own issue ids and helper names, which
+point back to it as surely as its name. Say what was measured and where it applies ("a field
+project: DQMH driver work saved for LabVIEW 2018"), never whose it was. Field reports and notes
+that name a customer stay untracked. Before committing work that came from one, grep the diff AND
+the message for its names. An unpushed leak is rewritten before it is pushed; a pushed one stays
+in history (a force push is the user's call), and the text is neutralised from the next commit on.
+
 ## Where the knowledge lives
 
 | Question | Document | Tool |
