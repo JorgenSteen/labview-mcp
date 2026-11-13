@@ -94,7 +94,32 @@ public sealed class SaveVersionsTests : IDisposable
         Assert.Equal("26.0", file["savedAs"]!.GetValue<string>());
         Assert.Equal("21.0", file["projectSaveVersion"]!.GetValue<string>());
         Assert.Equal(project, file["project"]!.GetValue<string>(), ignoreCase: true);
+        Assert.Equal("listed", file["pinFrom"]!.GetValue<string>());
         Assert.Contains("older than 26.0 cannot open", check["warning"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// THE E2E CASE, 2026-11-13: a VI generated into a 21.0 project's folder (composed 21.0 by the
+    /// folder rule) got its icon BEFORE lvai_add_vis_to_project listed it. The check reported
+    /// `was 21.0, savedAs 26.0` and named no pin; it now names the one the composer used.
+    /// </summary>
+    [Fact]
+    public void A_file_no_project_lists_yet_is_judged_by_the_pin_of_the_project_above_it()
+    {
+        var sub = Directory.CreateDirectory(Path.Combine(_dir, "generated")).FullName;
+        var project = Project("21.0");                      // lists nothing
+        var vi = Path.Combine(sub, "New.vi");
+        File.Copy(RepoTree.Path("tests", "LabVIEWMCP.Tests", "Fixtures", "basic-interfaces", "Lever", "Pry.vi"), vi);
+        var before = new SaveVersions.Before(DateTime.UtcNow.AddSeconds(-1),
+                                             new Dictionary<string, string?> { [vi] = "21.0" });
+        File.SetLastWriteTimeUtc(vi, DateTime.UtcNow);
+
+        var file = SaveVersions.Check(before, new JsonObject { ["viPath"] = vi }, null)!["files"]![0]!;
+
+        Assert.Equal("21.0", file["was"]!.GetValue<string>());
+        Assert.Equal("21.0", file["projectSaveVersion"]!.GetValue<string>());
+        Assert.Equal(project, file["project"]!.GetValue<string>(), ignoreCase: true);
+        Assert.Equal("folder", file["pinFrom"]!.GetValue<string>());
     }
 
     /// <summary>The 18.0 field case: no pin found, but the file itself went up a version during the call.</summary>

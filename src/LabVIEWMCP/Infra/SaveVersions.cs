@@ -211,7 +211,12 @@ internal static class SaveVersions
             if (Of(path) is not { } now) continue;
 
             var was = before.Versions.GetValueOrDefault(path);
-            var pin = PinFor(path);
+            // NOT LISTED YET IS NOT "NO PIN": the composer wrote a new VI at the pin of the project
+            // in the folders above it (PinAbove), so the check judges it by the same rule. Measured
+            // 2026-11-13: a VI generated into a 21.0 project's folder and given its icon BEFORE it was
+            // listed was reported `was 21.0, savedAs 26.0` with no projectSaveVersion at all.
+            var listed = PinFor(path);
+            var pin = listed ?? PinAbove(path);
             var upgraded = was is not null && Compare(now, was) > 0;
             var pastPin = pin is { } p && Compare(now, p.Version) > 0;
             if (!upgraded && !pastPin) continue;
@@ -222,6 +227,9 @@ internal static class SaveVersions
             {
                 finding["projectSaveVersion"] = pinned.Version;
                 finding["project"] = pinned.Project;
+                // "listed": the project lists the file (or its library/class); "folder": no project
+                // lists it yet, and every project in its folder and up to three above pins this.
+                finding["pinFrom"] = listed is null ? "folder" : "listed";
             }
             findings.Add(finding);
         }

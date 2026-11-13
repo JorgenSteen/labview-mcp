@@ -29,7 +29,9 @@ still be restored. An answer with nothing to report is not touched. The versions
 FILES, no LabVIEW: a resource file's `LVSR` block starts with the version word (`26008000` = 26.0,
 `20008000` = 20.0, measured on files LabVIEW 2026 and 2020 wrote); an XML file carries it as the root
 element's `LVVersion`. The pin that applies is the one of a project that lists the file, or lists the
-library or class that owns it. Files are recognised by extension (`.vi .ctl .vim .vit .ctt .lvclass
+library or class that owns it (`pinFrom: "listed"`); for a file no project lists yet, the composer's
+folder rule below (`pinFrom: "folder"` - measured 2026-11-13: a new VI given its icon before it was
+listed was reported with no pin at all). Files are recognised by extension (`.vi .ctl .vim .vit .ctt .lvclass
 .lvlib .lvproj`); a call naming more than 300 is not checked.
 
 **The composer writes the pinned version** (`AixmlComposer.PinnedTarget`), on the pylabview backend:
