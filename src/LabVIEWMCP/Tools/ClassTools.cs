@@ -2489,14 +2489,17 @@ internal sealed class ClassTools(LvaiConnection connection)
     /// classes left the Project Explorer showing forty
     /// <c>Load&lt;n&gt;-privatedata.vi [Warning: has been deleted, renamed...]</c> rows on top of
     /// forty <c>Load&lt;n&gt;.lvclass</c> items whose directories had been removed. Nothing here
-    /// listed those VIs; LabVIEW did.
+    /// listed those VIs; LabVIEW did. Only such an entry under %TEMP% goes (or any, when the
+    /// project itself lives there): a missing file anywhere else is the user's entry, kept and
+    /// named in <paramref name="missingKept"/>.
     ///
     /// A URL resolves against the FILE that carries it treated as a directory, so the leading
     /// <c>..</c> pops the .lvproj's own name rather than a directory - the rule from
     /// lvproj-structure.md section 5, and getting it wrong here would delete live items.
     /// </summary>
     internal static (string Text, int Removed, List<string> Names) StripHelperItems(
-        string projectXml, string? projectPath = null, string? tempRoot = null)
+        string projectXml, string? projectPath = null, string? tempRoot = null,
+        List<string>? missingKept = null)
     {
         // WHAT WAS REMOVED, NOT JUST HOW MANY. This returned a bare count until 2026-09-15, and
         // that count sent a diagnosis after the wrong mechanism entirely: a `strayVisRemoved: 5`
@@ -2651,6 +2654,21 @@ internal sealed class ClassTools(LvaiConnection connection)
                     if (System.IO.Directory.Exists(parent)) break;
                 }
 
+                // A MISSING FILE OUTSIDE %TEMP% IS THE USER'S ENTRY, AND IT STAYS. What this pass
+                // exists for - a scratch VI LabVIEW adopted, a class work directory deleted under
+                // its entry - lives under %TEMP% (LabVIEWMCP's trees, a session scratchpad).
+                // Measured 2026-11-13: lvai_add_vis_to_project removed a field project's own
+                // Dependencies entry `../../<name>.vi`, a file that is missing beside the original
+                // project too - an entry nothing of ours had written. LabVIEW lists such an entry
+                // as missing and keeps it; so does this pass now, and the caller names it. A
+                // project that itself lives under %TEMP% (a test fixture, a scratch run) keeps the
+                // old rule, because nothing there tells its own entries from strays.
+                if (!IsUnderTemp(resolved, tempRoot) && !IsUnderTemp(projectPath, tempRoot))
+                {
+                    missingKept?.Add(match.Groups["name"].Value + " (file not there: " + url + ")");
+                    return match.Value;
+                }
+
                 dangling++;
                 names.Add(match.Groups["name"].Value + " (file not there: " + url + ")");
                 return "";
@@ -2663,13 +2681,18 @@ internal sealed class ClassTools(LvaiConnection connection)
     /// A file under the user's temp directory, listed by a project that does NOT itself live
     /// there. <paramref name="tempRoot"/> is for tests; production uses <see cref="Path.GetTempPath"/>.
     /// </summary>
-    internal static bool IsTempStray(string resolvedPath, string projectPath, string? tempRoot = null)
+    internal static bool IsTempStray(string resolvedPath, string projectPath, string? tempRoot = null) =>
+        IsUnderTemp(resolvedPath, tempRoot) && !IsUnderTemp(projectPath, tempRoot);
+
+    /// <summary>
+    /// A path under the user's temp directory. <paramref name="tempRoot"/> is for tests; production
+    /// uses <see cref="Path.GetTempPath"/>.
+    /// </summary>
+    internal static bool IsUnderTemp(string path, string? tempRoot = null)
     {
         var temp = Path.TrimEndingDirectorySeparator(Path.GetFullPath(tempRoot ?? Path.GetTempPath()));
-        static bool Under(string path, string root) =>
-            path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
-        return Under(Path.GetFullPath(resolvedPath), temp)
-               && !Under(Path.GetFullPath(projectPath), temp);
+        return Path.GetFullPath(path).StartsWith(temp + Path.DirectorySeparatorChar,
+                                                 StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>The Name attribute of one matched item, for the removal listing.</summary>

@@ -140,8 +140,8 @@ internal sealed class CloseTools(LvaiConnection connection)
         bool regenerateHelper = false,
         [Description("""
             The .lvproj being closed; optional - otherwise the active project's path is read first
-            (`projectPathFrom`). The saved file is swept of helper VIs, LV_MCP sockets and entries
-            whose file is missing, each named.
+            (`projectPathFrom`). The saved file is swept of helper VIs, LV_MCP sockets and %TEMP%
+            entries, each named; a missing file elsewhere is kept and named (missingEntriesKept).
             """)]
         string? projectPath = null,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
@@ -262,7 +262,8 @@ internal sealed class CloseTools(LvaiConnection connection)
         try
         {
             var (projectText, projectStyle) = LvTextFile.Read(full);
-            var (tidied, removed, names) = ClassTools.StripHelperItems(projectText, full);
+            var missingKept = new List<string>();
+            var (tidied, removed, names) = ClassTools.StripHelperItems(projectText, full, missingKept: missingKept);
             if (removed > 0) LvTextFile.Write(full, tidied, projectStyle);
 
             // A FILE LISTED TWICE MAKES THE NEXT OPEN FAIL with `Error 74` and load nothing, so a
@@ -278,6 +279,8 @@ internal sealed class CloseTools(LvaiConnection connection)
                 ["strayVisRemoved"] = removed,
                 ["strayVisRemovedNames"] = new JsonArray([.. names.Select(n => (JsonNode)n!)]),
                 ["duplicateEntriesRemoved"] = new JsonArray([.. duplicates.Select(n => (JsonNode)n!)]),
+                // Entries whose file is missing OUTSIDE %TEMP% are the user's: kept, and named.
+                ["missingEntriesKept"] = new JsonArray([.. missingKept.Select(n => (JsonNode)n!)]),
                 // WHAT IT DOES NOT REACH, said plainly rather than left to be discovered. The same
                 // WeighBridge close also adopted a VI from a directory OUTSIDE the project tree
                 // (`../../wb-negctl/Neg Control.vi`), and that one stays: the file exists and sits
@@ -292,8 +295,9 @@ internal sealed class CloseTools(LvaiConnection connection)
                     : "") + (removed > 0
                     ? "Items LabVIEW adopted into the project during this session were removed - "
                     + "see strayVisRemovedNames. This sweep reaches our own temp trees, "
-                    + "<userlib>/LV_MCP sockets, entries whose file is not there, and any VI under "
-                    + "%TEMP% when the project itself does not live there. A VI adopted "
+                    + "<userlib>/LV_MCP sockets, and any VI under %TEMP% - present or missing - when "
+                    + "the project itself does not live there; a missing file elsewhere is the "
+                    + "user's entry and stays (missingEntriesKept). A VI adopted "
                     + "from any OTHER directory is left alone and is not reported, because nothing "
                     + "here can distinguish it from one the user listed on purpose."
                     : duplicates.Count > 0 ? "" : "Nothing to remove."),

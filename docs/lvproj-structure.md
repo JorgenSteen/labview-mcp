@@ -271,6 +271,14 @@ Prefixes: `Bld_*` (build behaviour), `TgtF_*` (target-file metadata / version re
 `App_*` (EXE-only application settings), `Exe_*` (EXE-only), `PackedLib_*` (PPL-only),
 `Source[i].*` / `Destination[i].*` (the two indexed arrays), `SourceCount` / `DestinationCount`.
 
+**A save in another LabVIEW rewrites them.** An installer spec (`Type="Installer"`) names its
+run-time components as `DistPart[i].*` and its target as `InstSpecBitness` / `InstSpecVersion`.
+Measured 2026-11-13: a 21.0 64-bit project saved by LabVIEW 2026 32-bit (a project close, nothing
+edited) came back with "NI LabVIEW Runtime 2021 SP1 f6 (64-bit)" replaced by a generic "Run-Time
+Engine 2021" with an empty `productID`, `InstSpecBitness` 64-bit -> 32-bit and `InstSpecVersion`
+21018002 -> 21000000 - and Dependencies emptied. Every project close now answers what changed
+(`projectRewrite`, `docs/save-version.md` §3).
+
 ### The indexed-array idiom
 
 There are no repeated XML elements for collections. Arrays are flattened into property **names**

@@ -1177,8 +1177,9 @@ internal sealed class TestTools(LvaiConnection connection)
         A VI is never listed twice: one at target level is MOVED into the folder
         (`movedIntoFolder`), one in another folder stays (`listedElsewhere`); existing duplicates
         are repaired (`duplicateEntriesRemoved`) - the fix when lvai_open_file refuses
-        `duplicateProjectEntries`. Stray helper VIs and sockets are swept. A path with no file is
-        not listed (`notOnDisk`). `targetLevel: true` lists directly under My Computer instead.
+        `duplicateProjectEntries`. Stray helper VIs and sockets are swept; an existing entry whose
+        file is missing outside %TEMP% is the user's and stays (`missingEntriesKept`). A path with
+        no file is not listed (`notOnDisk`). `targetLevel: true` lists directly under My Computer instead.
         """)]
     public async Task<string> AddVisToProjectAsync(
         [Description("The .lvproj to list the VIs in")] string projectPath,
@@ -1754,7 +1755,9 @@ internal sealed class TestTools(LvaiConnection connection)
                 : 0;
 
             var (projectText, projectStyle) = LvTextFile.Read(projectPath);
-            var (tidied, removed, strayNames) = ClassTools.StripHelperItems(projectText, projectPath);
+            var missingKept = new List<string>();
+            var (tidied, removed, strayNames) = ClassTools.StripHelperItems(
+                projectText, projectPath, missingKept: missingKept);
             if (removed > 0) await LvTextFile.WriteAsync(projectPath, tidied, projectStyle, ct);
 
             // AND NO FILE LISTED TWICE, whoever wrote the second entry: that project answers
@@ -1808,6 +1811,10 @@ internal sealed class TestTools(LvaiConnection connection)
             step["listed"] = new JsonArray([.. entries.Select(e => (JsonNode)e.Name)]);
             step["straysRemoved"] = removed;
             step["straysRemovedNames"] = new JsonArray([.. strayNames.Select(v => (JsonNode)v)]);
+            // THE USER'S MISSING ENTRIES, KEPT AND NAMED (ClassTools.StripHelperItems): an entry
+            // whose file is gone outside %TEMP% was never ours to remove.
+            if (missingKept.Count > 0)
+                step["missingEntriesKept"] = new JsonArray([.. missingKept.Select(v => (JsonNode)v)]);
             step["duplicateEntriesRemoved"] = new JsonArray([.. duplicates.Select(v => (JsonNode)v)]);
             step["reopened"] = reopened;
             if (notOnDisk.Count > 0)

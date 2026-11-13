@@ -429,4 +429,79 @@ public class ClassToolsTidyTests
         // a directory whose NAME merely starts like %TEMP% is not under it
         Assert.False(ClassTools.IsTempStray(@"C:\TempData\x.vi", @"D:\Work\p.lvproj", tempRoot: @"C:\Temp"));
     }
+
+    /// <summary>
+    /// THE USER'S MISSING ENTRY STAYS. Measured 2026-11-13: lvai_add_vis_to_project removed a field
+    /// project's Dependencies entry `../../&lt;name&gt;.vi`, whose file is missing beside the original
+    /// project too - an entry nothing of ours wrote. The layout is that project's: the .lvproj two
+    /// levels below the folder the URL points into, nothing under %TEMP% (injected).
+    /// </summary>
+    [Fact]
+    public void A_missing_entry_outside_temp_is_kept_and_named()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "lvmcp-keep-" + Guid.NewGuid().ToString("N"));
+        var fakeTemp = Path.Combine(root, "temp");
+        var project = Path.Combine(root, "work", "field", "P.lvproj");
+        Directory.CreateDirectory(fakeTemp);
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        var xml = """
+            <Project Type="Project" LVVersion="21008000">
+            	<Item Name="My Computer" Type="My Computer">
+            		<Item Name="Dependencies" Type="Dependencies">
+            			<Item Name="Shared Helper.vi" Type="VI" URL="../../Shared Helper.vi"/>
+            		</Item>
+            	</Item>
+            </Project>
+            """;
+        try
+        {
+            var kept = new List<string>();
+            var (text, removed, names) = ClassTools.StripHelperItems(xml, project, tempRoot: fakeTemp,
+                                                                     missingKept: kept);
+
+            Assert.Equal(0, removed);
+            Assert.Empty(names);
+            Assert.Equal(xml, text);
+            Assert.Equal(["Shared Helper.vi (file not there: ../../Shared Helper.vi)"], kept);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    /// <summary>
+    /// The control: a missing entry UNDER %TEMP% - a scratch VI LabVIEW adopted and we deleted -
+    /// still goes from the same project, in the same call that keeps the user's.
+    /// </summary>
+    [Fact]
+    public void A_missing_entry_under_temp_still_goes_beside_a_kept_one()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "lvmcp-keep-" + Guid.NewGuid().ToString("N"));
+        var fakeTemp = Path.Combine(root, "temp");
+        var scratch = Path.Combine(fakeTemp, "LabVIEWMCP", "work");
+        var project = Path.Combine(root, "work", "field", "P.lvproj");
+        Directory.CreateDirectory(scratch);
+        Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        var gone = Path.Combine(scratch, "Load1-privatedata.vi");
+        var url = Path.GetRelativePath(project, gone).Replace('\\', '/');
+        var xml = $"""
+            <Project Type="Project">
+            	<Item Name="My Computer" Type="My Computer">
+            		<Item Name="Load1-privatedata.vi" Type="VI" URL="{url}"/>
+            		<Item Name="Shared Helper.vi" Type="VI" URL="../../Shared Helper.vi"/>
+            	</Item>
+            </Project>
+            """;
+        try
+        {
+            var kept = new List<string>();
+            var (text, removed, names) = ClassTools.StripHelperItems(xml, project, tempRoot: fakeTemp,
+                                                                     missingKept: kept);
+
+            Assert.Equal(1, removed);
+            Assert.DoesNotContain("Load1-privatedata.vi", text);
+            Assert.Contains("Shared Helper.vi", text);
+            Assert.Contains(names, n => n.StartsWith("Load1-privatedata.vi", StringComparison.Ordinal));
+            Assert.Single(kept);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
 }
