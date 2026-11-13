@@ -74,8 +74,10 @@ Runs `lvai_validate_aixml`, then `lvai_convert_aixml_to_vi`, then `lvai_connecto
 result. Stops at the first failure and names it in `failedAtStep`. A failed step's sub-answer is
 returned whole under `steps`, so a failure reads the same as it would from calling the three tools
 by hand. **Since 2026-11-01 a SUCCESS is compact**: each step keeps its name, `skipped` and
-`errorCode`, its answer is slimmed (`Json.Slim`), and `execState`, `executable`, `preCheck` and
-`repairs` are lifted to the top; `verbose: true` returns every step whole. `lvai_generate_vis`
+`errorCode`, its answer is slimmed (`Json.Slim`), and `executable` is lifted to the top - with
+`execState` when an execState step ran (grpc; on pylabview the convert answers `executable`
+itself), and `preCheck` and `repairs` only when they have something to say (measured 2026-11-13:
+a clean pylabview generate answered `executable` alone); `verbose: true` returns every step whole. `lvai_generate_vis`
 drops a successful entry's `steps` entirely and states a note shared by every entry once under
 `common`; multi-VI `lvai_exec_state` does the same for executable VIs. A broken or failed entry is
 never reduced. In-process callers get the full answer (the compaction is in the MCP wrappers).
