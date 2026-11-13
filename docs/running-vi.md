@@ -46,5 +46,10 @@ latched `Go`):
 boolean whose mechanical action is a latch (error 1193); the answer names it. One field harness pressed
 switch-action booleans only, for the same reason.
 
+**`signalled` lists only the writes that took.** `press` and `signal` run the helper once per
+write and stop at the first refusal: `failed` names that write and `notSent` the ones after it.
+Until 2026-11-13 one helper run took them all and `signalled` echoed the request - an e2e press on a
+field project's latched `OK` answered 1193 with `signalled: ["OK = TRUE"]`.
+
 **A stop that closes the panel lets the VI leave memory**, so a later `read` opens it from disk and
 shows the values saved in the file, not the ones it ended with (measured: `out` 0 after the run above).

@@ -176,19 +176,41 @@ internal sealed class RunningViTools
         if (helper is null)
             return Json.Error("helperNotComposed", $"The {SignalHelperFileName} helper could not be composed: {problem}",
                               new { viPath = vi });
-        var outputs = await LabViewCom.RunHelperAsync(helper, new Dictionary<string, string>
+        // ONE HELPER RUN PER SIGNAL, so the answer can say which write took. The helper chains its
+        // error, so after a refused write nothing more is written - but its error names no control,
+        // and `signalled` used to list every REQUESTED write: measured 2026-11-13, a press on a
+        // latched OK answered 1193 with `signalled: ["OK = TRUE"]`. The gap is still waited after
+        // each write, inside the helper, as before.
+        var gap = Math.Clamp(gapMs, 0, 60_000).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var written = new List<string>();
+        int? code = 0;
+        string? failed = null, errorXml = null;
+        foreach (var (name, value) in signals)
         {
-            ["VI Path"] = vi,
-            ["Signal Names"] = string.Join("\n", signals.Select(s => s.Key)),
-            ["Signal Values"] = string.Join("\n", signals.Select(s => s.Value)),
-            ["signal gap ms"] = Math.Clamp(gapMs, 0, 60_000).ToString(System.Globalization.CultureInfo.InvariantCulture),
-        }, ["error xml"], timeoutSeconds, ct);
-        var code = ErrorCode(outputs.GetValueOrDefault("error xml"));
+            var outputs = await LabViewCom.RunHelperAsync(helper, new Dictionary<string, string>
+            {
+                ["VI Path"] = vi,
+                ["Signal Names"] = name,
+                ["Signal Values"] = value,
+                ["signal gap ms"] = gap,
+            }, ["error xml"], timeoutSeconds, ct);
+            code = ErrorCode(outputs.GetValueOrDefault("error xml"));
+            if (code != 0)
+            {
+                failed = $"{name} = {value}";
+                errorXml = outputs.GetValueOrDefault("error xml");
+                break;
+            }
+            written.Add($"{name} = {value}");
+        }
+        var notSent = signals.Skip(written.Count + 1).Select(s => $"{s.Key} = {s.Value}").ToList();
         var (state, _) = await LabViewCom.ReadRunningAsync(vi, [], timeoutSeconds, ct);
         var wasRunning = stateBefore is 2 or 3;
         return Answer(vi, act, state, code == 0, new JsonObject
         {
-            ["signalled"] = Strings([.. signals.Select(s => $"{s.Key} = {s.Value}")]),
+            ["signalled"] = Strings(written),
+            ["failed"] = failed,
+            ["notSent"] = failed is null ? null : Strings(notSent),
             ["errorCode"] = code,
             ["wasRunning"] = wasRunning,
             ["note"] = code switch
@@ -196,14 +218,14 @@ internal sealed class RunningViTools
                 0 => "Written with Value (Signaling): each control's Value Change event fired." +
                      (!wasRunning ? " The VI was not running, so nothing handled them."
                       : state is 2 or 3 ? "" : " The VI ENDED after it - it handled the write."),
-                1193 => "Error 1193: a LATCHED boolean - its mechanical action is latch, and VI Server cannot " +
-                        "write a latch (Value and Value (Signaling) both refuse). Writes before it took; the rest " +
-                        "did not. Make the control switch-action, or stop the VI with stop.",
-                null => "The helper's error could not be read; see its answer.",
-                _ => $"The helper answered error {code}: a name that is not a control on the panel, or a value " +
-                     "that does not convert to its type. Writes before it took.",
+                1193 => "Error 1193: `failed` is a LATCHED boolean - its mechanical action is latch, and VI Server " +
+                        "cannot write a latch (Value and Value (Signaling) both refuse). `signalled` took; `notSent` " +
+                        "was not written. Make the control switch-action, or stop the VI with stop.",
+                null => "The helper's error could not be read; see its answer. `signalled` took.",
+                _ => $"The helper answered error {code} on `failed`: a name that is not a control on the panel, or " +
+                     "a value that does not convert to its type. `signalled` took; `notSent` was not written.",
             },
-            ["helperError"] = code is 0 ? null : outputs.GetValueOrDefault("error xml"),
+            ["helperError"] = errorXml,
         });
     }
 
