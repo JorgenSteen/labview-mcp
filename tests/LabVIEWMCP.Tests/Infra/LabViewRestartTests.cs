@@ -149,7 +149,7 @@ public class LabViewRestartTests
         var named = a["overriddenHiddenWindows"]!.AsArray();
         Assert.Equal(2, named.Count);
         Assert.Contains(named, n => n!["class"]!.GetValue<string>() == "SomeNewClass");
-        Assert.Equal([10], w.M.ClosesSent);
+        Assert.Equal(new[] { 10 }, w.M.ClosesSent);
     }
 
     [Fact]
@@ -175,6 +175,64 @@ public class LabViewRestartTests
         Assert.Equal("busy", sample["verdict"]!.GetValue<string>());
         Assert.Equal(11.25, sample["cpuSeconds"]!.GetValue<double>());
         Assert.Empty(w.M.ClosesSent);
+    }
+
+    /// <summary>
+    /// The labview skill's question 8 (2026-11-12): a LabVIEW 2026 started minutes before stayed busy
+    /// about 3.5 minutes. With waitForIdleSeconds the samples go on until two quiet ones in a row.
+    /// </summary>
+    [Fact]
+    public async Task A_busy_labview_that_settles_within_the_wait_is_closed()
+    {
+        var w = new World { ServerStarted = true };
+        w.M.CpuRate[10] = 0.75;
+        w.M.IdleFrom[10] = FakeLabViewMachine.Epoch.AddSeconds(100);
+        var a = await LabViewRestart.RunAsync(new RestartRequest("close", null, null, WaitForIdleSeconds: 240),
+                                              w.Deps(), default);
+
+        Assert.NotEqual("busy", a["stoppedBy"]?.GetValue<string>());
+        Assert.Equal(new[] { 10 }, w.M.ClosesSent);
+        var waited = a["guards"]!["cpuWaited"]!;
+        Assert.Equal("12:00:00", waited["busyFrom"]!.GetValue<string>());
+        // busy through 100 s, the sample straddling it busy too, then two quiet ones
+        Assert.True(waited["samples"]!.GetValue<int>() >= 9);
+    }
+
+    [Fact]
+    public async Task A_labview_busy_for_the_whole_wait_is_refused_and_says_how_long_it_waited()
+    {
+        var w = new World { ServerStarted = true };
+        w.M.CpuRate[10] = 0.75;
+        var a = await LabViewRestart.RunAsync(new RestartRequest("close", null, null, WaitForIdleSeconds: 60),
+                                              w.Deps(), default);
+
+        Assert.Equal("busy", Str(a, "stoppedBy"));
+        Assert.Contains("whole 60 s waited", Str(a, "error"));
+        Assert.Contains("started 121 min ago", Str(a, "error"));
+        Assert.Equal(4, a["guards"]!["cpu"]!.AsArray().Count);   // samples ending at 15, 30, 45, 60 s - then the wait is up
+        Assert.Empty(w.M.ClosesSent);
+    }
+
+    [Fact]
+    public async Task The_wait_for_idle_is_capped()
+    {
+        var w = new World { ServerStarted = true };
+        w.M.CpuRate[10] = 0.75;
+        var a = await LabViewRestart.RunAsync(new RestartRequest("close", null, null, WaitForIdleSeconds: 100_000),
+                                              w.Deps(), default);
+
+        Assert.Contains($"whole {LabViewRestart.MaxIdleWaitSeconds} s waited", Str(a, "error"));
+    }
+
+    [Fact]
+    public async Task Without_a_wait_one_busy_sample_still_refuses_and_names_the_wait_option()
+    {
+        var w = new World { ServerStarted = true };
+        w.M.CpuRate[10] = 0.75;
+        var a = await w.Run("close");
+
+        Assert.Single(a["guards"]!["cpu"]!.AsArray());
+        Assert.Contains("waitForIdleSeconds", Str(a, "error"));
     }
 
     [Fact]
@@ -217,7 +275,7 @@ public class LabViewRestartTests
         Assert.Equal("restarted", Str(a, "state"));
         Assert.Equal(words, a["ownership"]!["goAhead"]!["words"]!.GetValue<string>());
         Assert.Contains("ownership", a["ownership"]!["goAhead"]!["covers"]!.AsArray().Select(n => n!.GetValue<string>()));
-        Assert.Equal([10], w.M.ClosesSent);
+        Assert.Equal(new[] { 10 }, w.M.ClosesSent);
         // The user's LabVIEW restarted stays the user's: no ownership recorded for the new one.
         Assert.Null(w.Recorded);
         Assert.Equal(11, a["after"]!["labview"]!["pid"]!.GetValue<int>());

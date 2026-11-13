@@ -1157,6 +1157,8 @@ internal sealed class BulkTools(LvaiConnection connection)
             if (!keepSteps) continue;
             var slim = new JsonObject { ["step"] = StepName(step) };
             if (step["skipped"] is { } skipped) slim["skipped"] = skipped.DeepClone();
+            foreach (var key in StepVerdictKeys)
+                if (step[key] is { } verdict) slim[key] = verdict.DeepClone();
             if (step.ContainsKey("errorCode")) slim["errorCode"] = step["errorCode"]?.DeepClone();
             if (step["answer"] is JsonObject inner)
                 slim["answer"] = Json.Slim(inner, keep: false)?.DeepClone();
@@ -1181,6 +1183,15 @@ internal sealed class BulkTools(LvaiConnection connection)
 
     private static string? StepName(JsonObject step) =>
         step["step"] is JsonValue v && v.TryGetValue<string>(out var name) ? name : null;
+
+    /// <summary>
+    /// Step-level fields that say WHAT a successful step did, kept when the step is slimmed. Asked
+    /// for by the labview skill (2026-11-12): a `cleanUpDiagram` step came back as
+    /// `{step, slimmed}`, so a caller could not tell whether NI's Clean Up had replaced our layout
+    /// (`engine`, `tangledFallback`). `restored` is listed for completeness: the clean-up sets it only
+    /// on a step that FAILED, and a failed step is kept whole anyway.
+    /// </summary>
+    internal static readonly string[] StepVerdictKeys = ["engine", "tangledFallback", "restored"];
 
     private static bool IsTrue(JsonNode? node) =>
         node is JsonValue v && v.TryGetValue<bool>(out var b) && b;

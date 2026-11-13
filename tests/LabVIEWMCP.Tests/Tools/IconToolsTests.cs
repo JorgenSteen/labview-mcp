@@ -24,6 +24,43 @@ public sealed class IconToolsTests : IDisposable
 
     private string At(string name) => Path.Combine(_dir, name);
 
+    private string Png(string name, params int[] rgb)
+    {
+        var bytes = rgb.SelectMany(c => new[] { (byte)(c >> 16), (byte)(c >> 8), (byte)c }).ToArray();
+        var path = At(name);
+        File.WriteAllBytes(path, LabVIEWMcp.Infra.WindowShot.EncodePng(
+            new LabVIEWMcp.Infra.WindowImage(rgb.Length, 1, bytes)));
+        return path;
+    }
+
+    /// <summary>
+    /// Measured 2026-11-13 on LabVIEW 2020: F1F1F1 and EEEEEE were stored as DDDDDD, white and
+    /// palette colours unchanged - and the tool said verified. The read-back comparison names it.
+    /// </summary>
+    [Fact]
+    public void A_colour_LabVIEW_changed_on_the_way_in_is_counted_and_named()
+    {
+        var given = Png("given.png", 0xFFFFFF, 0xF1F1F1, 0xF1F1F1, 0xEEEEEE, 0x3366FF);
+        var stored = Png("stored.png", 0xFFFFFF, 0xDDDDDD, 0xDDDDDD, 0xDDDDDD, 0x3366FF);
+
+        var (pixels, changes) = IconTools.StoredColourChanges(given, stored)!.Value;
+
+        Assert.Equal(3, pixels);
+        Assert.Equal("F1F1F1", changes[0]!["from"]!.GetValue<string>());
+        Assert.Equal("DDDDDD", changes[0]!["to"]!.GetValue<string>());
+        Assert.Equal(2, changes[0]!["pixels"]!.GetValue<int>());
+        Assert.Equal("EEEEEE", changes[1]!["from"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void An_icon_stored_as_given_has_no_changes_and_a_size_mismatch_is_not_judged()
+    {
+        var given = Png("same.png", 0xFFFFFF, 0x000000);
+        Assert.Equal(0, IconTools.StoredColourChanges(given, given)!.Value.Pixels);
+        Assert.Null(IconTools.StoredColourChanges(given, Png("wider.png", 0xFFFFFF, 0x000000, 0x000000)));
+        Assert.Null(IconTools.StoredColourChanges(given, At("missing.png")));
+    }
+
     private string WriteVi(string name = "Target.vi")
     {
         var path = At(name);

@@ -1119,7 +1119,7 @@ answer a failed check with a MODAL dialog, and a modal stops the gRPC service:
 
 | Delacor VI | modal on | replaced by |
 |---|---|---|
-| `Check if OK to Proceed.vi` | blank or invalid names, reserved argument labels (`module id`, `error in (no error)`, `error out`, `timed out?`), duplicate labels, tabs, groups, unsaved typedefs | the same checks in C#, before LabVIEW is touched |
+| `Check if OK to Proceed.vi` | blank or invalid names, reserved argument labels (`module id`, `error in (no error)`, `error out`, `timed out?`), duplicate labels, tabs, groups, unsaved typedefs | the same checks in C#, before LabVIEW is touched - plus one Delacor does NOT make: a REPLY field named `error` is refused, because DQMH 7.1.2 adds its own `error` to the reply and ours came out as `error 2`, which `lvai_dqmh_place_handler` then refused (measured in a field project's DQMH driver work, 2026-11) |
 | `Verify Event Names.vi` | `<event>.vi` already in the module folder; a Round Trip's two names equal | file check on the folder the dry run reports |
 | `Preflight Main VI.vi` | event name equal (ignoring case) to a frame of Main.vi's message-handling case structure | Main.vi exported, EVERY case name compared - stricter, never looser |
 | `Show Arguments Window.vi` | - (opens the two argument windows) | the carriers |

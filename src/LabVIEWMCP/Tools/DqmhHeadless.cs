@@ -333,6 +333,14 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         ["module id", "error in (no error)", "error out", "timed out?"];
 
     /// <summary>
+    /// A REPLY label DQMH takes for itself, beyond the four above. Measured with DQMH 7.1.2
+    /// (a field project's DQMH driver work): a reply field named `error` was accepted, DQMH added its own
+    /// `error` to the reply, ours came out as `error 2`, and lvai_dqmh_place_handler then refused the
+    /// names. Delacor's dialog does not catch it, so this check is stricter than Delacor's.
+    /// </summary>
+    internal static readonly string[] ReservedReplyNames = ["error"];
+
+    /// <summary>
     /// The checks Delacor's dialog makes before it scripts, made here instead - because each of its
     /// own checks answers a failure with a MODAL dialog, and a modal stops the gRPC service.
     /// `Check if OK to Proceed.vi`: names not blank, valid file names, argument labels unique and
@@ -351,7 +359,19 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
                     StringComparison.OrdinalIgnoreCase))
                 return "The request and broadcast names of a Round Trip cannot be the same.";
         }
-        return LabelProblem(arguments, "argumentsJson") ?? LabelProblem(replyArguments, "replyArgumentsJson");
+        return LabelProblem(arguments, "argumentsJson")
+               ?? LabelProblem(replyArguments, "replyArgumentsJson")
+               ?? ReplyLabelProblem(replyArguments);
+    }
+
+    private static string? ReplyLabelProblem(IReadOnlyList<DqmhTools.Argument> replyArguments)
+    {
+        var taken = replyArguments.FirstOrDefault(a => ReservedReplyNames.Contains(
+            a.Name.Trim(), StringComparer.OrdinalIgnoreCase));
+        return taken.Name is null ? null
+            : $"replyArgumentsJson: '{taken.Name}' is a name DQMH gives a field of its own in the reply; " +
+              "yours would come out renamed ('error 2') and lvai_dqmh_place_handler would refuse it. " +
+              "Name it for what it carries, e.g. 'device error'.";
     }
 
     private static string? FileNameProblem(string name, string what)

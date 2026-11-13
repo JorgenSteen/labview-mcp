@@ -16,7 +16,13 @@ internal sealed record ActiveProjectProbe(bool? Active, string? Path, string Not
 internal sealed record StartResult(bool ServiceAnswers, int? Pid, DateTime? StartTime, int? Port, JsonObject Detail);
 
 /// <summary>A close or restart request as the caller made it.</summary>
-internal sealed record RestartRequest(string Mode, string? UserGoAhead, string? ProjectPath);
+/// <param name="WaitForIdleSeconds">
+/// How long a BUSY LabVIEW is waited for before the busy guard refuses: CPU samples continue until
+/// two quiet ones in a row, or this time is up. 0 (the default) refuses on the first busy sample, as
+/// before; at most <see cref="LabViewRestart.MaxIdleWaitSeconds"/>.
+/// </param>
+internal sealed record RestartRequest(string Mode, string? UserGoAhead, string? ProjectPath,
+                                      int WaitForIdleSeconds = 0);
 
 /// <summary>
 /// Everything the route reaches outside itself. Delegates and an interface, so every guard is
@@ -64,6 +70,14 @@ internal static class LabViewRestart
 {
     public const string Close = "close";
     public const string Restart = "restart";
+
+    /// <summary>
+    /// The longest wait for a busy LabVIEW to go quiet. Measured 2026-11-12 (labview skill): a
+    /// LabVIEW 2026 started minutes before, with a project open, stayed busy about 3.5 minutes,
+    /// and the one-sample refusal left the caller to poll by hand. The restart is a resumable call,
+    /// so a wait this long is collected by calling again, never by one client request.
+    /// </summary>
+    public const int MaxIdleWaitSeconds = 300;
 
     // Guard names, as the answer reports them in `stoppedBy`.
     public const string GuardProcesses = "processes";
@@ -154,22 +168,46 @@ internal static class LabViewRestart
             var labview = first.LabView[0];
             if (first.Dialogs.Count > 0) return RefuseDialogs(first);
 
-            // ---------- 2. CPU, twice in a row ----------
+            // ---------- 2. CPU, twice in a row quiet ----------
+            // A busy sample refuses at once, unless the caller asked to wait: then sampling goes on
+            // until two quiet samples in a row or the wait is up. Two in a row, as before - one idle
+            // sample can be stale within minutes.
             var samples = new JsonArray();
             _guards["cpu"] = samples;
-            for (var i = 0; i < 2; i++)
+            var waitSeconds = Math.Clamp(request.WaitForIdleSeconds, 0, MaxIdleWaitSeconds);
+            var waitUntil = _m.Now.AddSeconds(waitSeconds);
+            var firstBusyAt = (DateTime?)null;
+            for (var quiet = 0; quiet < 2;)
             {
                 var sample = await LabViewState.SampleCpuAsync(_m, labview.Id, deps.CpuWindow, ct);
                 samples.Add(sample.ToJson());
-                if (sample.Busy is not false)
-                    return Refuse(GuardBusy, sample.Busy is null
-                        ? "LabVIEW's CPU time could not be read (did it exit?). A LabVIEW whose state " +
-                          "cannot be read is not closed."
-                        : $"LabVIEW used {sample.CpuSeconds} CPU s in {sample.WindowSeconds} s at " +
-                          $"{sample.At:HH:mm:ss}: busy. A busy LabVIEW does not take the close message " +
-                          "(measured: CloseMainWindow False while a VI Server helper ran). Wait and call " +
-                          "again; one idle sample can be stale within minutes.");
+                if (sample.Busy is null)
+                    return Refuse(GuardBusy, "LabVIEW's CPU time could not be read (did it exit?). A LabVIEW " +
+                                             "whose state cannot be read is not closed.");
+                if (sample.Busy is false) { quiet++; continue; }
+
+                quiet = 0;
+                firstBusyAt ??= sample.At;
+                if (_m.Now < waitUntil) continue;
+                var uptime = labview.StartTime is { } started
+                    ? $" LabVIEW started {Math.Round((_m.Now - started).TotalMinutes, 1)} min ago." : "";
+                return Refuse(GuardBusy,
+                    $"LabVIEW used {sample.CpuSeconds} CPU s in {sample.WindowSeconds} s at {sample.At:HH:mm:ss}: " +
+                    "busy." + uptime + (waitSeconds > 0
+                        ? $" It stayed busy from {firstBusyAt:HH:mm:ss} for the whole {waitSeconds} s waited ({samples.Count} samples)."
+                        : "") +
+                    " A busy LabVIEW does not take the close message (measured: CloseMainWindow False while a " +
+                    "VI Server helper ran). A freshly started LabVIEW with a project open was measured busy for " +
+                    "about 3.5 minutes: call again with waitForIdleSeconds (up to " + MaxIdleWaitSeconds +
+                    ") to wait for it here.");
             }
+            if (firstBusyAt is not null)
+                _guards["cpuWaited"] = new JsonObject
+                {
+                    ["busyFrom"] = firstBusyAt.Value.ToString("HH:mm:ss"),
+                    ["quietAt"] = _m.Now.ToString("HH:mm:ss"),
+                    ["samples"] = samples.Count,
+                };
 
             // Idle is not "safe": a modal dialog leaves LabVIEW idle. So the window list again.
             var snapshot = LabViewState.Take(_m, deps.AutoSaveDirectory);

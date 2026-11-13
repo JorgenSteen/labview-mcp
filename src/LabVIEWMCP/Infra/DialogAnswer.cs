@@ -126,10 +126,13 @@ internal static class DialogAnswer
         {
             var template = DialogButtons.For(r.DialogKind!, r.Action);
             var picture = m.Capture(r.Handle);
-            if (template is null || picture is null)
-                return Refuse("buttonNotFound", template is null
-                    ? $"No measured picture of '{r.Action}' ships with this server; nothing was pressed."
-                    : "The dialog could not be captured; nothing was pressed.", now.Window, before);
+            if (template is null)
+                return Refuse("buttonNotFound",
+                    $"No measured picture of '{r.Action}' ships with this server; nothing was pressed.",
+                    now.Window, before, PictureWanted(r, before, picture));
+            if (picture is null)
+                return Refuse("buttonNotFound", "The dialog could not be captured; nothing was pressed.",
+                              now.Window, before);
             var spot = DialogButtons.Find(picture, template);
             if (spot is not { } at)
                 return Refuse("buttonNotFound", $"The measured picture of '{r.Action}' was not found in the dialog " +
@@ -241,16 +244,40 @@ internal static class DialogAnswer
         ["ok"] = false, ["errorKind"] = kind, ["error"] = message, ["pressed"] = null,
     };
 
-    private static JsonObject Refuse(string kind, string message, MachineWindow window, string? screenshot) => new()
+    private static JsonObject Refuse(string kind, string message, MachineWindow window, string? screenshot,
+                                     JsonObject? pictureWanted = null)
     {
-        ["ok"] = false,
-        ["errorKind"] = kind,
-        ["error"] = message,
-        ["pressed"] = null,
-        ["title"] = window.Title,
-        ["class"] = window.ClassName,
-        ["handle"] = window.Handle,
+        var answer = new JsonObject
+        {
+            ["ok"] = false,
+            ["errorKind"] = kind,
+            ["error"] = message,
+            ["pressed"] = null,
+            ["title"] = window.Title,
+            ["class"] = window.ClassName,
+            ["handle"] = window.Handle,
+            ["screenshot"] = screenshot,
+            ["next"] = "Nothing was pressed. Show the user the screenshot; the user answers this dialog.",
+        };
+        if (pictureWanted is not null) answer["pictureWanted"] = pictureWanted;
+        return answer;
+    }
+
+    /// <summary>
+    /// A button this server has no picture of: the screenshot just taken IS the measurement that would
+    /// let it press that button next time. Said so in the answer, with the size the picture was taken
+    /// at, because a picture is matched nearly pixel for pixel (another DPI or theme finds nothing).
+    /// A field project (2026-10-20) measured the "Don't Save - All" button by a click offset instead;
+    /// an offset is not used here by design - a click goes only where the button's picture is found.
+    /// </summary>
+    private static JsonObject PictureWanted(DialogAnswerRequest r, string? screenshot, WindowImage? picture) => new()
+    {
+        ["dialogKind"] = r.DialogKind,
+        ["action"] = r.Action,
         ["screenshot"] = screenshot,
-        ["next"] = "Nothing was pressed. Show the user the screenshot; the user answers this dialog.",
+        ["capturedSize"] = picture is null ? null : $"{picture.Width}x{picture.Height}",
+        ["howToAdd"] = $"Cut the '{r.Action}' button face out of this screenshot (a tight crop of its text) and add " +
+                       "it to Infra/DialogButtons.cs Pictures under this kind and action, with where and when it was " +
+                       "measured (docs/labview-restart.md section 13).",
     };
 }

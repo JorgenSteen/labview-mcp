@@ -228,8 +228,10 @@ internal sealed class IconTools(LvaiConnection connection)
             if (!verified)
                 warnings.Add("No read-back file was written, so the icon was probably NOT applied. " +
                              "Check errorMessage, and that the VI is not read-only or locked by a library.");
+            var colourCheck = new List<(string, JsonNode?)>();
+            AddColourCheck((k, v) => colourCheck.Add((k, v)), warnings, iconImagePath, readBack, verified);
 
-            return Verdict(Json.Message(response,
+            return Verdict(Json.Message(response, [
                 ("verified", JsonValue.Create(verified)),
                 ("helperViPath", JsonValue.Create(helperVi)),
                 ("helperAixmlPath", JsonValue.Create(Path.GetFullPath(aixml))),
@@ -243,13 +245,14 @@ internal sealed class IconTools(LvaiConnection connection)
                 ("iconImagePath", JsonValue.Create(iconImagePath)),
                 ("iconRendered", JsonValue.Create(iconRendered)),
                 ("iconImageSize", JsonValue.Create(iconSize)),
+                .. colourCheck,
                 ("warnings", warnings),
                 ("note", JsonValue.Create(
                     "Judged by `verified` - a read-back file written during this call - and not by " +
                     "RunVIAsTopLevel, which cannot read this helper's indicators back and answers " +
                     "91 on success; on a verified run that 91 is dropped, and any other runner " +
                     "code is kept under runnerErrorCode. Open readBackPath to see the icon now " +
-                    "stored in the VI."))), verified);
+                    "stored in the VI; pixelsChanged compares it with the image you gave."))]), verified);
         });
 
     /// <summary>One VI of an iconsJson batch, after the fallbacks to the call's own parameters.</summary>
@@ -387,7 +390,7 @@ internal sealed class IconTools(LvaiConnection connection)
         if (!verified)
             warnings.Add("No read-back file was written, so the icon was probably NOT applied. " +
                          "Read `run` for the helper's own answer.");
-        return Json.Document(new JsonObject
+        var answer = new JsonObject
         {
             ["ok"] = verified,
             ["verified"] = verified,
@@ -404,12 +407,69 @@ internal sealed class IconTools(LvaiConnection connection)
             ["warnings"] = warnings,
             ["run"] = verified ? null : JsonNode.Parse(run),
             ["note"] = "Judged by `verified` - a read-back file written during this call. Open " +
-                       "readBackPath to see the icon now stored in the VI.",
-        });
+                       "readBackPath to see the icon now stored in the VI; pixelsChanged compares it " +
+                       "with the image you gave.",
+        };
+        AddColourCheck((k, v) => answer[k] = v, warnings, iconImagePath, readBack, verified);
+        return Json.Document(answer);
     }
 
     /// <summary>RunVIAsTopLevel's code on a SUCCESSFUL run of a helper whose outputs it cannot read.</summary>
     internal const int RunnerReadBackArtefact = 91;
+
+    /// <summary>
+    /// What LabVIEW did to the image's colours: the input PNG against the read-back of the stored
+    /// icon, pixel by pixel. Null when either cannot be decoded or the sizes differ. Measured
+    /// 2026-11-13 on LabVIEW 2020 (and reported from a field project): LabVIEW maps a colour
+    /// outside its 256-colour icon palette to one inside it, NOT always the nearest - F1F1F1 and even
+    /// EEEEEE, which IS in the palette, came back DDDDDD - and the tool still answered verified, so a
+    /// read-back is the only way to know.
+    /// </summary>
+    internal static (int Pixels, JsonArray Changes)? StoredColourChanges(string inputPng, string readBackPng)
+    {
+        PngPixels.Image input, stored;
+        try
+        {
+            input = PngPixels.Decode(inputPng);
+            stored = PngPixels.Decode(readBackPng);
+        }
+        catch (Exception e) when (e is PngPixels.PngException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+        if (input.Width != stored.Width || input.Height != stored.Height) return null;
+
+        var pairs = new Dictionary<(string From, string To), int>();
+        var changed = 0;
+        for (var i = 0; i < input.Pixels.Length; i++)
+        {
+            var a = input.Pixels[i];
+            if (a.A == 0) continue;   // a transparent input pixel has no colour to keep
+            var b = stored.Pixels[i];
+            if (a.R == b.R && a.G == b.G && a.B == b.B) continue;
+            changed++;
+            var key = ($"{a.R:X2}{a.G:X2}{a.B:X2}", $"{b.R:X2}{b.G:X2}{b.B:X2}");
+            pairs[key] = pairs.GetValueOrDefault(key) + 1;
+        }
+        var changes = new JsonArray();
+        foreach (var ((from, to), count) in pairs.OrderByDescending(p => p.Value).ThenBy(p => p.Key.From).Take(12))
+            changes.Add(new JsonObject { ["from"] = from, ["to"] = to, ["pixels"] = count });
+        return (changed, changes);
+    }
+
+    /// <summary>The read-back compared with the input, added to an answer as `pixelsChanged` / `colourChanges`.</summary>
+    private static void AddColourCheck(Action<string, JsonNode?> add, JsonArray warnings, string inputPng,
+                                       string readBack, bool verified)
+    {
+        if (!verified || StoredColourChanges(inputPng, readBack) is not { } check) return;
+        add("pixelsChanged", JsonValue.Create(check.Pixels));
+        if (check.Pixels == 0) return;
+        add("colourChanges", check.Changes);
+        warnings.Add($"LabVIEW stored {check.Pixels} pixel(s) in a different colour than the image gave " +
+                     "(colourChanges: from -> to). It maps a colour outside its 256-colour icon palette to one " +
+                     "inside it, not always the nearest (measured: F1F1F1 and EEEEEE -> DDDDDD), and pylabview " +
+                     "extracts before 2026-11-13 showed white as F1F1F1. Use palette colours, or accept the read-back.");
+    }
 
     /// <summary>
     /// `ok` and `errorCode` from `verified`, with RunVIAsTopLevel's own code kept aside.

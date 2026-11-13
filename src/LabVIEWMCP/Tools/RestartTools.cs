@@ -34,13 +34,17 @@ internal sealed class RestartTools(LvaiConnection connection)
     internal const string MemoryHelperAixmlFileName = "lvai_vis_modified.xml";
 
     /// <summary>
-    /// Run the memory helper. With <paramref name="allowGenerate"/> false - the restart's case - a
-    /// missing or stale helper is "not run", never generated: see the tool description for why.
+    /// Run the memory helper. On grpc, with <paramref name="allowGenerate"/> false - the restart's
+    /// case - a missing or stale helper is "not run", never generated: NI's validation leaves an
+    /// `LVMCP Validate` VI in memory right before the close. On pylabview the helper is COMPOSED,
+    /// which validates nothing and leaves nothing in memory, so it is built here when missing - the
+    /// labview skill's question 6 (2026-11-12): a subagent handed a running session cannot tell
+    /// whether the start-of-session call was made.
     /// </summary>
     internal async Task<(VisInMemoryReading? Reading, string? NotRun, bool Generated, string HelperVi)>
         ReadMemoryAsync(bool allowGenerate, bool regenerateHelper, int timeoutSeconds, CancellationToken ct)
     {
-        var helpersDir = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "helpers");
+        var helpersDir = AixmlBackend.HelperFolder();
         var helperVi = Path.Combine(helpersDir, "lvai_vis_modified.vi");
         var scripts = StatusTools.ScriptsDirectory();
         var aixml = scripts is null ? null : Path.Combine(scripts, MemoryHelperAixmlFileName);
@@ -49,13 +53,24 @@ internal sealed class RestartTools(LvaiConnection connection)
                     false, helperVi);
 
         var generated = false;
-        if (regenerateHelper || HelperCache.NeedsRebuild(aixml, helperVi))
+        if (BackendRoute.OnPyLabview)
+        {
+            try
+            {
+                helperVi = await BackendRoute.ComposedHelperAsync(aixml, timeoutSeconds, ct, Path.GetFileName(helperVi));
+            }
+            catch (BackendRoute.RouteException e)
+            {
+                return (null, "the memory helper could not be composed: " + e.Message, false, helperVi);
+            }
+        }
+        else if (regenerateHelper || HelperCache.NeedsRebuild(aixml, helperVi))
         {
             if (!allowGenerate)
-                return (null, "the memory helper is not generated yet (or is older than its AIXML). " +
-                              "Call lvai_vis_in_memory (context addon) once at the session start; it is not generated " +
-                              "here, because validating it leaves an LVMCP Validate VI in memory right " +
-                              "before the close.", false, helperVi);
+                return (null, $"the memory helper {helperVi} is missing or older than {MemoryHelperAixmlFileName}. " +
+                              "On grpc it is not generated here, because NI's validation leaves an LVMCP Validate " +
+                              "VI in memory right before the close: call lvai_vis_in_memory with context main " +
+                              "once at the session start, which builds exactly this file.", false, helperVi);
             Directory.CreateDirectory(helpersDir);
             if (await BackendRoute.ConvertAsync(connection, aixml, helperVi, timeoutSeconds, ct) is { } failure)
                 return (null, failure, false, helperVi);
@@ -75,9 +90,16 @@ internal sealed class RestartTools(LvaiConnection connection)
         var lines = GraftTools.StringArray(values, "lines");
         var helperNames = VisInMemory.HelperNames(
             Directory.EnumerateFiles(scripts!, "*.xml"),
-            Directory.Exists(helpersDir) ? Directory.EnumerateFiles(helpersDir, "*.vi") : []);
+            HelperFolders().Where(Directory.Exists).SelectMany(f => Directory.EnumerateFiles(f, "*.vi")));
         return (VisInMemory.Parse(lines, helperNames), null, generated, helperVi);
     }
+
+    /// <summary>Both backends' helper folders: a helper of either may be in memory.</summary>
+    private static string[] HelperFolders() =>
+    [
+        Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "helpers"),
+        Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "helpers-pylabview"),
+    ];
 
     private static string Shorten(string text) => text.Length <= 600 ? text : text[..600] + " …";
 
@@ -93,7 +115,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         exitSaveScratchOnly - "Save changes? (Exit)" where every `*` window of the process is an
         LVMCP scratch VI AND listedVis (every VI the dialog lists, read from its screenshot) are all
         `LVMCP …`: action "Don't Save" (ONE VI listed: buttons Save / Don't Save / Cancel, measured)
-        or "Don't Save - All" (several VIs: no measured picture yet, so it presses nothing), or
+        or "Don't Save - All" (several VIs: no measured picture yet, so it presses nothing and
+        answers `pictureWanted` - the screenshot it took is the capture that would add one), or
         "Cancel". LabVIEW then exits; the answer waits up to 20 s for that.
         changedOnDisk - LabVIEW's untitled "… has changed on disk since last saved or loaded by
         LabVIEW" modal [Revert][Cancel], on a VI this session touched (viName): action "Cancel".
@@ -156,8 +179,9 @@ internal sealed class RestartTools(LvaiConnection connection)
         Anything else is refused with errorKind needsUserGoAhead unless userGoAhead carries the
         USER'S OWN WORDS from this conversation (an agent's "approved" is not the user); the
         answer echoes them. The go-ahead never opens three guards: more than one LabVIEW, a VISIBLE
-        possible dialog, and a busy CPU (two 15 s samples; measured, a busy LabVIEW answers
-        CloseMainWindow False and stays). A HIDDEN titled window nothing measured explains (it may
+        possible dialog, and a busy CPU (two quiet 15 s samples needed; measured, a busy LabVIEW
+        answers CloseMainWindow False and stays; waitForIdleSeconds keeps sampling up to 300 s
+        instead of refusing at once). A HIDDEN titled window nothing measured explains (it may
         be a dialog that reports itself invisible) is guard `hiddenWindows`: the go-ahead opens it,
         and the answer lists each window it opened under overriddenHiddenWindows.
         labview-mcp's own unsaved scratch VIs (LVMCP Validate/Convert/DQMH/TD Carrier) block as
@@ -165,8 +189,10 @@ internal sealed class RestartTools(LvaiConnection connection)
         "Don't Save - All" is safe for them rather than closing them.
         THE GUARDS, in order: processes, windows, CPU, service (does lvai answer), active project
         (projectPath = this session's project: saved and closed first when it is the active one; a
-        different active project is never closed by this tool), memory (lvai_vis_in_memory's helper,
-        never generated here - call that tool once at the session start), then ownership.
+        different active project is never closed by this tool), memory (lvai_vis_in_memory's helper:
+        on grpc never generated here - call that tool once at the session start; on pylabview
+        composed when missing, which leaves nothing in memory), then ownership. The steps inside
+        take the server's backend, like every other tool's.
         `stoppedBy` names the guard that refused, `needsGoAheadFor` every reason.
         THE CLOSE is CloseMainWindow and up to 20 s WaitForExit. Not exited: CloseMainWindow False
         = LabVIEW did not take the close message (busy or modal); True = a dialog came up after
@@ -198,8 +224,18 @@ internal sealed class RestartTools(LvaiConnection connection)
             user's and is never closed by this tool.
             """)]
         string? projectPath = null,
+        [Description("""
+            Seconds to wait for a BUSY LabVIEW to go quiet (two quiet 15 s samples in a row) before the
+            busy guard refuses; 0 or omitted refuses on the first busy sample. At most 300. A LabVIEW
+            started minutes ago with a project open was measured busy for about 3.5 minutes.
+            """)]
+        int? waitForIdleSeconds = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(async () =>
+        // Routed like every other tool, so the steps inside (the project close, the active-project
+        // and memory reads) take the server's backend: the labview skill's question 8 (2026-11-12)
+        // saw the internal project close run on grpc on a pylabview server, where a first-time grpc
+        // helper could leave an LVMCP Validate VI and turn the close into a save prompt.
+        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(null, "lvai_restart_labview", async () =>
         {
             var normalisedMode = mode?.Trim().ToLowerInvariant();
             if (normalisedMode is not (LabViewRestart.Close or LabViewRestart.Restart))
@@ -207,9 +243,12 @@ internal sealed class RestartTools(LvaiConnection connection)
             if (projectPath is { Length: > 0 } &&
                 (!projectPath.EndsWith(".lvproj", StringComparison.OrdinalIgnoreCase) || !File.Exists(projectPath)))
                 return Json.Error("noSuchProject", $"projectPath '{projectPath}' is not an existing .lvproj.");
+            if (waitForIdleSeconds is < 0 or > LabViewRestart.MaxIdleWaitSeconds)
+                return Json.Error("badArguments",
+                    $"waitForIdleSeconds must be 0 to {LabViewRestart.MaxIdleWaitSeconds}, not {waitForIdleSeconds}.");
 
-            var request = new RestartRequest(normalisedMode, userGoAhead, projectPath);
-            var key = $"{normalisedMode}|{projectPath?.Trim()}|{userGoAhead?.Trim()}";
+            var request = new RestartRequest(normalisedMode, userGoAhead, projectPath, waitForIdleSeconds ?? 0);
+            var key = $"{normalisedMode}|{projectPath?.Trim()}|{userGoAhead?.Trim()}|{waitForIdleSeconds ?? 0}";
 
             lock (LastGate)
                 if (_lastFinished is { } done && done.Key == key && DateTime.Now - done.At < ReplayWindow)
@@ -225,7 +264,7 @@ internal sealed class RestartTools(LvaiConnection connection)
                 "Call lvai_restart_labview again with the SAME arguments to collect the answer; it " +
                 "attaches to this run and never starts a second one. Make no other LabVIEW call meanwhile.",
                 ct);
-        });
+        }));
 
     /// <summary>The finished answer again, marked, instead of a second restart.</summary>
     private static string Replay(string answer, DateTime at)
@@ -256,10 +295,12 @@ internal sealed class RestartTools(LvaiConnection connection)
         ProbeService = new LifecycleTools(connection).ProbeServiceAsync,
         ActiveProject = async t =>
         {
-            // Read only through a helper that EXISTS: ProjectIsActiveAsync generates a missing one,
-            // and the validation that comes with that leaves an LVMCP Validate VI in memory right
-            // before the close. The project windows in the window list still count.
-            if (!File.Exists(Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "helpers", "lvai_active_project.vi")))
+            // On grpc, read only through a helper that EXISTS: ProjectIsActiveAsync generates a
+            // missing one, and the validation that comes with that leaves an LVMCP Validate VI in
+            // memory right before the close. On pylabview it reads over ActiveX and needs no helper.
+            // The project windows in the window list still count.
+            if (!BackendRoute.OnPyLabview &&
+                !File.Exists(Path.Combine(AixmlBackend.HelperFolder(), "lvai_active_project.vi")))
                 return new ActiveProjectProbe(null, null, "not checked - the lvai_active_project helper is " +
                     "not generated yet (lvai_open_file generates it); not generated here, before a close.");
             var (active, note, path) = await new ActionTools(connection).ProjectIsActiveAsync(30, t);

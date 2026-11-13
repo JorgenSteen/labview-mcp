@@ -30,7 +30,8 @@ Where upstream has an outright defect, the fix goes in `patches\patches.json` an
 applies it to the **assembled copy**. `vendor\` stays byte-identical to upstream, so a new release
 can still be taken by copying the package over it.
 
-Nine fixes, twenty-one entries.
+Eleven fixes, twenty-three entries (`empty-string-list` and `icon-palette-index0-white` were added
+after this count was last written as nine and twenty-one).
 
 `probe-table-guard`: `LVblock.py` calls `getNumRepeats()` on the probe table
 without checking it is a `RepeatedBlock`, and a VI whose probe table resolves to a `Cluster`,
@@ -80,6 +81,12 @@ decoded block but compiled code. `docs/aixml-backends.md`, "The heap route over 
 route there calls `os.path.basename`, which `LVdatatype.py` never imports - so without it the WHOLE
 `VCTP` block fell back to raw, the round trip stayed exact, and the reader lost every type of such a
 VI (found through `pylv_extract`'s `rawFallbackWarnings` on Map Collection - Word Counting.vi).
+
+`icon-palette-index0-white` (`LVmisc.py`, 2026-11-13): upstream builds the 8-bit icon palette as
+the Mac system palette but puts F1F1F1 at index 0 where LabVIEW has FFFFFF. Measured on LabVIEW 2020
+by applying a PNG of known colour bands and reading it back through LabVIEW and through pylabview:
+the two palettes differ in index 0 only. Every extracted icon showed white as F1F1F1, and a caller
+who re-applied that PNG through LabVIEW got a grey body (LabVIEW maps F1F1F1 to DDDDDD).
 
 **The failure mode the mechanism is built against is silence.** A Find/Replace against a line of
 upstream source stops matching when upstream edits that line - and then the bundle assembles

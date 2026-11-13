@@ -115,7 +115,7 @@ def get_labview_color_palette_256():
         for s in steps
     ]
 
-    cmap = [(0xF1, 0xF1, 0xF1)] + cube_colors[1:-1] + linear_colors + [(0, 0, 0)]
+    cmap = [(0xFF, 0xFF, 0xFF)] + cube_colors[1:-1] + linear_colors + [(0, 0, 0)]
     return [int.from_bytes(rgb, 'big') for rgb in cmap]
 
 

@@ -101,10 +101,16 @@ internal static class LabViewState
     public const string NigelServiceProcess = "NI.NigelLocalService";
     public const string NigelChatProcess = Tools.DiscussTools.ChatProcessName;
 
-    /// <summary>Hidden LabVIEW windows that are never a dialog (the kit's ignore list, measured).</summary>
+    /// <summary>
+    /// Hidden LabVIEW windows that are never a dialog (the kit's ignore list, measured). `Boolean`:
+    /// LabVIEW 2020 f1 (32-bit) keeps a HIDDEN `LVDChild` titled `Boolean`, owned by the frame, for
+    /// its whole life - seen on three starts on 2026-11-12, with and without a project open - and it
+    /// tripped lvai_restart_labview's hidden-window guard every time; LabVIEW closed cleanly over it.
+    /// Only a HIDDEN window of that title is set aside; a visible one stays a possible dialog.
+    /// </summary>
     internal static readonly HashSet<string> HiddenSystemTitles = new(StringComparer.Ordinal)
     {
-        "Context Help", "Tools", "Set Title", "RunService.vi", "Closed", "Window monitor",
+        "Context Help", "Tools", "Set Title", "RunService.vi", "Closed", "Window monitor", "Boolean",
     };
 
     /// <summary>

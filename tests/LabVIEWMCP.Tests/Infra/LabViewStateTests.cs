@@ -28,6 +28,8 @@ public class LabViewWindowClassifierTests
     [InlineData("Receiver", true, WindowKinds.PossibleDialog)]
     [InlineData("Context Help", false, WindowKinds.HiddenSystem)]
     [InlineData("RunService.vi", false, WindowKinds.HiddenSystem)]
+    [InlineData("Boolean", false, WindowKinds.HiddenSystem)]   // LabVIEW 2020's lifelong hidden window, 2026-11-12
+    [InlineData("Boolean", true, WindowKinds.PossibleDialog)]  // ... but only while hidden
     [InlineData("_Loading", true, WindowKinds.Loading)]   // the start-up splash, measured 2026-10-14
     public void The_kit_samples_keep_their_kind(string title, bool visible, string expected) =>
         Assert.Equal(expected, Kind(title, visible));

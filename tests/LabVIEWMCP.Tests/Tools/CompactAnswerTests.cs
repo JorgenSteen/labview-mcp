@@ -119,6 +119,15 @@ public sealed class CompactAnswerTests
 
     private static JsonObject Parse(string s) => JsonNode.Parse(s)!.AsObject();
 
+    /// <summary>Puts <paramref name="step"/> in place of the fixture's step of the same name.</summary>
+    private static void ReplaceStep(JsonObject answer, JsonObject step)
+    {
+        var steps = answer["steps"]!.AsArray();
+        var name = step["step"]!.GetValue<string>();
+        var at = steps.Select((s, i) => (s, i)).Single(x => x.s!["step"]!.GetValue<string>() == name).i;
+        steps[at] = step;
+    }
+
     private static JsonObject StepNamed(JsonObject answer, string name) =>
         answer["steps"]!.AsArray().OfType<JsonObject>().Single(s => s["step"]!.GetValue<string>() == name);
 
@@ -162,6 +171,44 @@ public sealed class CompactAnswerTests
         var icon = StepNamed(compact, "icon");
         Assert.False(icon["ok"]!.GetValue<bool>());
         Assert.Equal("The icon could not be drawn: Error 7.", icon["note"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// The labview skill's question 5 (2026-11-12): a successful clean-up came back as
+    /// `{step, slimmed}`, so whether NI's Clean Up had replaced our layout was invisible.
+    /// </summary>
+    [Fact]
+    public void A_successful_clean_up_keeps_which_engine_laid_it_out()
+    {
+        var full = GenerateSuccess();
+        ReplaceStep(full, new JsonObject
+        {
+            ["step"] = "cleanUpDiagram", ["ok"] = true, ["backend"] = "pylabview", ["engine"] = "ni",
+            ["tangledFallback"] = true, ["moves"] = new string('m', 2_000),
+            ["note"] = "Our plan was too dense; LabVIEW's Clean Up Diagram crossed fewer data wires and was kept",
+        });
+        var step = StepNamed(Parse(BulkTools.CompactGenerateAnswer(full.ToJsonString())), "cleanUpDiagram");
+
+        Assert.Equal("ni", step["engine"]!.GetValue<string>());
+        Assert.True(step["tangledFallback"]!.GetValue<bool>());
+        Assert.Null(step["moves"]);
+        Assert.Null(step["note"]);
+    }
+
+    /// <summary>`restored` exists only on a clean-up that failed - and a failed step stays whole.</summary>
+    [Fact]
+    public void A_failed_clean_up_keeps_restored()
+    {
+        var full = GenerateSuccess();
+        ReplaceStep(full, new JsonObject
+        {
+            ["step"] = "cleanUpDiagram", ["ok"] = false, ["engine"] = "labview-mcp", ["restored"] = true,
+            ["note"] = "Our layout did not finish (timeout). The VI is as it was generated.",
+        });
+        var step = StepNamed(Parse(BulkTools.CompactGenerateAnswer(full.ToJsonString())), "cleanUpDiagram");
+
+        Assert.True(step["restored"]!.GetValue<bool>());
+        Assert.StartsWith("Our layout did not finish", step["note"]!.GetValue<string>());
     }
 
     [Fact]

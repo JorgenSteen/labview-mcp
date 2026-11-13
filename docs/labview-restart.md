@@ -42,7 +42,7 @@ asking. A restart does not change ownership: the user's LabVIEW, restarted, is s
 |---|---|---|---|
 | 1 | `processes`: none, or more than one LabVIEW | process list | **no**: which one is meant is the user's call |
 | 2 | `dialog`: a VISIBLE possible dialog (section 4) | window list, before and after the CPU samples, and again right before the close | **no**: the user answers it |
-| 3 | `busy`: either of two 15 s CPU samples is busy, or the clock cannot be read | `TotalProcessorTime` | **no**: a busy LabVIEW does not take the close message |
+| 3 | `busy`: a 15 s CPU sample is busy (with `waitForIdleSeconds`: still busy when that wait is up), or the clock cannot be read | `TotalProcessorTime` | **no**: a busy LabVIEW does not take the close message |
 | 4 | `unsaved`: a `*` title, including labview-mcp's own scratch VIs (section 4) | window list | yes |
 | 4a | `hiddenWindows`: a HIDDEN titled window no measurement explains (section 4) | window list, also right before the close | yes. The answer names each window it opened (`overriddenHiddenWindows`) |
 | 5 | `autoSave`: files in `LVAutoSave`, except LabVIEW's recovery copies of this session's ACTIVE project (`guards.ownProjectAutoSave`; the close saves it; the user's decision of 2026-10-10, naming from one sample) | the Documents known folder, which may be redirected | yes |
@@ -62,11 +62,19 @@ because that close saves it. Measured 2026-10-10: a project opened by `lvai_open
 `Probe.lvproj * - Project Explorer` before any edit. When it is not the active project, nothing
 saves it, so it still needs a go-ahead (`guards.ownProjectUnsaved` says which case applied).
 
-Two helpers are never generated inside the restart: `lvai_vis_modified` and `lvai_active_project`.
-Generating a helper validates it, and validation leaves an `LVMCP Validate` VI in memory
-(`docs/scratch-vis-in-memory.md`), which can raise the save prompt at the very close it precedes. If
-a helper is missing, its check is reported as not run, and LabVIEW then does not count as empty. Call
-`lvai_vis_in_memory` once at the start of a session.
+On grpc, two helpers are never generated inside the restart: `lvai_vis_modified` and
+`lvai_active_project`. Generating a helper there validates it, and validation leaves an
+`LVMCP Validate` VI in memory (`docs/scratch-vis-in-memory.md`), which can raise the save prompt at
+the very close it precedes. If a helper is missing, its check is reported as not run (naming the
+helper file it looked for), and LabVIEW then does not count as empty. Call `lvai_vis_in_memory`
+with context `main` once at the start of a session. On pylabview neither restriction applies: the
+active project is read over ActiveX with no helper, and the memory helper is COMPOSED when missing,
+which validates nothing and leaves nothing in memory.
+
+The restart takes the server's backend like every other tool, and its inner steps (the project
+close, the active-project and memory reads) inherit it. Until 2026-11-13 it was not routed, so those
+steps fell to the internal-call rule and ran on grpc even on a pylabview server - seen 2026-11-12 by
+the labview skill on LabVIEW 2026 with NI's service up.
 
 ## 4. The window classifier, and the dialog that says it is invisible
 
@@ -77,7 +85,9 @@ reported `IsWindowVisible` FALSE. So a hidden titled window is not ignored here.
 window is a possible dialog (`possible-dialog`); a HIDDEN one is `hidden-unrecognised`, unless:
 
 - it is hidden and its title is one of LabVIEW's measured hidden windows: `Context Help`, `Tools`,
-  `Set Title`, `RunService.vi`, `Closed`, `Window monitor`;
+  `Set Title`, `RunService.vi`, `Closed`, `Window monitor`, `Boolean` (LabVIEW 2020 f1 keeps a hidden
+  frame-owned `LVDChild` of that title for its whole life: three starts on 2026-11-12, and LabVIEW
+  closed cleanly over it - before it was listed it tripped `hiddenWindows` on every start);
 - it is hidden and its CLASS is one of the measured non-LabVIEW classes found in `LabVIEW.exe`:
   `OleAutomationWnd`, `HwndWrapper[…`, `GDI+ Hook Window Class`, `LVWinSessionMonitor`,
   `OleDdeWndClass`, `IME`, `MSCTFIME UI`, `ATL:…`, `Internet Explorer_Hidden`. These come from one
@@ -162,10 +172,18 @@ user's go-ahead the close raises the prompt, and "Don't Save - All" is safe for 
 ## 5. CPU
 
 The skill's threshold, kept: a sample is quiet below 1 CPU second per 30 s of wall clock, scaled to
-the window. The restart takes two 15 s samples in a row. The skill's rule is two samples at least
-15 s apart, because one idle sample can be stale within minutes (measured: 0 s over 20 s, then
+the window. The restart needs two quiet 15 s samples in a row. The skill's rule is two samples at
+least 15 s apart, because one idle sample can be stale within minutes (measured: 0 s over 20 s, then
 11.3 s over 15 s a minute later). Idle is not safe: a modal dialog leaves LabVIEW idle. So the
 window list is read again after the samples.
+
+By default the first BUSY sample refuses. `waitForIdleSeconds` (up to 300) keeps sampling instead,
+until two quiet samples in a row or the wait is up; `guards.cpuWaited` says from when it was busy and
+when it went quiet, and a refusal says how long it waited and how long LabVIEW has been running. The
+reason, measured 2026-11-12 by the labview skill: a LabVIEW 2026 started minutes before, with a
+project open, stayed busy about 3.5 minutes, and the one-sample refusal left the caller polling by
+hand. The restart is a resumable call (section 9), so the wait is collected by calling again with the
+same arguments.
 
 ## 6. Memory: `lvai_vis_in_memory`
 
@@ -278,6 +296,9 @@ the VI" dialog holding a bind call for 720 s. Every other answer is unchanged.
 | the replay, the Nigel chat start, the dialog fold in timeouts, the `processes`, `service` and `memory` refusals | **unmeasured** |
 | `CloseMainWindow` on a LabVIEW with a hung actor (running VIs, no dialog) | measured 2026-10-10: exits in 1.72 s, no prompt (section 12, item C) |
 | `CloseMainWindow` with a modal file dialog up | **unmeasured** |
+| the restart on a pylabview server (2026-11-13, LabVIEW 2026 Q3 with NI's service up, this server's LabVIEW, a branch build over raw stdio): every inner step on pylabview, the active project read over ActiveX (1055 = none), the memory helper composed on demand (`count` 1, the helper), `waitForIdleSeconds` 240 on a LabVIEW started 70 s before: busy for 9 samples (2.6-8.6 CPU s per 15 s, 2 min 45 s), then two quiet ones, close 3.36 s, start 22.5 s, 193 s in all | measured 2026-11-13 |
+| the `service` refusal on LabVIEW 2020 (no NI service): `needsGoAheadFor` names `service` only, no `hiddenWindows`; with the user's go-ahead it closed in one call. LabVIEW 2020's hidden `Boolean` window did NOT appear on that start (two starts), so its classification is unit-tested only | measured 2026-11-13 |
+| scratch VIs and the exit prompt: two unsaved validation VIs in memory (`LVMCP Validate.vi` from a grpc validate, `LVMCP Validate Two.vi` validated with `preserveName`) did NOT raise "Save changes? (Exit)": the memory guard read them as unmodified (`modified: []`) and LabVIEW 2026 Q3 exited in one `CloseMainWindow`. This contradicts section 4's "no route closes them without a save prompt" for this case; what differs from the earlier measurement (open windows, the LabVIEW release, whether those VIs were modified) is NOT measured. The `Don't Save - All` picture could not be taken this way | measured 2026-11-13 |
 
 ## 12. Measurement checklist
 

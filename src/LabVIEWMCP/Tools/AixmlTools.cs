@@ -99,12 +99,28 @@ internal sealed class AixmlTools(LvaiConnection connection)
             var stored = response.ErrorCode == 0 &&
                          AixmlExportStore.Save(viPath, aiXmlFilePath, roots);
 
-            return Json.Message(response,
-                [.. await FileFactsAsync(aiXmlFilePath, returnContent, maxContentChars, ct),
-                 ("fromCache", JsonValue.Create(false)),
-                 ("cacheNote", JsonValue.Create(
-                     CacheNote(viPath, response.ErrorCode, stored, roots)))]);
+            List<(string, JsonNode?)> extra =
+            [
+                .. await FileFactsAsync(aiXmlFilePath, returnContent, maxContentChars, ct),
+                ("fromCache", JsonValue.Create(false)),
+                ("cacheNote", JsonValue.Create(CacheNote(viPath, response.ErrorCode, stored, roots))),
+                ("readFrom", JsonValue.Create("labview")),
+            ];
+            if (!AixmlExportStore.IsCacheable(viPath, roots))
+                extra.Add(("memoryNote", JsonValue.Create(LoadedCopyNote)));
+            return Json.Message(response, [.. extra]);
         });
+
+    /// <summary>
+    /// What a grpc export of the caller's own VI may be. NI's converter is LabVIEW opening the VI by
+    /// path, and a VI already in memory - its project open, a caller loaded - is the LOADED copy, not
+    /// the file. A field project (2026-10) took an export identical to the baseline after a save for
+    /// a lost edit, and later for a stale export, and could not tell the two apart.
+    /// </summary>
+    internal const string LoadedCopyNote =
+        "Exported by LabVIEW: when this VI is already in memory (its project open, or a caller loaded), " +
+        "the export shows the LOADED copy, which can differ from the file on disk. To read the file " +
+        "itself, close the project first or use backend pylabview, whose reader always reads the file.";
 
     /// <summary>
     /// One line saying what became of this export, so a caller never has to guess whether the

@@ -247,6 +247,9 @@ public class AixmlExportCacheTests : IDisposable
         Assert.False(Res.Bool(result, "fromCache"));
         Assert.Contains("outside the LabVIEW installation", Res.Str(result, "cacheNote"));
         Assert.Equal(2, server.Service.CountOf("ConvertVIToAIXML"));
+        // Field report: an export of your own code says it may be LabVIEW's loaded copy
+        Assert.Equal("labview", Res.Str(result, "readFrom"));
+        Assert.Contains("LOADED copy", Res.Str(result, "memoryNote"));
     }
 
     /// <summary>

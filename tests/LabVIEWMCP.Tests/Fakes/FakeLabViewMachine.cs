@@ -54,10 +54,15 @@ internal sealed class FakeLabViewMachine : ILabViewMachine
     public IReadOnlyList<MachineChild> Children(long handle) =>
         ChildMap.TryGetValue(handle, out var c) ? c : [];
 
-    public TimeSpan? CpuTime(int processId) =>
-        ProcessList.Any(p => p.Id == processId)
-            ? TimeSpan.FromSeconds((Now - Epoch).TotalSeconds * CpuRate.GetValueOrDefault(processId))
-            : null;
+    /// <summary>When a process's CPU rate drops to zero - a LabVIEW that settles after a busy start.</summary>
+    public Dictionary<int, DateTime> IdleFrom { get; } = [];
+
+    public TimeSpan? CpuTime(int processId)
+    {
+        if (!ProcessList.Any(p => p.Id == processId)) return null;
+        var until = IdleFrom.TryGetValue(processId, out var idle) && idle < Now ? idle : Now;
+        return TimeSpan.FromSeconds((until - Epoch).TotalSeconds * CpuRate.GetValueOrDefault(processId));
+    }
 
     public (int Major, int Minor)? FileVersion(string path) =>
         Versions.TryGetValue(path, out var v) ? v : null;

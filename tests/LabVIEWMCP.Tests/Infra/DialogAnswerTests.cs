@@ -127,6 +127,26 @@ public class DialogAnswerTests
         Assert.Empty(other.Inputs);
     }
 
+    /// <summary>
+    /// A button with no shipped picture: the refusal's screenshot is the capture that would add one, and
+    /// the answer says so (a field report - the "Don't Save - All" picture was never taken because nothing
+    /// asked for it).
+    /// </summary>
+    [Fact]
+    public async Task A_button_without_a_picture_asks_for_the_screenshot_as_the_missing_measurement()
+    {
+        var all = World();
+        var a = await Ask(all, DialogAnswer.ExitSaveScratchOnly, DialogAnswer.DontSaveAll);
+
+        Assert.Equal("buttonNotFound", Kind(a));
+        var wanted = a["pictureWanted"]!;
+        Assert.Equal(DialogAnswer.DontSaveAll, wanted["action"]!.GetValue<string>());
+        Assert.Equal(DialogAnswer.ExitSaveScratchOnly, wanted["dialogKind"]!.GetValue<string>());
+        Assert.Contains("DialogButtons.cs", wanted["howToAdd"]!.GetValue<string>());
+        Assert.Equal(a["screenshot"]?.ToJsonString(), wanted["screenshot"]?.ToJsonString());
+        Assert.Empty(all.Inputs);
+    }
+
     [Fact]
     public async Task No_picture_or_picture_not_found_presses_nothing()
     {

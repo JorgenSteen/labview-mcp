@@ -43,6 +43,20 @@ public class DqmhHeadlessEventTests
         Assert.NotNull(DqmhHeadless.EventRequestProblem("Go", 2, "", [], Args(name)));
     }
 
+    /// <summary>
+    /// DQMH 7.1.2 adds its own `error` to a reply (a field report): a reply field of that name came
+    /// out as `error 2`. A REQUEST argument of that name is not known to collide and stays allowed.
+    /// </summary>
+    [Theory]
+    [InlineData("error")]
+    [InlineData("Error")]
+    [InlineData(" error ")]
+    public void A_reply_field_named_error_is_refused(string name)
+    {
+        Assert.Contains("error 2", DqmhHeadless.EventRequestProblem("Get", 2, "", [], Args(name)));
+        Assert.Null(DqmhHeadless.EventRequestProblem("Go", 0, "", Args(name), []));
+    }
+
     [Fact]
     public void Argument_names_must_be_unique_ignoring_case() =>
         Assert.NotNull(DqmhHeadless.EventRequestProblem("Go", 0, "", Args("Speed", "speed"), []));
