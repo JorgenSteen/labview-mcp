@@ -71,7 +71,7 @@ nothing is wired *into* it; the bare type travels into whatever consumes the wir
 
 Three things about addressing, all learned the expensive way:
 
-**A CALL NODE IS ADDRESSED BY ITS INDEX IN `All Objects[]`, NOT BY VI NAME.** A diagram may call one
+**A CALL NODE IS ADDRESSED BY ITS INDEX IN THE TRAVERSAL'S LIST (until 2026-11-13: in `All Objects[]`), NOT BY VI NAME.** A diagram may call one
 subVI several times, and each call is wired separately. Matching on `VI Name` collapses them to a
 single node: measured on a caller with **four** coerced terminals across two nodes, the check
 reported **two** — and the same shape can report `clean` while a second node still wears dots, which
@@ -222,6 +222,20 @@ dotnet test tests/LabVIEWMCP.Tests/LabVIEWMCP.Tests.csproj -p:BaseOutputPath=<sc
 ```
 
 ## The sweep does not descend into structures — and a PARTIAL sweep passes as clean
+
+**FIXED 2026-11-13 - the rest of this section is the history.** Both helpers
+(`lvbd_coercion_dots.xml`, `lvbd_bind_constant.xml`) now list the nodes with LabVIEW's own
+`VI Scripting - Traverse.lvlib:Traverse for GObjects.vi` (`vi.lib\Utility\traverseref.llb`), Traverse
+Target BD, Class Name `SubVI` (and `Constant` for the bind): it walks every frame of every structure
+and answers one flat array, so no recursion is needed in the helper, and `nodeIndex` is an index into
+THAT array - the flat ordinal over a traversal both passes walk identically that the last paragraph
+asks for. Measured on LabVIEW 2026 Q3 with a fixture calling one subVI on the diagram and once inside
+a case frame, an int32 constant on a double input at each: `All Objects[]` held 5 objects (top level
+only); Traverse `SubVI` found both calls; Traverse `GObject` found 44 objects, so the Class Name
+matches subclasses too. `lvai_coercion_dots` then answered `subViCalls: 2, coerced: 2` where it had
+answered `subViCalls: 1`; `lvai_bind_typedef_constants` found the in-frame constant
+(`constantClass: DigitalNumericConstant`). A field project (DQMH driver work) had hit it (a
+typedef constant inside a case frame stayed unbound and nothing reported it).
 
 Measured 2026-09-09. `lvai_coercion_dots` enumerates through exactly one property chain:
 
