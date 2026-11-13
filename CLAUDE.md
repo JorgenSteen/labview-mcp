@@ -295,7 +295,9 @@ through NI's own providers or VI Server, never by writing the file - `lvai_creat
 NI's API writes it -> open is fine, and the providers REQUIRE it open and active (`Error 1055`
 otherwise). Close the project before any `lvai_create_class` or `lvai_create_interface`; read the
 `.lvproj` after every close - a close SAVES LabVIEW's in-memory copy over the file, and LabVIEW
-adopts every open VI when it saves (the close's `projectPath` sweep removes ours).
+adopts every open VI when it saves (the close's `projectPath` sweep removes ours). A NEWER LabVIEW's
+save rewrites an older project with nothing edited (Dependencies, installer bitness and run-time
+component): every close answers `projectRewrite` and keeps the file as it was. `docs/save-version.md` §3.
 
 **Order:** an interface and EVERY method it declares, before the first class that implements it
 (the link is creation-time only; a declared method breaks every implementer until its override

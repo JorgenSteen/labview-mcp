@@ -142,6 +142,20 @@ internal static class LabViewRestart
                                             CancellationToken ct) =>
         new Run(request, deps).ExecuteAsync(ct);
 
+    /// <summary>
+    /// The project-close side effect's tail: what LabVIEW's save did to the .lvproj, from the
+    /// close's `projectRewrite` (ProjectRewrite). Without one, the old generic caution.
+    /// </summary>
+    internal static string RewriteNote(JsonObject? rewrite) => rewrite?["changed"] switch
+    {
+        JsonValue v when v.TryGetValue<bool>(out var changed) && !changed =>
+            " (the .lvproj is byte for byte as it was)",
+        JsonValue v when v.TryGetValue<bool>(out var changed) && changed =>
+            ": " + ((string?)rewrite!["warning"] ?? "LabVIEW's save rewrote the .lvproj - see " +
+                                                     "guards.projectClose.projectRewrite"),
+        _ => " (the close may rewrite the .lvproj, .lvlps, .aliases: check the project's tree)",
+    };
+
     private sealed class Run(RestartRequest request, RestartDependencies deps)
     {
         private readonly ILabViewMachine _m = deps.Machine;
@@ -369,8 +383,8 @@ internal static class LabViewRestart
                 var didClose = Flag(closed, "closed");
                 var ok = didClose || Flag(closed, "nothingToClose");
                 _sideEffects.Add(didClose
-                    ? $"project '{request.ProjectPath}' SAVED and closed by lvai_close_active_project " +
-                      "(the close may rewrite the .lvproj, .lvlps, .aliases: check the project's tree)"
+                    ? $"project '{request.ProjectPath}' SAVED and closed by lvai_close_active_project" +
+                      RewriteNote(closed["projectRewrite"] as JsonObject)
                     : ok ? "project close: nothing was active any more (1055)"
                          : $"project '{request.ProjectPath}': the close did not report closed; see guards.projectClose");
                 if (!ok)

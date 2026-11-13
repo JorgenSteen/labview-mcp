@@ -61,7 +61,35 @@ stdio (`mcp_temp`, not committed):
 | LabVIEW 2020: the other VI | `execState 1`, ran 42.5 |
 | LabVIEW 2020: the one the icon tool re-saved | the reference never opened |
 
-## 3. Not done, and why
+## 3. A project close in a newer LabVIEW rewrites the `.lvproj` (measured 2026-11-13)
+
+A field project pinned to 21.0 and kept for LabVIEW 2021 **64-bit** was opened in LabVIEW 2026 Q3
+**32-bit**: the Project Explorer showed it changed (`*`) at once, with nothing edited.
+`lvai_restart_labview`'s close saved it (every project close saves - the helper runs Save, then
+Close, because an unsaved close would raise a modal prompt). The pin and `LVVersion` stayed 21.0, so
+`saveVersionCheck` had nothing to report - and the file was 154 402 -> 100 287 bytes:
+
+- Dependencies emptied: 392 entries (374 VI, 9 Library, 7 Document) -> none. LabVIEW lists them
+  again when it loads the VIs.
+- Every installer specification: `DistPart[n]` "NI LabVIEW Runtime 2021 SP1 f6 (64-bit)" (with its
+  productID) -> "NI LabVIEW Run-Time Engine 2021" with EMPTY productID and flavorID;
+  `InstSpecBitness` 64-bit -> 32-bit; `InstSpecVersion` 21018002 -> 21000000. An installer built from
+  that project is no longer the one it was.
+
+**Since then every project close reports it** (`Infra/ProjectRewrite.cs`, called by
+`lvai_close_active_project` and so by every tool that closes a project, `lvai_restart_labview`
+included): the `.lvproj` is copied before the close, compared after LabVIEW's save and BEFORE the
+stray sweep, and the answer carries `projectRewrite` - `changed`, `bytes`, `lvVersion` and
+`saveVersion` before/after, `dependencies` before/after, `items.removed`/`added` (tree paths outside
+Dependencies and Build Specifications), `buildSpecifications.changedProperties` (spec, property,
+before, after), `otherPropertiesChanged`, `backupPath` and a `warning` that the close's `note` and
+the restart's side-effect line repeat. The copy lives under the cache root
+(`project-backups\<name>.<time>.lvproj`, newest 50 kept), never beside the project. Putting it back
+is the caller's decision, with the project closed: a save that carries this session's own project
+edits must stay. Closing WITHOUT saving was not attempted - it needs a probe of what `Close` does on
+an unsaved project (a modal prompt stops every call).
+
+## 4. Not done, and why
 
 - **Saving through LabVIEW in an older version.** The tools that save through LabVIEW (layout,
   icons, swaps, typedef binds, class tools) still write the running LabVIEW's version; the check
