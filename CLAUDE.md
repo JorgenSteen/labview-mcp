@@ -501,6 +501,7 @@ document; `experiments/` does not ship.
 | Test a branch build against LabVIEW before a client restart | `scripts/mcp_drive.py` (its header) | `python -I scripts/mcp_drive.py <exe> <calls.json> [<private TEMP>]` |
 | Station check; crashes | `docs/aixml-backends.md`, `docs/labview-crash-signatures.md` | `pylv_status` (`labviewHealth`, `grpcService`), `lvai_status` |
 | Releases and versions | `docs/release-versioning.md` | `LabVIEWMCP --version` |
+| Files for an older LabVIEW: a project's pinned save version | `docs/save-version.md` | `saveVersionCheck` on every answer, `lvai_describe_project` |
 
 The served documents are embedded in the assembly and byte-verified on every build; all of `docs\`
 is copied beside the exe as well.

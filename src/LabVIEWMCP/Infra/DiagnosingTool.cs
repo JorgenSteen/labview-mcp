@@ -115,9 +115,14 @@ internal sealed class DiagnosingTool(McpServerTool inner) : DelegatingMcpServerT
             && ParallelCalls.Shared.ProjectChangeRefusal(name) is { } why)
             return Failure(ParallelCalls.RefusalJson(name, why));
 
+        // The versions of the LabVIEW files the call names, read BEFORE it runs, so the answer can
+        // say when a file came out saved newer than it was (SaveVersions has the measurements).
+        var versionsBefore = SaveVersions.Capture(request.Params?.Arguments);
+
         try
         {
-            return await base.InvokeAsync(request, cancellationToken);
+            return WithSaveVersionCheck(await base.InvokeAsync(request, cancellationToken),
+                                        versionsBefore, request.Params?.Arguments);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -137,7 +142,8 @@ internal sealed class DiagnosingTool(McpServerTool inner) : DelegatingMcpServerT
                 retryParams.Arguments = stringified;
                 try
                 {
-                    return await base.InvokeAsync(request, cancellationToken);
+                    return WithSaveVersionCheck(await base.InvokeAsync(request, cancellationToken),
+                                                versionsBefore, request.Params?.Arguments);
                 }
                 catch (Exception second) when (second is not OperationCanceledException)
                 {
@@ -149,6 +155,28 @@ internal sealed class DiagnosingTool(McpServerTool inner) : DelegatingMcpServerT
             }
 
             return Failure(ToolArguments.InvocationProblem(name, schema, received, e));
+        }
+    }
+
+    /// <summary>
+    /// The answer with `saveVersionCheck` added when the call saved a LabVIEW file newer than it was
+    /// or than its project pins; any other answer comes back as the same object. Never throws: a
+    /// check that fails leaves the tool's own answer alone.
+    /// </summary>
+    internal static CallToolResult WithSaveVersionCheck(CallToolResult result, SaveVersions.Before before,
+                                                        IEnumerable<KeyValuePair<string, JsonElement>>? arguments)
+    {
+        try
+        {
+            if (result.Content is not [TextContentBlock { Text: { } text } block]) return result;
+            var annotated = SaveVersions.Annotate(text, before, arguments);
+            if (ReferenceEquals(annotated, text)) return result;
+            block.Text = annotated;
+            return result;
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            return result;
         }
     }
 

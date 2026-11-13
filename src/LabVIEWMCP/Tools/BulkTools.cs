@@ -157,7 +157,8 @@ internal sealed class BulkTools(LvaiConnection connection)
                                                        : WithExecTrailerIgnored(answer, aiXmlFilePath);
         if (xnodes.Count > 0)
             answer = await WithXNodesPlacedAsync(answer, viPath, xnodes, timeoutSeconds, ct);
-        return await WithIconAsync(answer, viPath, icon, measureDiagram && !openVI, choice.Name,
+        return await WithIconAsync(answer, viPath, icon, measureDiagram && !openVI && KeptForOlderLabView(viPath) is null,
+                                   choice.Name,
                                    timeoutSeconds, ct);
     }
 
@@ -694,7 +695,29 @@ internal sealed class BulkTools(LvaiConnection connection)
             // diagramSize measures the diagram the caller gets. The user's recommendation of
             // 2026-10-12, for both backends; a failure leaves the VI as generated and is reported.
             var cleanNote = "";
-            if (measureDiagram && !openVI)
+            var savingStepsAllowed = true;
+            // A VI WRITTEN FOR AN OLDER LabVIEW than the one running - its project pins that version -
+            // is not handed to the steps that SAVE it through LabVIEW: each would write the running
+            // LabVIEW's version over it (measured by both field reports).
+            if (KeptForOlderLabView(viPath) is { } kept && !openVI && (measureDiagram || cleanUpPanel || cleanUp))
+            {
+                steps.Add(new JsonObject
+                {
+                    ["step"] = "savingStepsSkipped",
+                    ["savedAs"] = kept.Version,
+                    ["labviewInUse"] = kept.Running,
+                    ["skipped"] = new JsonArray("tidyConstants", "cleanUpPanel", "cleanUpDiagram", "icon"),
+                    ["note"] = $"The VI is a LabVIEW {kept.Version} file and LabVIEW {kept.Running} is running: " +
+                               "the constant tidy, the panel and diagram clean-up and the icon each SAVE through " +
+                               "LabVIEW and would rewrite it as " + kept.Running + ". They were skipped, so the " +
+                               "diagram is the composer's own layout. Lay it out in a LabVIEW of the project's " +
+                               "version, or accept the upgrade with lvai_layout_diagram.",
+                });
+                cleanNote += " Kept as a LabVIEW " + kept.Version + " file: the steps that save through LabVIEW " +
+                             "were skipped (savingStepsSkipped).";
+                savingStepsAllowed = false;
+            }
+            if (measureDiagram && !openVI && savingStepsAllowed)
             {
                 // the CONSTANTS first (labels, white-space strings, array sizes), so the layout
                 // below lays out their final sizes - every deliverable, the user's rule of 2026-11-11
@@ -705,7 +728,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     cleanNote += " The block diagram constants were NOT tidied - labels may show: " +
                                  tidied["note"]?.GetValue<string>();
             }
-            if (cleanUpPanel && !openVI)
+            if (cleanUpPanel && !openVI && savingStepsAllowed)
             {
                 // the FRONT PANEL first, for every VI but the main one (the user's rule of
                 // 2026-10-12); a LabVIEW save like the diagram's, so it too precedes the size
@@ -716,7 +739,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     cleanNote += " The front panel was NOT cleaned up - it is as generated: " +
                                  arranged["note"]?.GetValue<string>();
             }
-            if (cleanUp && !openVI)
+            if (cleanUp && !openVI && savingStepsAllowed)
             {
                 var cleaned = await (CleanUp?.Invoke(viPath, choice.Name, timeoutSeconds, ct)
                     ?? new DiagramCleanup(connection).RunAsync(viPath, choice.Name, timeoutSeconds, ct));
@@ -1183,6 +1206,19 @@ internal sealed class BulkTools(LvaiConnection connection)
 
     private static string? StepName(JsonObject step) =>
         step["step"] is JsonValue v && v.TryGetValue<string>(out var name) ? name : null;
+
+    /// <summary>
+    /// The VI's saved version and the running LabVIEW's, when the file is OLDER than that LabVIEW - which
+    /// a composed VI is only when its project pins an older save version (AixmlComposer.PinnedTarget).
+    /// Null when either is unknown or the file is not older.
+    /// </summary>
+    internal static (string Version, string Running)? KeptForOlderLabView(string viPath)
+    {
+        if (!File.Exists(viPath) || SaveVersions.Of(viPath) is not { } version) return null;
+        if (AixmlBackend.LabViewInUse() is not { } inUse) return null;
+        var running = $"{inUse - 2000}.0";
+        return SaveVersions.Compare(version, running) < 0 ? (version, running) : null;
+    }
 
     /// <summary>
     /// Step-level fields that say WHAT a successful step did, kept when the step is slimmed. Asked
