@@ -42,7 +42,9 @@ directions together** - every composer test composed, READ back, composed again 
 its expectations - pass **129 of 130** the same night, user events, control-reference events,
 class calls and composed callees included; the one left needs the desktop's focus anyway. So it is a second converter with a known, smaller reach — not a stand-in that answers for the
 first. **It refuses by name what it cannot build** (`errorKind: composerRefused`), which is what
-makes it safe to put behind a switch: it does not write a VI that is silently different.
+makes it safe to put behind a switch: it does not write a VI that is silently different. A VI the
+READER cannot read answers `readerFailed` (it was `composerFailed` until 2026-11-13), and a failed
+run's message is the Python exception's own line, not the traceback frames above it.
 
 ## Choosing one
 

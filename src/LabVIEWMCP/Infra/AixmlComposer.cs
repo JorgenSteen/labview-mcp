@@ -140,10 +140,15 @@ internal static class AixmlComposer
     /// traceback.
     /// </summary>
     internal sealed record Result(bool Written, bool Refused, string Message, string[] Report,
-                                  long ElapsedMs, int ExitCode, string? Warning = null)
+                                  long ElapsedMs, int ExitCode, string? Warning = null, bool Reader = false)
     {
         public int ErrorCode => Written ? 0 : Refused ? 2 : 1;
-        public string Kind => Written ? "" : Refused ? "composerRefused" : "composerFailed";
+
+        /// <summary>
+        /// `readerFailed` for vi2aixml.py (VI -> AIXML): it was answered `composerFailed` until
+        /// 2026-11-13, which sent a reader's refusal to the composer's documentation.
+        /// </summary>
+        public string Kind => Written ? "" : Reader ? "readerFailed" : Refused ? "composerRefused" : "composerFailed";
     }
 
     /// <summary>
@@ -327,7 +332,8 @@ internal static class AixmlComposer
 
         return run.ExitCode == 0 && File.Exists(target)
             ? new Result(true, false, "No Error", ContextReport(context), run.ElapsedMs, 0)
-            : new Result(false, false, Tail(run.StdErr, run.StdOut), ContextReport(context), run.ElapsedMs, run.ExitCode);
+            : new Result(false, false, Tail(run.StdErr, run.StdOut), ContextReport(context), run.ElapsedMs,
+                         run.ExitCode, Reader: true);
     }
 
     /// <summary>
@@ -480,12 +486,24 @@ internal static class AixmlComposer
     private static IEnumerable<string> Lines(string text) =>
         text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-    /// <summary>The last lines of a failed run - a Python traceback ends with the line that matters.</summary>
-    private static string Tail(string stderr, string stdout)
+    /// <summary>
+    /// The message of a failed run. A Python traceback ends in `&lt;Exception&gt;: &lt;message&gt;`, and that
+    /// line (with any continuation lines after it) is the message; the frames above it are not.
+    /// Measured 2026-11-13: the reader's own refusal of a VI it cannot read came back as
+    /// `raise ValueError( | ...&lt;2 lines&gt;... | "...") | ValueError: pylabview could not read...`
+    /// because this took the last four lines blind. Without such a line, the last four as before.
+    /// </summary>
+    internal static string Tail(string stderr, string stdout)
     {
         var lines = Lines(stderr).ToArray();
         if (lines.Length == 0) lines = Lines(stdout).ToArray();
-        return lines.Length == 0 ? "the composer exited without a message"
-                                 : string.Join(" | ", lines.TakeLast(4));
+        if (lines.Length == 0) return "the composer exited without a message";
+        var exception = Array.FindLastIndex(lines, ExceptionLine.IsMatch);
+        return string.Join(" | ", exception >= 0 ? lines[exception..] : lines.TakeLast(4));
     }
+
+    /// <summary>`ValueError: ...`, `lvheap.HeapError: ...`, `KeyboardInterrupt: ...` - Python's last traceback line.</summary>
+    private static readonly System.Text.RegularExpressions.Regex ExceptionLine = new(
+        @"^[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt|Warning): ",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
 }
