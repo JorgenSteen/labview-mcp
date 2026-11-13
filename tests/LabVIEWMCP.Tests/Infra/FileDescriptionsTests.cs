@@ -97,6 +97,34 @@ public sealed class FileDescriptionsTests : IDisposable
         Assert.DoesNotContain(((JsonArray)target["vis"]!), v => (string?)v!["name"] == "Clear Errors.vi");
     }
 
+    /// <summary>
+    /// A member of an .llb is addressed THROUGH the .llb file, which File.Exists cannot see into.
+    /// Measured 2026-11-13: a field project's `../SubVI/Helpers.llb/IMAQ WriteFile` sat under
+    /// missingFiles beside the existing .llb. A member of a folder that is really gone still does.
+    /// </summary>
+    [Fact]
+    public void A_member_of_an_existing_llb_is_not_missing_and_one_in_a_gone_folder_is()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "SubVI"));
+        File.WriteAllText(Path.Combine(_root, "SubVI", "Helpers.llb"), "an llb is a file");
+        var project = Path.Combine(_root, "Llb.lvproj");
+        File.WriteAllText(project, """
+            <?xml version='1.0' encoding='UTF-8'?>
+            <Project Type="Project" LVVersion="21008000">
+            	<Item Name="My Computer" Type="My Computer">
+            		<Item Name="IMAQ WriteFile" Type="VI" URL="../SubVI/Helpers.llb/IMAQ WriteFile"/>
+            		<Item Name="Gone Member.vi" Type="VI" URL="../SubVI/Gone/Gone Member.vi"/>
+            	</Item>
+            </Project>
+            """);
+
+        var target = (JsonObject)((JsonArray)FileDescriptions.DescribeProject(project)["targets"]!)[0]!;
+
+        var missing = ((JsonArray)target["missingFiles"]!).Select(m => (string?)m!["name"]).ToList();
+        Assert.Equal(["Gone Member.vi"], missing);
+        Assert.Contains(((JsonArray)target["vis"]!), v => (string?)v!["name"] == "IMAQ WriteFile");
+    }
+
     /// <summary>An item inherits its folder's scope unless it carries its own; the root is public.</summary>
     [Fact]
     public void Library_items_carry_their_effective_scope_and_NIs_type_words()

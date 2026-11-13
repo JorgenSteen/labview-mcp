@@ -125,7 +125,7 @@ internal static class FileDescriptions
             if (type == "Folder") { WalkTarget(item, projectFolder, target); continue; }
 
             var path = Resolve(projectFolder, (string?)item.Attribute("URL"));
-            if (path is not null && !File.Exists(path) && !Directory.Exists(path))
+            if (path is not null && !File.Exists(path) && !Directory.Exists(path) && !InsideContainerFile(path))
             {
                 ((JsonArray)target["missingFiles"]!).Add(new JsonObject { ["name"] = name, ["path"] = path });
                 continue;
@@ -155,6 +155,25 @@ internal static class FileDescriptions
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// A path that runs THROUGH a container file - a VI inside an .llb or a packed library, which
+    /// LabVIEW addresses as though the container were a directory (`../SubVI/Helpers.llb/IMAQ
+    /// WriteFile`). `File.Exists` says no to every such member; the first ancestor that exists
+    /// decides: a FILE means a container, whose inside nothing here can see, so the entry is not
+    /// reported missing; a directory means the file is really gone. Measured 2026-11-13: a field
+    /// project's .llb member was listed under missingFiles beside the existing .llb. The same walk
+    /// as the stray sweep's (ClassTools.StripHelperItems).
+    /// </summary>
+    internal static bool InsideContainerFile(string path)
+    {
+        for (var parent = Path.GetDirectoryName(path); parent is { Length: > 0 }; parent = Path.GetDirectoryName(parent))
+        {
+            if (File.Exists(parent)) return true;
+            if (Directory.Exists(parent)) return false;
+        }
+        return false;
     }
 
     /// <summary>
