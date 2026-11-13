@@ -54,16 +54,71 @@ internal sealed class LifecycleTools(LvaiConnection connection)
         [Description(AixmlBackend.ParameterDescription + """
              On pylabview READY means LabVIEW answers over ActiveX; nothing waits for NI's service.
             """)]
-        string? backend = null)
+        string? backend = null,
+        [Description("""
+            The LabVIEW to start when none runs, for THIS call: a LabVIEW.exe path or a release year
+            ('2020'). It is not remembered as the next default. When a different LabVIEW is already
+            running the call is refused (otherLabviewRunning) - it never starts a second one.
+            Omitted: the settings file's LabVIEW, else the one last seen running, else the newest.
+            """)]
+        string? labview = null)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_ensure_labview", out var choice, out var bad))
             return AixmlBackend.Refusal(bad);
+        LabViewInstall? requested = null;
+        if (labview is { Length: > 0 })
+        {
+            var (install, problem) = RequestedInstall(labview, LabViewLocator.Discover());
+            if (install is null) return Json.Error("badArguments", problem!, new { labview });
+            requested = install;
+            if (OtherRunning(install) is { } running)
+                return AixmlTools.WithBackend(Json.Error("otherLabviewRunning",
+                    $"{running} is running, not {install.Describe()}. Two LabVIEWs at once make every later call " +
+                    "ambiguous, so none is started beside it: close the running one first (lvai_restart_labview " +
+                    "mode close), then call again.", new { labview, requested = install.ExePath }), choice);
+        }
         return AixmlTools.WithBackend(await EnsureCoreAsync(waitSeconds, keepAutoSave,
-            choice.Name == AixmlBackend.PyLabview, ct), choice);
+            choice.Name == AixmlBackend.PyLabview, ct, requested), choice);
+    }
+
+    /// <summary>
+    /// The installation a `labview` argument names - an exe path or a release year (the 32-bit build
+    /// first, as the selection rule prefers) - or why none matches.
+    /// </summary>
+    internal static (LabViewInstall? Install, string? Problem) RequestedInstall(
+        string text, IReadOnlyList<LabViewInstall> installs)
+    {
+        var t = text.Trim().Trim('"');
+        if (int.TryParse(t, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture,
+                         out var year))
+        {
+            var byYear = installs.Where(i => i.Release == year).OrderByDescending(i => i.Is32Bit).FirstOrDefault();
+            return byYear is not null ? (byYear, null)
+                : (null, $"No LabVIEW {year} is installed. Installed: {string.Join(", ", installs.Select(i => i.Describe()))}.");
+        }
+        var match = installs.FirstOrDefault(i => string.Equals(Full(i.ExePath), Full(t), StringComparison.OrdinalIgnoreCase));
+        return match is not null ? (match, null)
+            : (null, $"'{t}' is not an installed LabVIEW.exe. Installed: {string.Join(", ", installs.Select(i => i.ExePath))}.");
+    }
+
+    private static string Full(string path)
+    {
+        try { return Path.GetFullPath(path); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return path; }
+    }
+
+    /// <summary>A running LabVIEW that is not <paramref name="wanted"/>, described; null when none.</summary>
+    private static string? OtherRunning(LabViewInstall wanted)
+    {
+        var running = LabViewContext.RunningInstances();
+        if (running.Count == 0 ||
+            running.Any(r => string.Equals(Full(r.Exe), Full(wanted.ExePath), StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return string.Join(", ", running.Select(r => $"pid {r.Pid} ({r.Exe})"));
     }
 
     private async Task<string> EnsureCoreAsync(int waitSeconds, bool keepAutoSave, bool overCom,
-                                               CancellationToken ct) =>
+                                               CancellationToken ct, LabViewInstall? requested = null) =>
         await Rpc.GuardAsync(async () =>
         {
             var budget = TimeSpan.FromSeconds(Rpc.ClampToolWait(waitSeconds));
@@ -98,6 +153,12 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                 // the LabVIEW to start: the settings file's, else the one last seen running WITH
                 // its -pref, else the newest installed (LabViewContext.ToStart, issue #99)
                 var (pick, pref, startContext) = LabViewContext.ToStart();
+                var chosenBy = startContext.Source;
+                if (requested is not null)
+                {
+                    (pick, pref, chosenBy) = (requested, null, "this call's `labview`");
+                    LabViewContext.MarkStartedForOneCall(requested.ExePath);
+                }
                 if (pick is null)
                     return Json.Error("no-labview",
                         "No LabVIEW installation found under the program-files roots.", new
@@ -127,7 +188,7 @@ internal sealed class LifecycleTools(LvaiConnection connection)
 
                 startedNow = true;
                 launched = pick.Describe() + (pref is null ? "" : $" -pref {pref}") +
-                           $" (chosen: {startContext.Source})";
+                           $" (chosen: {chosenBy})";
                 RecordOwnership(launch.Pid);
                 return null;
             }
@@ -364,8 +425,33 @@ internal sealed class LifecycleTools(LvaiConnection connection)
     /// lvai_ensure_labview; then the service, for longer than one tool call may wait, because the
     /// restart runs as a resumable job. Ownership is NOT recorded here - the restart decides that.
     /// </summary>
+    /// <summary>Poll until LabVIEW answers ActiveX's Version, or the token ends; the last problem otherwise.</summary>
+    private static async Task<(string? Version, string? LastProblem)> PollActiveXAsync(CancellationToken token)
+    {
+        string? last = null;
+        while (!token.IsCancellationRequested)
+        {
+            if (LabViewCom.NotReady() is { } notYet) last = notYet;
+            else
+            {
+                try
+                {
+                    var version = await LabViewCom.WithLabViewAsync(app =>
+                        app.GetType().InvokeMember("Version", System.Reflection.BindingFlags.GetProperty,
+                            null, app, null, System.Globalization.CultureInfo.InvariantCulture)?.ToString(),
+                        10, token);
+                    if (version is not null) return (version, null);
+                }
+                catch (Exception e) when (!token.IsCancellationRequested) { last = e.Message; }
+            }
+            try { await Task.Delay(2000, token); }
+            catch (OperationCanceledException) { break; }
+        }
+        return (null, last);
+    }
+
     internal async Task<StartResult> StartForRestartAsync(string? exePath, TimeSpan serviceWait,
-                                                          CancellationToken ct)
+                                                          CancellationToken ct, bool overCom = false)
     {
         var machine = Win32LabViewMachine.Instance;
         var detail = new JsonObject();
@@ -403,6 +489,21 @@ internal sealed class LifecycleTools(LvaiConnection connection)
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(serviceWait);
+        if (overCom)
+        {
+            // THE PYLABVIEW ROUTE: ready means LabVIEW answers over ActiveX, past its start-up splash
+            // (LabViewCom.NotReady) - not NI's service, which a LabVIEW older than 2025 never has, and
+            // no Nigel chat is opened for it.
+            var (version, lastProblem) = await PollActiveXAsync(budget.Token);
+            ct.ThrowIfCancellationRequested();
+            var running = machine.Processes(LabViewState.LabViewProcess);
+            var up = pid is { } p ? running.FirstOrDefault(r => r.Id == p) : running.Count == 1 ? running[0] : null;
+            detail["seconds"] = Math.Round(clock.Elapsed.TotalSeconds, 1);
+            detail["readyMeans"] = "LabVIEW answers over ActiveX (pylabview route); NI's service was not waited for";
+            detail["labviewVersion"] = version;
+            detail["lastError"] = version is null ? lastProblem : null;
+            return new StartResult(version is not null, up?.Id ?? pid, up?.StartTime, null, detail);
+        }
         var (config, last, nigel) = await PollServiceAsync(budget.Token, ct, startNigelChat: true,
             () => serviceWait - clock.Elapsed);
         ct.ThrowIfCancellationRequested();

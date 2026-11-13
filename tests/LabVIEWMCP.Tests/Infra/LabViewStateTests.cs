@@ -424,4 +424,35 @@ public class LabViewOwnershipTests
         Assert.DoesNotContain(state["windows"]!.AsArray(), w => w!["kind"]!.GetValue<string>() == WindowKinds.HiddenSystem);
         Assert.False(state["labview"]![0]!["startedByThisServer"]!.GetValue<bool>());
     }
+
+    /// <summary>
+    /// The start-up sequence measured 2026-11-13 on cold starts of LabVIEW 2020, 2025 and 2026: the
+    /// frame and a SPLASHSCREEN, then an untitled window the frame owns, then the start window
+    /// titled `LabVIEW`. Until the last, an ActiveX call starts a second LabVIEW.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0, "splash")]
+    [InlineData(6.0, "owned")]
+    [InlineData(13.0, "start")]
+    [InlineData(200.0, "owned")]
+    public void A_labview_is_starting_up_while_its_splash_shows(double upSeconds, string stage)
+    {
+        var m = new LabVIEWMcp.Tests.Fakes.FakeLabViewMachine();
+        m.AddProcess(7, "LabVIEW", m.Now.AddSeconds(-upSeconds), @"X:\LabVIEW.exe");
+        var frame = m.AddWindow(7, "LVFrame", "LabVIEW", true, handle: 500);
+        if (stage == "splash") m.AddWindow(7, "SPLASHSCREEN", "", true);
+        if (stage == "owned") m.AddWindow(7, "LVDChild", "", true, owner: frame.Handle);
+        if (stage == "start") m.AddWindow(7, "LVDChild", "LabVIEW", true, owner: frame.Handle);
+
+        var why = LabViewState.StartingUp(m);
+
+        if (upSeconds < LabViewState.StartupSeconds && stage != "start")
+            Assert.Contains("start-up splash", why);
+        else
+            Assert.Null(why);   // the start window is up, or the LabVIEW is past its start-up time
+    }
+
+    [Fact]
+    public void The_first_splash_window_is_a_loading_window() =>
+        Assert.Equal(WindowKinds.Loading, LabViewState.Classify(new MachineWindow(1, 1, "SPLASHSCREEN", "", true)));
 }

@@ -462,10 +462,24 @@ internal sealed record LabViewContext(
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return null; }
     }
 
+    /// <summary>
+    /// The LabVIEWs started for ONE call - lvai_ensure_labview's `labview` argument - which are not
+    /// remembered as the next default. Measured 2026-11-12 (labview skill): one test run on LabVIEW 2020
+    /// rewrote last-labview.json, so the next plain start would have picked 2020 instead of the 2025
+    /// the user had before. In-process: a later server that finds such a LabVIEW running still
+    /// remembers it, as it would any LabVIEW it finds.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> PerCallStarts =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal static void MarkStartedForOneCall(string exe) =>
+        PerCallStarts[Path.GetFullPath(exe)] = 0;
+
     private static void Remember(string exe, string? pref)
     {
         try
         {
+            if (PerCallStarts.ContainsKey(Path.GetFullPath(exe))) return;
             if (Remembered() is { } last && SamePath(last.Exe, exe) &&
                 (last.Pref is null ? pref is null : pref is not null && SamePath(last.Pref, pref))) return;
             Directory.CreateDirectory(Path.GetDirectoryName(LastSeenPath)!);

@@ -40,6 +40,12 @@ internal sealed class RestartDependencies
     /// <summary>Starts the LabVIEW at the given exe path (or the default pick) and waits for the service.</summary>
     public required Func<string?, CancellationToken, Task<StartResult>> Start { get; init; }
 
+    /// <summary>
+    /// True on the pylabview route: the active project and the memory are read over ActiveX, so the
+    /// service guard needs no go-ahead when NI's service does not answer.
+    /// </summary>
+    public bool ReadsOverActiveX { get; init; }
+
     public string? AutoSaveDirectory { get; init; }
     public TimeSpan CpuWindow { get; init; } = TimeSpan.FromSeconds(15);
     public TimeSpan CloseWait { get; init; } = TimeSpan.FromSeconds(20);
@@ -265,7 +271,15 @@ internal static class LabViewRestart
             {
                 ["answers"] = service.Answers, ["port"] = service.Port, ["error"] = service.Error,
             };
-            if (!service.Answers)
+            // On pylabview the active project and the memory are read over ActiveX, so NI's service is
+            // not needed for them - and on a LabVIEW older than 2025 it never comes. Measured 2026-11-12
+            // by the labview skill on LabVIEW 2020: the restart refused even the LabVIEW its own server
+            // had started, for a service that station does not have.
+            var reads = service.Answers || deps.ReadsOverActiveX;
+            if (!service.Answers && deps.ReadsOverActiveX)
+                _guards["service"]!["neededFor"] = "nothing: on the pylabview route the active project and the " +
+                                                   "memory are read over ActiveX";
+            if (!reads)
                 NeedGoAhead(GuardService, "The lvai service does not answer, so what is in memory and which " +
                     "project is active cannot be read. A helper may still run inside LabVIEW. The measured " +
                     "route stops here and the user decides whether to close on the window list alone.");
@@ -273,7 +287,7 @@ internal static class LabViewRestart
             // ---------- 5. the active project ----------
             var closeOwnProject = false;
             var activeKnown = false;
-            if (service.Answers)
+            if (reads)
             {
                 var active = await deps.ActiveProject(ct);
                 _guards["activeProject"] = new JsonObject
@@ -332,7 +346,7 @@ internal static class LabViewRestart
             // ---------- decision A, before anything changes ----------
             var windowsEmpty = WindowsEmpty(snapshot, ownProjectFile, out var windowsNote);
             var mayBeEmpty = windowsEmpty && otherAutoSave == 0 && (ownAutoSave.Count == 0 || closeOwnProject) &&
-                             service.Answers &&
+                             reads &&
                              !_needGoAhead.Contains(GuardActiveProject);
             if (!HasGoAhead && _needGoAhead.Count > 0)
                 return RefuseForGoAhead(labview, serverStarted, EmptyChecks(windowsEmpty, windowsNote, snapshot,
@@ -367,7 +381,7 @@ internal static class LabViewRestart
             // ---------- 7. memory ----------
             VisInMemoryReading? memory = null;
             string memoryNote;
-            if (!service.Answers)
+            if (!reads)
                 memoryNote = "not run: the service does not answer";
             else if (projectStillActive)
                 memoryNote = "not run: a project stays active, and a probe VI run now would be adopted into it";

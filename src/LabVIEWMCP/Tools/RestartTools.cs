@@ -187,7 +187,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         labview-mcp's own unsaved scratch VIs (LVMCP Validate/Convert/DQMH/TD Carrier) block as
         `unsaved` too: no route closes them without a save prompt (measured), so the answer says
         "Don't Save - All" is safe for them rather than closing them.
-        THE GUARDS, in order: processes, windows, CPU, service (does lvai answer), active project
+        THE GUARDS, in order: processes, windows, CPU, service (does lvai answer; on pylabview not
+        needed - the project and memory are read over ActiveX), active project
         (projectPath = this session's project: saved and closed first when it is the active one; a
         different active project is never closed by this tool), memory (lvai_vis_in_memory's helper:
         on grpc never generated here - call that tool once at the session start; on pylabview
@@ -199,7 +200,8 @@ internal sealed class RestartTools(LvaiConnection connection)
         the request, most likely a save prompt - both reported with a fresh window list and CPU
         sample; the user decides. RESTART then starts the same installation through
         lvai_ensure_labview's launch routes and waits for the service (and opens Nigel once if it
-        does not come). If LVAutoSave holds files after the close, it stops: that is the user's call.
+        does not come) - on pylabview it waits until LabVIEW answers over ActiveX instead.
+        If LVAutoSave holds files after the close, it stops: that is the user's call.
         Ownership does not change: the user's LabVIEW restarted is still the user's.
         RESUMABLE: the route takes minutes (measured: close 4.0-5.5 s, start 32-40 s, ~4 min with
         the guards), past the client's 60 s. A call answers within about 40 s; `stillRunning`
@@ -318,6 +320,8 @@ internal sealed class RestartTools(LvaiConnection connection)
             var (reading, notRun, _, _) = await ReadMemoryAsync(allowGenerate: false, false, 60, t);
             return (reading, notRun);
         },
-        Start = (exe, t) => new LifecycleTools(connection).StartForRestartAsync(exe, ServiceWait, t),
+        Start = (exe, t) => new LifecycleTools(connection).StartForRestartAsync(exe, ServiceWait, t,
+                                                                               overCom: BackendRoute.OnPyLabview),
+        ReadsOverActiveX = BackendRoute.OnPyLabview,
     };
 }

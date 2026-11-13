@@ -60,12 +60,23 @@ internal static class LabViewCom
             if (processes.All(p => p.MainWindowHandle == IntPtr.Zero))
                 return "LabVIEW is running but shows no window yet - it is still starting, and a " +
                        "COM call now could launch a second instance. Call again in a few seconds.";
+            // A window is not enough: the frame shows from 0.6 s, under the start-up splash, long
+            // before LabVIEW's ActiveX server is registered (LabViewState.StartingUp has the
+            // measurement). Only a LabVIEW young enough to be starting is looked at that closely.
+            if (processes.Any(Young))
+                return LabViewState.StartingUp(Win32LabViewMachine.Instance);
             return null;
         }
         finally
         {
             foreach (var p in processes) p.Dispose();
         }
+    }
+
+    private static bool Young(Process p)
+    {
+        try { return (DateTime.Now - p.StartTime).TotalSeconds < LabViewState.StartupSeconds; }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
     }
 
     /// <summary>

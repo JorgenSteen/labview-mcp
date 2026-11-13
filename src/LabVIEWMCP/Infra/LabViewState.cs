@@ -141,6 +141,32 @@ internal static class LabViewState
     /// <summary>The title of LabVIEW's start-up splash window, in a slow start.</summary>
     internal const string LoadingTitle = "_Loading";
 
+    /// <summary>The window class of LabVIEW's first start-up splash.</summary>
+    internal const string SplashClass = "SPLASHSCREEN";
+
+    /// <summary>
+    /// Why a LabVIEW is still starting - a visible start-up splash in a LabVIEW younger than
+    /// <see cref="StartupSeconds"/> - or null. THE REASON IT MATTERS: an ActiveX creation while
+    /// LabVIEW shows its splash finds no running server registered yet and STARTS A SECOND LabVIEW.
+    /// Measured 2026-11-13: lvai_ensure_labview on LabVIEW 2026 left a second LabVIEW, started 3 s
+    /// after the first, still running 34 s later (its path unreadable, so the guard that ends such a
+    /// LabVIEW could not); a field project saw the same four times on LabVIEW 2025. The frame window
+    /// is visible from 0.6 s, so "a window exists" - the old readiness test - passed during the splash.
+    /// </summary>
+    public static string? StartingUp(ILabViewMachine machine)
+    {
+        foreach (var process in machine.Processes(LabViewProcess))
+        {
+            if ((machine.Now - process.StartTime)?.TotalSeconds is not { } up || up >= StartupSeconds) continue;
+            var windows = ClassifyAll(machine.TopWindows(process.Id), up);
+            if (windows.FirstOrDefault(w => w.Kind == WindowKinds.Loading && w.Window.Visible) is { } splash)
+                return $"LabVIEW pid {process.Id} started {up:F0} s ago and still shows its start-up splash " +
+                       $"('{splash.Window.ClassName}'); an ActiveX call now would start a second LabVIEW. " +
+                       "Call again in a few seconds (measured: the start window came at 12-30 s).";
+        }
+        return null;
+    }
+
     /// <summary>
     /// How long after its start an untitled window a LabVIEW frame owns is taken for the splash -
     /// the same 90 s the Nigel chat waits, past every measured splash (21-54 s).
@@ -180,6 +206,11 @@ internal static class LabViewState
             if (IsSystemClass(window.ClassName)) return WindowKinds.HiddenSystem;
         }
 
+        // The FIRST start-up window, before any frame-owned one: an untitled `SPLASHSCREEN`, measured
+        // 2026-11-13 on cold starts of LabVIEW 2020, 2025 and 2026 (visible at 0.6-1.1 s, gone at
+        // 4.7-6.4 s), followed by the untitled frame-owned splash and then the start window titled
+        // `LabVIEW` (12.5 s, 13.1 s, 30.3 s).
+        if (window.ClassName == SplashClass && window.Visible) return WindowKinds.Loading;
         if (title.Length == 0) return WindowKinds.Untitled;
         if (title == "LabVIEW") return WindowKinds.Frame;
         // Measured 2026-10-14 on a cold start of LabVIEW 2026 Q3: a visible LVDChild titled

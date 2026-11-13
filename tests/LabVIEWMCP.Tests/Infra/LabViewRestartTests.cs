@@ -21,6 +21,7 @@ public class LabViewRestartTests
         public FakeLabViewMachine M { get; } = new();
         public List<string> Log { get; } = [];
         public bool ServerStarted { get; set; }
+        public bool OverActiveX { get; set; }
         public ServiceProbe Service { get; set; } = new(true, 50123, null);
         public ActiveProjectProbe Active { get; set; } = new(false, null, "NO project is active");
         public VisInMemoryReading? Memory { get; set; } = VisInMemory.Parse(
@@ -45,6 +46,7 @@ public class LabViewRestartTests
         {
             Machine = M,
             AutoSaveDirectory = AutoSave,
+            ReadsOverActiveX = OverActiveX,
             IsServerStarted = _ => ServerStarted,
             RecordOwnership = (pid, start) => Recorded = (pid, start),
             ProbeService = _ => { Log.Add("probe"); return Task.FromResult(Service); },
@@ -233,6 +235,35 @@ public class LabViewRestartTests
 
         Assert.Single(a["guards"]!["cpu"]!.AsArray());
         Assert.Contains("waitForIdleSeconds", Str(a, "error"));
+    }
+
+    /// <summary>
+    /// The labview skill's question 1 (2026-11-12, LabVIEW 2020): no NI service, and the restart refused
+    /// the LabVIEW its own server had started. On the pylabview route the project and memory are read
+    /// over ActiveX, so the service is not needed.
+    /// </summary>
+    [Fact]
+    public async Task Without_the_service_the_pylabview_route_reads_over_activex_and_closes()
+    {
+        var w = new World { ServerStarted = true, OverActiveX = true, Service = new(false, null, "no service") };
+        var a = await w.Run("close");
+
+        Assert.Null(a["stoppedBy"]?.GetValue<string>());
+        Assert.Equal(new[] { 10 }, w.M.ClosesSent);
+        Assert.Contains("active", w.Log);
+        Assert.Contains("memory", w.Log);
+        Assert.Contains("ActiveX", a["guards"]!["service"]!["neededFor"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Without_the_service_the_grpc_route_still_needs_the_go_ahead()
+    {
+        var w = new World { ServerStarted = true, Service = new(false, null, "no service") };
+        var a = await w.Run("close");
+
+        Assert.Equal("service", Str(a, "stoppedBy"));
+        Assert.DoesNotContain("memory", w.Log);
+        Assert.Empty(w.M.ClosesSent);
     }
 
     [Fact]
