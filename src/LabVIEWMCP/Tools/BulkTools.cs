@@ -67,8 +67,9 @@ internal sealed class BulkTools(LvaiConnection connection)
         feeding a typedef input still needs lvai_bind_typedef_constants.
         A `<Call target="Match Regular Expression.xnode">` places the real XNode (step `xnodes`;
         no capture groups - aixml-reference section 9).
-        docs/aixml-call-loaded-vi.md. On success each step is slimmed to its verdict (`execState`,
-        `preCheck` and `repairs` lifted to the top); a failed step keeps its whole answer.
+        docs/aixml-call-loaded-vi.md. On success each step is slimmed to its verdict and
+        `executable` lifted to the top (`execState` too when that step ran; `preCheck` and
+        `repairs` only when they have findings); a failed step keeps its whole answer.
         """)]
     public async Task<string> GenerateViToolAsync(
         [Description(@"Absolute path to the source AIXML .xml file")] string aiXmlFilePath,
