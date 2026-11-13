@@ -164,6 +164,16 @@ class Bundle:
         self.fp = self._heap("FPHb")
         self.bd = self._heap("BDHb")
         vctp = self.main.find("VCTP/Section")
+        if vctp is None or vctp.find("TopLevel") is None:
+            # pylabview kept the TYPE LIST raw: a type it does not lay out right made the block fail
+            # its parse or its XML export. Measured 2026-11-13 on a production VI saved for LabVIEW 2021: a
+            # User Defined Tag Flatten refnum (RefType 29, the kind an IMAQdx session is) inside a
+            # typedef, 56 bytes in the file and 34 understood. Every type, terminal and constant of
+            # the VI hangs off this list, so the reader stops here and says why.
+            raise ValueError(
+                "pylabview could not read this VI's type list (its VCTP block was kept raw), so it "
+                "cannot be read as AIXML. Read the warnings of pylv_extract on the VI for the type "
+                "it failed on; on grpc NI's converter reads it.")
         self.flat = [td for td in vctp if td.tag == "TypeDesc"]
         if collections:
             # the READER's view only: the composer copies a callee's types as they stand, and a

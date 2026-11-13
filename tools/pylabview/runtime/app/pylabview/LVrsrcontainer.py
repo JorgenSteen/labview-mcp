@@ -815,7 +815,13 @@ class VI():
         ret = True
         for ident, block in self.blocks.items():
             block.parseData()
-            if not block.checkSanity():
+            try:
+                sane = block.checkSanity()
+            except Exception as e:
+                eprint("{:s}: Warning: Block {} sanity check raised {}: {}"
+                       .format(self.src_fname, ident, type(e).__name__, e))
+                sane = False
+            if not sane:
                 if (self.po.verbose > 0):
                     eprint("{:s}: Warning: Block {} sanity check failed!"\
                       .format(self.src_fname,ident))

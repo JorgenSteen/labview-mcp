@@ -30,8 +30,9 @@ Where upstream has an outright defect, the fix goes in `patches\patches.json` an
 applies it to the **assembled copy**. `vendor\` stays byte-identical to upstream, so a new release
 can still be taken by copying the package over it.
 
-Eleven fixes, twenty-three entries (`empty-string-list` and `icon-palette-index0-white` were added
-after this count was last written as nine and twenty-one).
+Twelve fixes, twenty-four entries (`empty-string-list`, `icon-palette-index0-white` and
+`sanity-check-exception-is-a-failure` were added after this count was last written as nine and
+twenty-one).
 
 `probe-table-guard`: `LVblock.py` calls `getNumRepeats()` on the probe table
 without checking it is a `RepeatedBlock`, and a VI whose probe table resolves to a `Cluster`,
@@ -87,6 +88,14 @@ the Mac system palette but puts F1F1F1 at index 0 where LabVIEW has FFFFFF. Meas
 by applying a PNG of known colour bands and reading it back through LabVIEW and through pylabview:
 the two palettes differ in index 0 only. Every extracted icon showed white as F1F1F1, and a caller
 who re-applied that PNG through LabVIEW got a grey body (LabVIEW maps F1F1F1 to DDDDDD).
+
+`sanity-check-exception-is-a-failure` (`LVrsrcontainer.py`, 2026-11-13): a block whose objects were
+left half-parsed RAISED in its sanity check, and the exception ended the whole extract with nothing
+written. Measured on a 7 MB production VI saved for LabVIEW 2021: a User Defined Tag Flatten refnum
+(RefType 29, the kind an IMAQdx session is) inside a typedef is 56 bytes in the file and 34 understood.
+Counted as a failed check, the extract completes with the type list and a few sections raw and the
+heaps read. The rebuild and the AIXML reader still refuse that file: readable, not editable. The
+layout of that refnum needs a fixture from a station with IMAQdx installed; this one has none.
 
 **The failure mode the mechanism is built against is silence.** A Find/Replace against a line of
 upstream source stops matching when upstream edits that line - and then the bundle assembles
