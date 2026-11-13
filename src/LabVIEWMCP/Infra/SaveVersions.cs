@@ -171,17 +171,28 @@ internal static class SaveVersions
 
     // ------------------------------------------------------------------ the per-call check
 
-    /// <summary>The versions of the files a call names, read before it ran.</summary>
-    internal sealed record Before(DateTime StartedUtc, IReadOnlyDictionary<string, string?> Versions);
+    /// <summary>
+    /// The versions of the files a call names, read before it ran, and their write times then
+    /// (<paramref name="WriteTimes"/>: a file listed there counts as written by the call only when
+    /// its write time CHANGED).
+    /// </summary>
+    internal sealed record Before(DateTime StartedUtc, IReadOnlyDictionary<string, string?> Versions,
+                                  IReadOnlyDictionary<string, DateTime>? WriteTimes = null);
 
     /// <summary>Read the version of every LabVIEW file the arguments name, before the call.</summary>
     internal static Before Capture(IEnumerable<KeyValuePair<string, JsonElement>>? arguments)
     {
         var started = DateTime.UtcNow;
         var versions = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var writeTimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         foreach (var path in PathsIn(arguments?.Select(a => a.Value) ?? []).Take(MaxFiles))
-            if (File.Exists(path)) versions[path] = Of(path);
-        return new Before(started, versions);
+            if (File.Exists(path))
+            {
+                versions[path] = Of(path);
+                try { writeTimes[path] = File.GetLastWriteTimeUtc(path); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+        return new Before(started, versions, writeTimes);
     }
 
     /// <summary>
@@ -206,8 +217,17 @@ internal static class SaveVersions
                 written = File.GetLastWriteTimeUtc(path);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-            // a 2 s margin: FAT and some network shares keep coarse write times
-            if (written < before.StartedUtc.AddSeconds(-2)) continue;
+            // A FILE THE CALL NAMED IS JUDGED BY ITS OWN WRITE TIME BEFORE THE CALL: unchanged means
+            // not written by it. The 2 s margin below alone (for FAT and network shares, which keep
+            // coarse write times) blamed a call for the PREVIOUS call's save - measured 2026-11-13,
+            // lvai_add_vis_to_project and a lvai_running_vi signal, run within 2 s of
+            // lvai_set_vi_icon, each answered "saved by this call" for the VI the icon call had
+            // saved. The margin now applies only to files the call did not name before it ran.
+            if (before.WriteTimes is { } times && times.TryGetValue(path, out var then))
+            {
+                if (written == then) continue;
+            }
+            else if (written < before.StartedUtc.AddSeconds(-2)) continue;
             if (Of(path) is not { } now) continue;
 
             var was = before.Versions.GetValueOrDefault(path);

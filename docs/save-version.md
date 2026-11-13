@@ -11,9 +11,11 @@ saving tools wrote 25.0 into 18.0 projects, the driver project).
 ## 1. What the server does (since 2026-11-13)
 
 **Every tool answer is checked** (`Infra/SaveVersions.cs`, called from `DiagnosingTool`, which every
-served tool passes). Before a call, the version of each LabVIEW file its ARGUMENTS name is read;
-after it, every LabVIEW file named in the arguments or the ANSWER that was written during the call
-is read again. A file now saved newer than it was before, or newer than the version its project
+served tool passes). Before a call, the version and write time of each LabVIEW file its ARGUMENTS
+name are read; after it, every LabVIEW file named in the arguments or the ANSWER that was written
+during the call is read again - a file named before the call counts as written only when its write
+time changed (since 2026-11-13: with the 2 s margin alone, a call made within 2 s of an icon save
+was blamed for it), any other one when it was written after the call started, less 2 s. A file now saved newer than it was before, or newer than the version its project
 pins, is reported:
 
 ```json

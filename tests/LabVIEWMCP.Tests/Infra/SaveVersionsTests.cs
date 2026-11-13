@@ -99,6 +99,31 @@ public sealed class SaveVersionsTests : IDisposable
     }
 
     /// <summary>
+    /// THE PREVIOUS CALL'S SAVE IS NOT THIS CALL'S. Measured 2026-11-13: lvai_add_vis_to_project,
+    /// run 0.8 s after lvai_set_vi_icon saved a VI at 26.0 in a 21.0 project, answered that IT had
+    /// saved the VI - the 2 s margin for coarse file systems took the icon's write for its own.
+    /// A file named before the call is now judged by whether its write time changed.
+    /// </summary>
+    [Fact]
+    public void A_file_written_just_before_the_call_and_not_since_is_not_reported()
+    {
+        var vi = Vi();
+        Project("21.0", "../X.vi");
+        var savedByThePreviousCall = DateTime.UtcNow.AddSeconds(-1);
+        File.SetLastWriteTimeUtc(vi, savedByThePreviousCall);
+        var args = Args(new { viPaths = vi });
+
+        var before = SaveVersions.Capture(args);
+
+        Assert.Equal(savedByThePreviousCall, before.WriteTimes![vi]);
+        Assert.Null(SaveVersions.Check(before, new JsonObject(), args));
+
+        File.SetLastWriteTimeUtc(vi, DateTime.UtcNow);                 // the control: this call saves it
+        var file = SaveVersions.Check(before, new JsonObject(), args)!["files"]![0]!;
+        Assert.Equal("21.0", file["projectSaveVersion"]!.GetValue<string>());
+    }
+
+    /// <summary>
     /// THE E2E CASE, 2026-11-13: a VI generated into a 21.0 project's folder (composed 21.0 by the
     /// folder rule) got its icon BEFORE lvai_add_vis_to_project listed it. The check reported
     /// `was 21.0, savedAs 26.0` and named no pin; it now names the one the composer used.
