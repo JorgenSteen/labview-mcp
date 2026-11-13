@@ -469,6 +469,7 @@ document; `experiments/` does not ship.
 | Calling loaded project code | `docs/aixml-call-loaded-vi.md` | `lvai_generate_vi` |
 | Generate one or many VIs | `docs/bulk-operations.md` | `lvai_generate_vi`, `lvai_generate_vis` |
 | Run a VI and read every value; drive events | `docs/vi-server-reference.md` | `lvai_run_vi_and_read_values` |
+| Start a VI, drive it while it runs (press, set, read), stop it | `docs/running-vi.md` | `lvai_running_vi` |
 | Is a VI broken, and why | `docs/error-list.md` | `lvai_exec_state`, `lvai_error_list` |
 | LabVIEW's outside state; VIs in memory | `docs/labview-state.md` | `lvai_labview_state`, `lvai_vis_in_memory` |
 | Close or restart LabVIEW without losing work; answer a known dialog | `docs/labview-restart.md` | `lvai_restart_labview` (never kills), `lvai_answer_dialog` (allowlisted dialogs, own LabVIEW only) |
