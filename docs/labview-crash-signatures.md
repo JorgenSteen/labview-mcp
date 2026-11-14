@@ -1774,3 +1774,18 @@ The helper DWarns in the same log ("Wiring insanity found and fixed ... forgot t
 loading `lvai_swap_subvis.vi` and `lvbd_layout_apply.vi`) are older than both crashes. They are on
 another thread and are not a cause. They do show that the composer writes wire joints LabVIEW has to
 repair on load.
+
+## "Resetting VI" for good: an abort behind a modal dialog (2026-11-14)
+
+Measured twice on LabVIEW 2026 Q3, both times with a VI-scripting helper run over ActiveX that made a
+file Delacor had deleted leave memory: LabVIEW raised "Save changes before closing? - <file> is about to
+leave memory", Cancel disabled. The COM call waited behind it; at the run's deadline the ActiveX runner
+called `Abort` on the helper, and LabVIEW showed "Resetting VI: <helper>" - which stayed up after the
+save dialog was answered, with the frame disabled and every call blocked, until LabVIEW was ended.
+
+The runner (`LabViewCom.RunAsync`, behind `lvai_run_vi_and_read_values` and every helper run on the
+pylabview backend) now checks before the abort: a visible LabVIEW frame that is DISABLED, as a modal
+dialog leaves it (`LabViewState.BlockingDialog`), means the VI is LEFT RUNNING and the answer is
+`blockedByDialog` naming the visible dialogs. Measured with a probe VI waiting in `One Button Dialog`
+under a 10 s budget: `blockedByDialog`, no abort; Enter posted to the dialog; the VI ended by itself
+(`execState` 1) and LabVIEW's frame was enabled again.

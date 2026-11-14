@@ -650,6 +650,13 @@ internal sealed class RunTools(LvaiConnection connection)
             return Json.Error("inputNotSet",
                 "LabVIEW refused to set: " + string.Join("; ", run.SetProblems) + ". Nothing ran.",
                 new { viPath = full, via = "ActiveX" });
+        if (run.BlockedBy is { } blocked)
+            return Json.Error("blockedByDialog",
+                "The VI did not finish: a modal LabVIEW dialog blocks it (" + blocked + "). It was LEFT " +
+                "RUNNING, not aborted - an abort behind a modal left LabVIEW in 'Resetting VI' for good " +
+                "(measured). lvai_labview_state shows the dialog with a screenshot; once it is answered the " +
+                "VI finishes on its own. Do not call it again before.",
+                new { viPath = full, via = "ActiveX", runMs = run.RunMs });
 
         // THE SAME SHAPE AS THE gRPC HELPER'S: LabVIEW's type tag, the Val text of a scalar, and the
         // value as LabVIEW's flattened XML - generated from the value and its AIXML type, then read

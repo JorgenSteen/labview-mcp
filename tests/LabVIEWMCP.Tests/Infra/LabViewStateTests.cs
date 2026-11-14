@@ -437,7 +437,7 @@ public class LabViewOwnershipTests
     [InlineData(200.0, "owned")]
     public void A_labview_is_starting_up_while_its_splash_shows(double upSeconds, string stage)
     {
-        var m = new LabVIEWMcp.Tests.Fakes.FakeLabViewMachine();
+        var m = new FakeLabViewMachine();
         m.AddProcess(7, "LabVIEW", m.Now.AddSeconds(-upSeconds), @"X:\LabVIEW.exe");
         var frame = m.AddWindow(7, "LVFrame", "LabVIEW", true, handle: 500);
         if (stage == "splash") m.AddWindow(7, "SPLASHSCREEN", "", true);
@@ -455,4 +455,24 @@ public class LabViewOwnershipTests
     [Fact]
     public void The_first_splash_window_is_a_loading_window() =>
         Assert.Equal(WindowKinds.Loading, LabViewState.Classify(new MachineWindow(1, 1, "SPLASHSCREEN", "", true)));
+
+    /// <summary>
+    /// The windows of the 2026-11-14 wedge: the frame DISABLED behind "Save changes before
+    /// closing?" - the state in which an abort left LabVIEW resetting for good. A run must not abort
+    /// then; with the frame enabled nothing blocks.
+    /// </summary>
+    [Fact]
+    public void A_disabled_frame_behind_a_save_dialog_is_a_blocking_dialog()
+    {
+        var blocked = new FakeLabViewMachine();
+        blocked.AddProcess(7, "LabVIEW");
+        blocked.AddWindow(7, "LVFrame", "LabVIEW", visible: true, handle: 100, enabled: false);
+        blocked.AddWindow(7, "LVDChild", "Save changes before closing?", visible: true, owner: 100, enabled: false);
+        var free = new FakeLabViewMachine();
+        free.AddProcess(7, "LabVIEW");
+        free.AddWindow(7, "LVFrame", "LabVIEW", visible: true, handle: 100);
+
+        Assert.Contains("Save changes before closing?", LabViewState.BlockingDialog(blocked));
+        Assert.Null(LabViewState.BlockingDialog(free));
+    }
 }

@@ -409,9 +409,12 @@ internal static class LabViewCom
     /// `lvai_read_values` helper - only when a value came back as an opaque COM object and a
     /// helper was given. Null otherwise.
     /// </param>
+    /// <param name="BlockedBy">Set when the run did not finish because a modal dialog blocks
+    /// LabVIEW: the VI was then LEFT RUNNING, not aborted (see <see cref="LabViewState.BlockingDialog"/>).</param>
     internal sealed record RunResult(int ExecState, bool Ran, bool Finished, bool Aborted,
                                      long RunMs, IReadOnlyList<string> SetProblems,
-                                     IReadOnlyList<Reading> Values, string? ReadBackXml = null);
+                                     IReadOnlyList<Reading> Values, string? ReadBackXml = null,
+                                     string? BlockedBy = null);
 
     /// <summary>
     /// A value LabVIEW's ActiveX server could not marshal. A WAVEFORM - one, or an array of them -
@@ -465,6 +468,12 @@ internal static class LabViewCom
             // run is read after, and its values are whatever the abort left.
             var values = finished || runForMs > 0 ? ReadAll(vi, names) : null;
             var aborted = false;
+
+            // NO ABORT BEHIND A MODAL: aborting a VI that a modal dialog blocks left LabVIEW in
+            // "Resetting VI" for good, even after the dialog was answered (measured twice,
+            // 2026-11-14). Left running, it finishes once somebody answers the dialog.
+            if (!finished && runForMs <= 0 && LabViewState.BlockingDialog() is { } dialog)
+                return new RunResult(state, true, false, false, runMs, [], [], null, dialog);
             if (!finished)
             {
                 try { Call(vi, "Abort"); aborted = true; }
