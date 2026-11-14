@@ -1,9 +1,10 @@
-<VI _name="lvai_move_to_folder_library.vi" description="Moves members of ONE plain .lvlib into a virtual folder of that library\2C creating the folder at the library root when it is not there - the twin of lvai_move_to_folder_class.vi with Library.Open in place of LVClass.Open and {LV.Library} Save (no path\2C in place) in place of {LV.LVClassLibrary} Save. Project\3AActive Project -&gt; Application -&gt; Library.Open -&gt; {LV.Library} Modifications Bit Set -&gt; Get All Descendents (Type = item type) and Name per item -&gt; Search per wanted name -&gt; Get All Descendents (Type Folder) and Search for the folder -&gt; AddItem (Type Folder) when missing -&gt; {LV.ProjectItem} Move per item -&gt; {LV.Library} Save. NOTHING IS MOVED unless every wanted name was found AND the library carries no unsaved changes. UNMEASURED as a whole\3A the move route is measured on classes\2C Library.Open on the project's instance in lvai_add_one_to_library\2C and {LV.Library} Save with no path in the icon helpers.">
+<VI _name="lvai_move_to_folder_library.vi" description="Moves members of ONE plain .lvlib into a virtual folder of that library\2C creating the folder at the library root when it is not there (and Moving it into the folder named by parent folder\2C found by NAME\2C when one is given) - the twin of lvai_move_to_folder_class.vi with Library.Open in place of LVClass.Open and {LV.Library} Save (no path\2C in place) in place of {LV.LVClassLibrary} Save. Project\3AActive Project -&gt; Application -&gt; Library.Open -&gt; {LV.Library} Modifications Bit Set -&gt; Get All Descendents (Type = item type) and Name per item -&gt; Search per wanted name -&gt; Get All Descendents (Type Folder) and Search for the folder -&gt; AddItem (Type Folder) when missing -&gt; {LV.ProjectItem} Move per item -&gt; {LV.Library} Save. NOTHING IS MOVED unless every wanted name was found AND the library carries no unsaved changes. UNMEASURED as a whole\3A the move route is measured on classes\2C Library.Open on the project's instance in lvai_add_one_to_library\2C and {LV.Library} Save with no path in the icon helpers.">
   <FreeLabel comment="Move only when every item was found" uid="4400" uid_parent="root"/>
   <Control _name="owner path" type="path" uid="4401" uid_parent="root" value="" outputs="value:4401.value"/>
   <Control _name="folder" type="string" uid="4402" uid_parent="root" value="" outputs="value:4402.value"/>
   <Control _name="item names" type="array{string}" uid="4403" uid_parent="root" value="[]" outputs="value:4403.value"/>
   <Control _name="item type" type="string" uid="4404" uid_parent="root" value="VI" outputs="value:4404.value"/>
+  <Control _name="parent folder" type="string" uid="4405" uid_parent="root" value="" outputs="value:4405.value"/>
   <Control _name="error in" conIdx="11" connection="recommended" type="cluster{bool.status,int32.code,string.source}" uid="4409" uid_parent="root" value="[false,0,]" outputs="value:4409.value"/>
   <Constant _name="Folder Type" type="string" uid="4406" uid_parent="root" value="Folder" outputs="value:4406.value"/>
   <Constant _name="Empty Path" type="path" uid="4407" uid_parent="root" value="" outputs="value:4407.value"/>
@@ -45,6 +46,7 @@
     <Tunnel _id="In6" inputs="value:4406.value" uid="4506" uid_parent="4500"/>
     <Tunnel _id="In7" inputs="value:4407.value" uid="4507" uid_parent="4500"/>
     <Tunnel _id="In8" inputs="value:4408.value" uid="4508" uid_parent="4500"/>
+    <Tunnel _id="In9" inputs="value:4405.value" uid="4900" uid_parent="4500"/>
     <CaseFrame selector="False" selectout="" uid="4510" uid_parent="4500">
       <FreeLabel comment="All found and nothing unsaved - move" uid="4509" uid_parent="4510"/>
       <Tunnel _id="In1" outputs="value:4511.own" uid="4511" uid_parent="4510"/>
@@ -55,6 +57,7 @@
       <Tunnel _id="In6" outputs="value:4516.ftype" uid="4516" uid_parent="4510"/>
       <Tunnel _id="In7" outputs="value:4517.epath" uid="4517" uid_parent="4510"/>
       <Tunnel _id="In8" outputs="value:" uid="4518" uid_parent="4510"/>
+      <Tunnel _id="In9" outputs="value:4901.parent" uid="4901" uid_parent="4510"/>
       <Node _name="Invoke Node" target="Get All Descendents" type="{LV.Library}" inputs="reference:4511.own,error in (no error):4512.err,Type:4516.ftype,Exclude Dependencies:,ExcludeBuilds:,ExcludeTargets:" outputs="All Descendents:4520.folders,reference out:,error out:4520.err" uid="4520" uid_parent="4510"/>
       <Structure _name="For Loop" count="" maxin="" maxout="" uid="4530" uid_parent="4510">
         <Tunnel _id="In1" inputs="value:4520.folders" mode="index" outputs="value:4531.f" uid="4531" uid_parent="4530"/>
@@ -69,6 +72,8 @@
         <Tunnel _id="In4" inputs="value:4515.folder" uid="4544" uid_parent="4540"/>
         <Tunnel _id="In5" inputs="value:4516.ftype" uid="4545" uid_parent="4540"/>
         <Tunnel _id="In6" inputs="value:4517.epath" uid="4546" uid_parent="4540"/>
+        <Tunnel _id="In7" inputs="value:4901.parent" uid="4902" uid_parent="4540"/>
+        <Tunnel _id="In8" inputs="value:4534.fnames" uid="4903" uid_parent="4540"/>
         <CaseFrame selector="-1" selectout="" uid="4550" uid_parent="4540">
           <FreeLabel comment="No such folder - create it at the root" uid="4549" uid_parent="4550"/>
           <Tunnel _id="In1" outputs="value:4551.folders" uid="4551" uid_parent="4550"/>
@@ -77,11 +82,35 @@
           <Tunnel _id="In4" outputs="value:4554.name" uid="4554" uid_parent="4550"/>
           <Tunnel _id="In5" outputs="value:4555.ftype" uid="4555" uid_parent="4550"/>
           <Tunnel _id="In6" outputs="value:4556.epath" uid="4556" uid_parent="4550"/>
+          <Tunnel _id="In7" outputs="value:4904.parent" uid="4904" uid_parent="4550"/>
+          <Tunnel _id="In8" outputs="value:4905.fnames" uid="4905" uid_parent="4550"/>
           <Node _name="Invoke Node" target="AddItem" type="{LV.Library}" inputs="reference:4552.own,error in (no error):4553.err,Name:4554.name,Path:4556.epath,Type:4555.ftype" outputs="reference out:,error out:4557.err,AddItem:4557.newf" uid="4557" uid_parent="4550"/>
           <Constant _name="created" type="bool" uid="4558" uid_parent="4550" value="true" outputs="value:4558.value"/>
+          <Node _name="Search 1D Array" inputs="1D array:4905.fnames,element:4904.parent,start index (0):" outputs="index of element:4906.pidx" uid="4906" uid_parent="4550"/>
+          <Node _name="Index Array" inputs="array:4551.folders,index:4906.pidx" outputs="element:4907.pref" uid="4907" uid_parent="4550"/>
+          <Node _name="Greater Or Equal To 0?" inputs="x:4906.pidx" outputs="x &gt;= 0?:4908.nest" uid="4908" uid_parent="4550"/>
+          <Structure _name="Case Structure" selectin="4908.nest" uid="4910" uid_parent="4550">
+            <Tunnel _id="In1" inputs="value:4557.newf" uid="4911" uid_parent="4910"/>
+            <Tunnel _id="In2" inputs="value:4907.pref" uid="4912" uid_parent="4910"/>
+            <Tunnel _id="In3" inputs="value:4557.err" uid="4913" uid_parent="4910"/>
+            <CaseFrame selector="True" label="A parent folder is named: move the new folder into it" selectout="" uid="4920" uid_parent="4910">
+              <Tunnel _id="In1" outputs="value:4921.newf" uid="4921" uid_parent="4920"/>
+              <Tunnel _id="In2" outputs="value:4922.pref" uid="4922" uid_parent="4920"/>
+              <Tunnel _id="In3" outputs="value:4923.err" uid="4923" uid_parent="4920"/>
+              <Node _name="Invoke Node" target="Move" type="{LV.ProjectItem}" inputs="reference:4921.newf,error in (no error):4923.err,New Parent:4922.pref,Insert After:,Query Only:" outputs="reference out:,error out:4924.err" uid="4924" uid_parent="4920"/>
+              <Tunnel _id="Out1" inputs="value:4924.err" uid="4925" uid_parent="4920"/>
+            </CaseFrame>
+            <CaseFrame selector="False" selectout="" uid="4930" uid_parent="4910">
+              <Tunnel _id="In1" outputs="value:" uid="4931" uid_parent="4930"/>
+              <Tunnel _id="In2" outputs="value:" uid="4932" uid_parent="4930"/>
+              <Tunnel _id="In3" outputs="value:4933.err" uid="4933" uid_parent="4930"/>
+              <Tunnel _id="Out1" inputs="value:4933.err" uid="4934" uid_parent="4930"/>
+            </CaseFrame>
+            <Tunnel _id="Out1" outputs="value:4914.err" uid="4914" uid_parent="4910"/>
+          </Structure>
           <Tunnel _id="Out1" inputs="value:4557.newf" uid="4559" uid_parent="4550"/>
           <Tunnel _id="Out2" inputs="value:4551.folders" uid="4560" uid_parent="4550"/>
-          <Tunnel _id="Out3" inputs="value:4557.err" uid="4561" uid_parent="4550"/>
+          <Tunnel _id="Out3" inputs="value:4914.err" uid="4561" uid_parent="4550"/>
           <Tunnel _id="Out4" inputs="value:4558.value" uid="4562" uid_parent="4550"/>
         </CaseFrame>
         <CaseFrame selector="0\2C Default" selectout="4563.value" uid="4563" uid_parent="4540">
@@ -91,6 +120,8 @@
           <Tunnel _id="In4" outputs="value:" uid="4567" uid_parent="4563"/>
           <Tunnel _id="In5" outputs="value:" uid="4568" uid_parent="4563"/>
           <Tunnel _id="In6" outputs="value:" uid="4569" uid_parent="4563"/>
+          <Tunnel _id="In7" outputs="value:" uid="4940" uid_parent="4563"/>
+          <Tunnel _id="In8" outputs="value:" uid="4941" uid_parent="4563"/>
           <Node _name="Delete From Array" inputs="array:4564.folders,length:,index:4563.value" outputs="array w/ subset deleted:4570.rest,deleted portion:4570.folder" uid="4570" uid_parent="4563"/>
           <Constant _name="found" type="bool" uid="4571" uid_parent="4563" value="false" outputs="value:4571.value"/>
           <Tunnel _id="Out1" inputs="value:4570.folder" uid="4572" uid_parent="4563"/>

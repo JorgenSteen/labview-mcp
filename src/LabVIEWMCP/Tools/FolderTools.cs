@@ -27,8 +27,12 @@ namespace LabVIEWMcp.Tools;
 /// WHAT IS REFUSED BEFORE LABVIEW, from the file: a name that is not a member (the members are
 /// listed), the private data control, a property definition, an accessor INSIDE a property
 /// definition (moving it out would take it out of the property definition - not measured, so not
-/// offered), a folder, and a folder PATH such as <c>A/B</c>: the helper finds a folder by NAME
-/// with Get All Descendents and creates one at the root, so a path cannot be honoured soundly.
+/// offered), and a folder.
+///
+/// A NESTED PATH (<c>A/B/C</c>, field report G7/N18) is honoured level by level: the helper finds a
+/// folder by NAME with Get All Descendents, so every segment's name must exist nowhere else in the
+/// owner; a missing level is created at the root and Moved into its parent, one helper run per
+/// level, parent first, and the last run moves the items.
 /// </summary>
 [McpServerToolType]
 internal sealed class FolderTools(LvaiConnection connection)
@@ -43,21 +47,21 @@ internal sealed class FolderTools(LvaiConnection connection)
         Title = "Move class or library members into a virtual folder")]
     [Description("""
         Class: move members of ONE .lvclass or plain .lvlib into a virtual folder of that owner,
-        creating the folder at the owner's root if missing (createFolder). Only the owner file
-        changes - no file moves, no rename, no relink.
+        creating it if missing (createFolder) - a nested path "A/B" level by level. Only the owner
+        file changes - no file moves, no rename, no relink.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath; else `noActiveProject`).
         REFUSED from the owner file before LabVIEW: a non-member (`members` lists them), the private
         data control, a Property Definition or an accessor inside one, a folder, mixed item types
-        in one call (VI, or LVClass in a library), a duplicated folder name, a missing folder with
-        createFolder=false, and a nested path ("A/B"). An item already there is skipped
-        (`alreadyThere`).
+        in one call (VI, or LVClass in a library), a folder name that occurs twice or elsewhere than
+        the path says (folders are found by NAME), and a missing folder with createFolder=false.
+        An item already there is skipped (`alreadyThere`).
         ALL OR NOTHING: an item LabVIEW does not list, or unsaved changes in the owner, moves
         nothing (`itemsNotFoundByLabview` / `ownerHasUnsavedChanges`). Verified from the saved file:
         each item under the folder, no member lost, `otherFilesChanged` empty.
         """)]
     public async Task<string> MoveToFolderAsync(
         [Description("Absolute path to the .lvclass or .lvlib")] string ownerPath,
-        [Description("Virtual folder name, e.g. \"Accessors\". A single name; nested paths are refused")]
+        [Description("Virtual folder, e.g. \"Accessors\", or a nested path \"API/Public\" from the owner's root")]
         string folder,
         [Description("""
             JSON array of member names, e.g. ["Read Name.vi","Set Name.vi"]; exact match first,
@@ -104,10 +108,36 @@ internal sealed class FolderTools(LvaiConnection connection)
 
             var directory = Path.GetDirectoryName(owner.Path)!;
             var before = FileStamps.Take([directory]);
+            // THE MISSING LEVELS OF A NESTED PATH, parent first: one run each, moving nothing.
+            foreach (var (level, parent) in plan.Chain)
+            {
+                var (levelValues, levelError) = await helpers.RunAsync(helperVi!, new()
+                {
+                    ["owner path"] = owner.Path,
+                    ["folder"] = level,
+                    ["parent folder"] = parent,
+                    ["item names"] = DqmhFrameTools.StringArrayXml("item names", []),
+                    ["item type"] = plan.ItemType!,
+                    ["check unsaved"] = checkUnsaved ? "true" : "false",
+                }, timeoutSeconds, ct);
+                steps.Add(new JsonObject
+                {
+                    ["step"] = "createLevel",
+                    ["folder"] = level,
+                    ["parent"] = parent,
+                    ["folderCreated"] = HousekeepingHelpers.IsTrue(levelValues, "folder created"),
+                    ["helperError"] = levelError,
+                });
+                if (levelError is not null || levelValues is null || levelValues.Count == 0)
+                    return Json.Error("folderLevelNotCreated",
+                        $"The folder level '{level}' (under '{(parent.Length == 0 ? "the root" : parent)}') " +
+                        "could not be created; nothing was moved.", new { steps });
+            }
             var (values, helperError) = await helpers.RunAsync(helperVi!, new()
             {
                 ["owner path"] = owner.Path,
                 ["folder"] = plan.Folder!,
+                ["parent folder"] = plan.Parent,
                 ["item names"] = DqmhFrameTools.StringArrayXml("item names", plan.ToMove),
                 ["item type"] = plan.ItemType!,
                 ["check unsaved"] = checkUnsaved ? "true" : "false",
@@ -120,7 +150,13 @@ internal sealed class FolderTools(LvaiConnection connection)
     /// <summary>What a call will do, settled from the owner file alone - or why it will not.</summary>
     internal sealed record MovePlan(string? Refusal, OwnerFile? Owner, string? Folder, bool FolderExists,
                                     string? ItemType, IReadOnlyList<string> ToMove,
-                                    IReadOnlyList<string> AlreadyThere);
+                                    IReadOnlyList<string> AlreadyThere, string Parent = "",
+                                    IReadOnlyList<(string Folder, string Parent)>? Levels = null,
+                                    string? FolderPath = null)
+    {
+        /// <summary>The missing levels above the leaf, parent first, each with its parent's name.</summary>
+        public IReadOnlyList<(string Folder, string Parent)> Chain => Levels ?? [];
+    }
 
     private static MovePlan Refuse(string answer) => new(answer, null, null, false, null, [], []);
 
@@ -144,15 +180,10 @@ internal sealed class FolderTools(LvaiConnection connection)
             return Refuse(Json.Error("badArguments",
                 "folder is empty. Moving a member back to the owner's ROOT is not supported by this " +
                 "call - name a folder."));
-        if (folder.Contains('/') || folder.Contains('\\'))
-            return Refuse(Json.Error("folderPathNotSupported",
-                $"'{folder}' is a folder PATH. The helper finds a folder by NAME with Get All " +
-                "Descendents and creates a missing one at the owner's root, so a nested path cannot be " +
-                "honoured soundly. Name the folder itself; an existing nested folder is found by its " +
-                "name when that name is unique in the owner.", new { folder }));
-        if (folder.Contains('\n') || folder.Contains('\r') || folder != folder.Trim())
+        var segments = folder.Split('/', '\\');
+        if (segments.Any(x => x.Length == 0 || x.Contains('\n') || x.Contains('\r') || x != x.Trim()))
             return Refuse(Json.Error("badArguments",
-                "folder carries a line break or leading/trailing blanks.", new { folder }));
+                "folder has an empty segment, a line break or leading/trailing blanks.", new { folder }));
 
         List<string> wanted;
         try { wanted = ParseNames(itemNames); }
@@ -169,18 +200,38 @@ internal sealed class FolderTools(LvaiConnection connection)
                 new { ownerPath = path }));
         }
 
-        var named = owner.Folders
-            .Where(f => string.Equals(f.Name, folder, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (named.Count > 1)
-            return Refuse(Json.Error("folderAmbiguous",
-                $"'{Path.GetFileName(path)}' has {named.Count} folders named '{folder}' " +
-                $"({string.Join(", ", named.Select(f => f.Path))}). The helper finds a folder by name, " +
-                "so it could not tell which one you mean.", new { folders = Paths(owner) }));
-        if (named.Count == 0 && !createFolder)
+        // EVERY LEVEL BY NAME: the helper finds a folder by name anywhere in the owner, so a segment's
+        // name may exist once, and only where the path puts it.
+        var spelled = new List<string>();
+        var existing = 0;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var prefix = string.Join("/", segments.Take(i + 1));
+            var named = owner.Folders
+                .Where(f => string.Equals(f.Name, segments[i], StringComparison.OrdinalIgnoreCase)).ToList();
+            if (named.Count > 1)
+                return Refuse(Json.Error("folderAmbiguous",
+                    $"'{Path.GetFileName(path)}' has {named.Count} folders named '{segments[i]}' " +
+                    $"({string.Join(", ", named.Select(f => f.Path))}). The helper finds a folder by name, " +
+                    "so it could not tell which one you mean.", new { folders = Paths(owner) }));
+            if (named.Count == 1 && !string.Equals(named[0].Path, prefix, StringComparison.OrdinalIgnoreCase))
+                return Refuse(Json.Error("folderElsewhere",
+                    $"'{Path.GetFileName(path)}' has a folder '{named[0].Name}' at '{named[0].Path}', not at " +
+                    $"'{prefix}'. The helper finds a folder by name, so a second one of that name cannot be " +
+                    "made; name the existing path, or another folder name.",
+                    new { folder, folders = Paths(owner) }));
+            if (named.Count == 1) existing++;
+            spelled.Add(named.Count == 1 ? named[0].Name : segments[i]);
+        }
+        if (existing < segments.Length && !createFolder)
             return Refuse(Json.Error("folderNotInOwner",
-                $"'{Path.GetFileName(path)}' has no folder named '{folder}', and createFolder is false.",
+                $"'{Path.GetFileName(path)}' has no folder '{folder}', and createFolder is false.",
                 new { ownerPath = path, folder, folders = Paths(owner) }));
-        var folderName = named.Count == 1 ? named[0].Name : folder;
+        var folderName = spelled[^1];
+        var leafParent = spelled.Count > 1 ? spelled[^2] : "";
+        var levels = new List<(string, string)>();
+        for (var i = existing; i < spelled.Count - 1; i++)
+            levels.Add((spelled[i], i == 0 ? "" : spelled[i - 1]));
 
         var toMove = new List<string>();
         var already = new List<string>();
@@ -227,8 +278,9 @@ internal sealed class FolderTools(LvaiConnection connection)
                 "finds them with Get All Descendents for ONE type, so move each type in its own call.",
                 new { types = types.ToArray() }));
 
-        return new MovePlan(null, owner, folderName, named.Count == 1,
-                            types.FirstOrDefault() ?? "VI", toMove, already);
+        return new MovePlan(null, owner, folderName, existing == segments.Length,
+                            types.FirstOrDefault() ?? "VI", toMove, already, leafParent, levels,
+                            string.Join("/", spelled));
     }
 
     private static List<string> ParseNames(string json)
@@ -330,8 +382,10 @@ internal sealed class FolderTools(LvaiConnection connection)
 
         var changed = after.ChangedSince(before);
         var others = changed.Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase)).ToList();
-        var verified = saved is not null && notPlaced.Count == 0 && lost.Count == 0
-                       && saved.FoldersNamed(plan.Folder!).Count == 1;
+        var savedFolder = saved?.FoldersNamed(plan.Folder!) is { Count: 1 } one ? one[0] : null;
+        var verified = saved is not null && notPlaced.Count == 0 && lost.Count == 0 && savedFolder is not null
+                       && (plan.FolderPath is null
+                           || string.Equals(savedFolder.Path, plan.FolderPath, StringComparison.OrdinalIgnoreCase));
 
         return Json.Document(new JsonObject
         {
@@ -339,6 +393,7 @@ internal sealed class FolderTools(LvaiConnection connection)
             ["verified"] = verified,
             ["ownerPath"] = path,
             ["folder"] = plan.Folder,
+            ["folderPath"] = savedFolder?.Path,
             ["folderCreated"] = HousekeepingHelpers.IsTrue(values, "folder created"),
             ["moved"] = Names(plan.ToMove),
             ["alreadyThere"] = Names(plan.AlreadyThere),

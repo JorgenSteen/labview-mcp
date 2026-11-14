@@ -1876,12 +1876,21 @@ the twin is unmeasured.
 members), the private data control, a `Property Definition`, an accessor INSIDE a property
 definition (taking it out of the definition is not measured, so it is not offered), items of more
 than one type in one call (the helper lists members with ONE `Get All Descendents` type), a folder
-name that occurs twice in the owner, a missing folder with `createFolder: false`, and a folder
-PATH such as `A/B`. The path is refused rather than half-honoured: the helper finds a folder by
-NAME and creates a missing one at the ROOT, so `A/B` would become a root folder called `B` - or
-land in a different `B`. An existing nested folder is reached by its own name when that name is
-unique. An item already in the folder is skipped (`alreadyThere`); a call where every item is
-already there answers `ok` without reaching LabVIEW.
+name that occurs twice in the owner, a level of a path whose name exists ELSEWHERE in the owner
+(`folderElsewhere`), and a missing folder with `createFolder: false`. An item already in the folder
+is skipped (`alreadyThere`); a call where every item is already there answers `ok` without
+reaching LabVIEW.
+
+**A nested path `A/B/C`** (since 2026-11-14; until then refused as `folderPathNotSupported`,
+because a missing folder came out at the ROOT). The helper still finds a folder by NAME, so the plan
+checks every level against the file: a name may exist once, and only where the path puts it. A
+missing level is created by one helper run of its own, parent first, with no items: `AddItem` at
+the root, then `{LV.ProjectItem}` `Move` into the folder named by `parent folder`. The answer lists
+these runs as `createLevel` steps. The last run creates the leaf the same way and moves the items.
+`folderPath` is the folder's place in the SAVED file, and `verified` requires it to equal the path.
+Measured on LabVIEW 2026 against a copy of a one-VI library and a one-method class: `API/Public`
+created both levels, `API/Internal` only the leaf (`Public` stayed, empty), `Methods/Setters` in
+the class, every member `execState` 1 afterwards, and `Internal/API` was refused before LabVIEW.
 
 **All or nothing, new in the port and unmeasured.** The helper looks every requested name up
 first; if `Get All Descendents` did not list one (`itemsNotFoundByLabview`, e.g. if a `.ctl` member

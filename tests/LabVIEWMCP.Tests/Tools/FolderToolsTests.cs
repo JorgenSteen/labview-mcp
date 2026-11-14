@@ -49,13 +49,44 @@ public class FolderToolsTests
         Assert.DoesNotContain("Customer.ctl", members);
     }
 
+    // A nested path (field report G7/N18): every level by name, the missing ones parent first.
     [Fact]
-    public void ANestedFolderPathIsRefusedAndSaysWhy()
+    public void ANestedPathUnderAnExistingFolderCreatesOnlyTheLeaf()
     {
         using var copy = new Copy();
         var plan = FolderTools.Plan(copy.Owner, "Accessors/Inner", Json("Submit Order.vi"), true);
 
-        Assert.Equal("folderPathNotSupported", Kind(plan));
+        Assert.Null(plan.Refusal);
+        Assert.Equal(("Inner", "Accessors", "Accessors/Inner"), (plan.Folder, plan.Parent, plan.FolderPath));
+        Assert.Empty(plan.Chain);
+        Assert.False(plan.FolderExists);
+    }
+
+    [Fact]
+    public void ANewNestedPathCreatesEveryLevelParentFirst()
+    {
+        using var copy = new Copy();
+        var plan = FolderTools.Plan(copy.Owner, "API/Public/Orders", Json("Submit Order.vi"), true);
+
+        Assert.Null(plan.Refusal);
+        Assert.Equal([("API", ""), ("Public", "API")], plan.Chain);
+        Assert.Equal(("Orders", "Public"), (plan.Folder, plan.Parent));
+    }
+
+    [Fact]
+    public void AFolderNameThatExistsElsewhereIsRefused()
+    {
+        using var copy = new Copy();
+        var plan = FolderTools.Plan(copy.Owner, "Inner/Accessors", Json("Submit Order.vi"), true);
+
+        Assert.Equal("folderElsewhere", Kind(plan));
+    }
+
+    [Fact]
+    public void AnEmptyPathSegmentIsRefused()
+    {
+        using var copy = new Copy();
+        Assert.Equal("badArguments", Kind(FolderTools.Plan(copy.Owner, "Accessors//Inner", Json("Submit Order.vi"), true)));
     }
 
     [Fact]

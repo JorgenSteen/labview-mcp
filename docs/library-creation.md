@@ -106,8 +106,9 @@ PRIVATE. Existing code is not moved into or out of a library unasked.
   sets it on each new item and verifies `NI.LibItem.Scope` 2 in the saved `.lvlib`
   (`verify.scopeWrong`). Measured on `experiments\library-2026-11-11`: `Internal Helper.vi` came out
   with the property, `Public Api.vi` (no scope asked) without.
-- **Folders** come from `lvai_move_to_folder`, which handles a plain `.lvlib` and creates the folder
-  at the root - `lvai_add_to_library`'s `folder` refuses one that does not exist yet.
+- **Folders** come from `lvai_move_to_folder`, which handles a plain `.lvlib` and creates the folder,
+  a nested path `API/Public` level by level - `lvai_add_to_library`'s `folder` refuses one that does
+  not exist yet.
 - After both, `lvai_exec_state` over the members: membership changes every member's qualified name.
 
 ## 6. Regenerating a member keeps its membership (pylabview, 2026-11-14)
