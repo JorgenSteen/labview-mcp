@@ -328,7 +328,7 @@ internal sealed class LifecycleTools(LvaiConnection connection)
                 ? "LabVIEW is up but does not answer over ActiveX yet - `lastError` says why, usually " +
                   "its start-up splash. THIS IS THE NORMAL COLD-START ANSWER, not a fault - CALL THIS " +
                   "TOOL AGAIN and it will almost certainly answer `ready`: measured 2026-11-13, the " +
-                  "second call of a cold LabVIEW 2026 start answered ready in 4.4 s. NI's gRPC service " +
+                  "second call of a cold LabVIEW 2026 start answered ready in 4.4 s, of a LabVIEW 2025 start in 24.5 s. NI's gRPC service " +
                   "is not needed on this backend. Only if a SECOND call also comes back `starting` is " +
                   "something wrong: read lvai_labview_state for a dialog."
                 : "LabVIEW is up but its AI gRPC service is not answering yet. THIS IS THE " +

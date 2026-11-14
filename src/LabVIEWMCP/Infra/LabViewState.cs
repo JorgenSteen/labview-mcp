@@ -162,7 +162,8 @@ internal static class LabViewState
             if (windows.FirstOrDefault(w => w.Kind == WindowKinds.Loading && w.Window.Visible) is { } splash)
                 return $"LabVIEW pid {process.Id} started {up:F0} s ago and still shows its start-up splash " +
                        $"('{splash.Window.ClassName}'); an ActiveX call now would start a second LabVIEW. " +
-                       "Call again in a few seconds (measured: the start window came at 12-30 s).";
+                       "Call again in a few seconds (measured: the start window came at 12-30 s on LabVIEW 2026; " +
+                       "LabVIEW 2025 still showed its splash at 38 s).";
         }
         return null;
     }

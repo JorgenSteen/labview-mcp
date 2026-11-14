@@ -84,6 +84,13 @@ internal sealed class StatusTools(LvaiConnection connection)
             foreach (var (key, value) in ServiceIndependent()) answer[key] = value?.DeepClone();
             answer["services"] = services;
             answer["reflectionError"] = reflectionError;
+            if (services.Any(s => s?.GetValue<string>() == LvaiServiceName))
+            {
+                var rpcs = await AixmlRpcsAsync(connection, ct);
+                answer["aixmlRpcs"] = rpcs;
+                if (rpcs?["implemented"]?.GetValue<bool>() is false)
+                    answer["note"] = AixmlRpcsMissingNote;
+            }
             // A LabVIEW that is running and answering can still be too sick to work.
             answer["labviewHealth"] = Health(connection.Port);
             return answer.ToJsonString(Indented);
@@ -143,6 +150,7 @@ internal sealed class StatusTools(LvaiConnection connection)
                 ["port"] = connection.Port,
                 ["discoveredVia"] = connection.DiscoveredVia,
                 ["applicationLanguage"] = config.Language,
+                ["aixmlRpcs"] = await AixmlRpcsAsync(connection, limit.Token),
             };
         }
         catch (Exception e) when (!ct.IsCancellationRequested)
@@ -510,7 +518,61 @@ internal sealed class StatusTools(LvaiConnection connection)
         return names;
     }
 
-    private async Task<List<byte[]>> FilesForSymbolAsync(string symbol, CancellationToken ct)
+    private Task<List<byte[]>> FilesForSymbolAsync(string symbol, CancellationToken ct) =>
+        FilesForSymbolAsync(connection, symbol, ct);
+
+    internal const string LvaiServiceName = "lvai.LVAI";
+
+    /// <summary>The RPCs every AIXML route on NI's service needs.</summary>
+    internal static readonly string[] AixmlRpcNames = ["ValidateAIXML", "ConvertAIXMLToVI", "ConvertVIToAIXML"];
+
+    internal const string AixmlRpcsMissingNote =
+        "NI's lvai.LVAI service is LISTED, but this LabVIEW does not implement its AIXML RPCs " +
+        "(`aixmlRpcs.missing`): validation and conversion over grpc answer Unimplemented. Measured " +
+        "2026-11-14 on LabVIEW 2025: 11 RPCs, none of them AIXML. Use the pylabview backend; " +
+        "a LabVIEW 2026 gives the grpc route.";
+
+    /// <summary>Which of <see cref="AixmlRpcNames"/> the service's declared methods lack.</summary>
+    internal static List<string> MissingAixmlRpcs(IEnumerable<string> methods)
+    {
+        var declared = methods.ToHashSet(StringComparer.Ordinal);
+        return [.. AixmlRpcNames.Where(n => !declared.Contains(n))];
+    }
+
+    /// <summary>
+    /// SERVICE LISTED IS NOT SERVICE IMPLEMENTED (field report H11b). LabVIEW 2025 lists
+    /// lvai.LVAI and answers GetApplicationConfiguration, so every status read healthy - while
+    /// ValidateAIXML answered Unimplemented. The service's own descriptor, read by reflection,
+    /// names its methods; null when reflection does not answer.
+    /// </summary>
+    internal static async Task<JsonObject?> AixmlRpcsAsync(LvaiConnection connection, CancellationToken ct)
+    {
+        try
+        {
+            var methods = new List<string>();
+            foreach (var blob in await FilesForSymbolAsync(connection, LvaiServiceName, ct))
+            {
+                var fd = Pbr.FileDescriptorProto.Parser.ParseFrom(blob);
+                foreach (var service in fd.Service.Where(x => fd.Package + "." + x.Name == LvaiServiceName))
+                    methods.AddRange(service.Method.Select(m => m.Name));
+            }
+            if (methods.Count == 0) return null;
+            var missing = MissingAixmlRpcs(methods);
+            return new JsonObject
+            {
+                ["implemented"] = missing.Count == 0,
+                ["missing"] = new JsonArray([.. missing.Select(m => (JsonNode)m)]),
+                ["rpcCount"] = methods.Distinct().Count(),
+            };
+        }
+        catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private static async Task<List<byte[]>> FilesForSymbolAsync(LvaiConnection connection, string symbol,
+                                                                 CancellationToken ct)
     {
         var reflection = await connection.GetReflectionClientAsync(ct);
         using var call = reflection.ServerReflectionInfo(

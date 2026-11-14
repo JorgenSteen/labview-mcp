@@ -103,6 +103,16 @@ than 2026, even LabVIEW 2025, which HAS NI's service. The default now covers it.
 newest RUNNING LabVIEW, else the newest INSTALLED - still decides which file version the composer
 writes; `pylv_status` shows `labviewInUse` and `partsRelease`.
 
+**LabVIEW 2025 LISTS NI's service but does not implement its AIXML RPCs** (field report H11b,
+measured 2026-11-14 on 25.3.4f4). `lvai.LVAI` is among the reflected services, and
+`GetApplicationConfiguration` answers, so `lvai_status` and `pylv_status` both read healthy.
+`lvai_validate_aixml` with `backend: grpc` then answered `Unimplemented`.
+`lvai_dump_schema` named the service's 11 RPCs, and none of them is an AIXML one: no
+`ValidateAIXML`, `ConvertAIXMLToVI`, `ConvertVIToAIXML` or `ApplyAIXMLToVI`. Both status tools now
+read the service's own descriptor by reflection. `aixmlRpcs` holds `implemented`, `missing` and
+`rpcCount`, and `lvai_status` adds a note when the AIXML RPCs are missing. On such a LabVIEW the
+grpc route is no route: use pylabview, or a LabVIEW 2026.
+
 **AND THE COMPOSER WRITES FOR SUCH A LabVIEW AS THAT RELEASE - since the same evening, after the
 user's LabVIEW 2025 station refused every composed VI with `Error 1125, File version is later
 than the current LabVIEW version`.** The server passes `--lv-version <N>` for a LabVIEW in use
