@@ -134,3 +134,22 @@ Measured live 2026-11-14 on LabVIEW 2026, pylabview: a VI put into a new `.lvlib
 branch build answered `libraryMember`, the file's `LIBN` named the library and `lvai_exec_state` read
 it executable inside the project. The previous build (a75c108), same call, answered `ok: true` and
 wrote the VI with no `LIBN` - loose, while the `.lvlib` still listed it.
+
+## 7. Taking a VI out of a library: `lvai_remove_from_library` (2026-11-14)
+
+A field project found no tool for it, and removing the `<Item>` from the `.lvlib` and saving left the
+VI claiming the library. Measured on LabVIEW 2026 with a one-VI library: NI's `{LV.VI}`
+`DisconnectFromLibrary` (no arguments; LMock uses it) plus the VI's `Save.Instrument` in the active
+project's instance took the library out of the VI's own `LIBN` - every stage error 0 - but the
+`.lvlib` still listed the VI, even after `{LV.Library}` `Save` in the same run. With the `<Item>` then
+removed from the file (project closed), the project opened clean: the VI loaded loose, `execState`
+1, and the project's close left the `.lvproj` byte for byte as it was.
+
+So the tool does both halves: the helper (`scripts/lvai_remove_one_from_library.xml`) disconnects and
+saves each VI with the project active, the project is closed, each VI's `<Item>` is removed from the
+`.lvlib` (any folder depth, self-closing or carrying a private item's `NI.LibItem.Scope`, LabVIEW's
+formatting and BOM kept), and with `keepInProject` (default) the VIs are listed at the project's
+target level. `verify.stillClaimsLibrary` (the VIs' `LIBN`) and `verify.stillListed` (the saved
+`.lvlib`) must be empty for `ok`. A caller that named the VI by its qualified name relinks to the
+loose VI on load - check the callers with `lvai_exec_state`. Classes and class members are refused:
+not measured.

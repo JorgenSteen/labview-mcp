@@ -496,7 +496,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Class housekeeping: description, folders, members, VI descriptions | `docs/lvclass-creation.md` §10 | `lvai_set_class_description`, `lvai_move_to_folder`, `lvai_add_to_class`, `lvai_set_vi_descriptions` |
 | Interfaces | `docs/lvclass-interfaces.md` | `lvai_create_interface` |
 | Class methods | `docs/class-method-tooling.md` | `lvai_add_class_method` |
-| Libraries | `docs/library-creation.md` | `lvai_create_library`, `lvai_add_to_library` |
+| Libraries | `docs/library-creation.md` | `lvai_create_library`, `lvai_add_to_library`, `lvai_remove_from_library` |
 | Actor Framework; overrides | `docs/labview-actor-framework.md`, `docs/af-override-tools.md` | `lvai_create_message_class`, `lvai_create_override`, `lvai_af_add_hook` |
 | Typedefs | `docs/typedef-constants.md`, `docs/typedef-disconnect.md` | `lvai_create_typedef`, `lvai_describe_ctl`, `lvai_bind_*`, `lvai_coercion_dots` |
 | DQMH | `docs/dqmh-patterns.md`, `docs/dqmh-scripting.md` | `lvai_dqmh_reference`, `lvai_dqmh_*` |
