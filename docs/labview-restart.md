@@ -411,3 +411,15 @@ Not measured live, and unit-tested only: `Don't Save - All` (no picture yet, so 
 dialog had been answered: a graft call had left a VI inconsistent in memory. Answering the dialog
 does not make the VI in memory safe, so close or restart LabVIEW next. That dialog was not raised
 on purpose to test this tool.
+
+## The busy threshold, 2026-11-14
+
+The kit's "quiet below one CPU second per 30 s" refused an idle LabVIEW 2026: NI's service up,
+no project, no window, nothing unsaved. It read 0.66-3.0 CPU s per 15 s for more than five
+minutes, so the close was refused for the whole `waitForIdleSeconds` 300. `CloseMainWindow` sent
+by hand at 0.66 s per 15 s closed that LabVIEW in 3.4 s. LabVIEW 2025 right after its start read
+3.8-8.0 s per 15 s and settled to 0.2-0.3 s.
+
+The threshold is now three CPU seconds per 30 s (`LabViewState.IdleCpuSecondsPer30`). A LabVIEW
+that still does not take the close message is reported as before (`CloseMainWindow False`).
+

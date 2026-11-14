@@ -37,7 +37,7 @@ internal sealed class LabViewStateTools(LvaiConnection connection)
         buttons and text, and `screenshot` - a PNG path to READ, the only way to see which dialog it
         is. `hiddenUnrecognised` = hidden titled windows nothing explains (LabVIEW dialogs can report
         themselves invisible while on screen). A VI panel with a custom title is flagged too.
-        CPU below 1 CPU s per 30 s is quiet - but idle is not safe: a modal dialog leaves LabVIEW
+        CPU below 3 CPU s per 30 s is quiet - but idle is not safe: a modal dialog leaves LabVIEW
         idle. NOTHING is pressed, fronted or closed. A modified VI with no open window does not show
         here - use lvai_vis_in_memory. docs/labview-state.md.
         """)]

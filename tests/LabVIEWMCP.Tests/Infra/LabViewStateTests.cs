@@ -262,6 +262,19 @@ public class ModalDialogClassifierTests
     public void LabVIEW_s_untitled_new_vi_titles_are_vi_windows(string title) =>
         Assert.Equal(WindowKinds.Vi, LabViewState.Classify(new MachineWindow(1, 1, "LVDChild", title, true)));
 
+    // A panel with a custom window title names the VI in brackets - every DQMH Main.vi (2026-11-14).
+    [Theory]
+    [InlineData("Pump3 [Pump3.lvlib:Main.vi] Front Panel on E2E.lvproj/My Computer")]
+    [InlineData("Pump3 [Pump3.lvlib:Main.vi] Block Diagram on E2E.lvproj/My Computer")]
+    [InlineData("My Tool [Tool.vi] Front Panel")]
+    public void A_custom_window_title_with_the_vi_in_brackets_is_a_vi_window(string title) =>
+        Assert.Equal(WindowKinds.Vi, LabViewState.Classify(new MachineWindow(1, 1, "LVDChild", title, true)));
+
+    [Fact]
+    public void Brackets_without_a_vi_name_are_still_a_possible_dialog() =>
+        Assert.Equal(WindowKinds.PossibleDialog,
+            LabViewState.Classify(new MachineWindow(1, 1, "LVDChild", "Error [code 7]", true)));
+
     [Fact]
     public void A_hidden_untitled_window_owned_by_the_frame_stays_a_hidden_system_window()
     {
@@ -337,9 +350,10 @@ public class LabViewSnapshotTests
     [Fact]
     public void The_threshold_scales_with_the_window()
     {
-        Assert.False(LabViewState.IsBusy(0.4, 15));   // below 0.5 s per 15 s
-        Assert.True(LabViewState.IsBusy(0.5, 15));
-        Assert.False(LabViewState.IsBusy(0.9, 30));
+        Assert.False(LabViewState.IsBusy(0.66, 15));  // an idle LabVIEW 2026 that closed fine (2026-11-14)
+        Assert.True(LabViewState.IsBusy(1.5, 15));
+        Assert.False(LabViewState.IsBusy(2.9, 30));
+        Assert.True(LabViewState.IsBusy(3.8, 15));    // LabVIEW 2025 right after its start
     }
 
     [Fact]

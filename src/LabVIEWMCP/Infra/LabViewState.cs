@@ -138,6 +138,14 @@ internal static class LabViewState
     private static readonly Regex UntitledViTitle = new(
         @"^Untitled \d+( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// A VI whose panel has a CUSTOM window title: LabVIEW names the VI in brackets after it -
+    /// `Pump3 [Pump3.lvlib:Main.vi] Front Panel on E2E.lvproj/My Computer`, every DQMH Main.vi.
+    /// Measured 2026-11-14; it fell through to possible-dialog, which also stops lvai_restart_labview.
+    /// </summary>
+    private static readonly Regex CustomTitleViTitle = new(
+        @"\[[^\]]+\.(vi|vim|vit|ctl|ctt)\]( (Front Panel|Block Diagram))?( on .+)?$", RegexOptions.Compiled);
+
     /// <summary>The title of LabVIEW's start-up splash window, in a slow start.</summary>
     internal const string LoadingTitle = "_Loading";
 
@@ -221,7 +229,8 @@ internal static class LabViewState
         if (title == LoadingTitle) return WindowKinds.Loading;
         if (title.StartsWith("Getting Started", StringComparison.Ordinal)) return WindowKinds.GettingStarted;
         if (ProjectTitle.IsMatch(title)) return WindowKinds.Project;
-        if (ViTitle.IsMatch(title) || UntitledViTitle.IsMatch(title)) return WindowKinds.Vi;
+        if (ViTitle.IsMatch(title) || UntitledViTitle.IsMatch(title) || CustomTitleViTitle.IsMatch(title))
+            return WindowKinds.Vi;
 
         // Hidden and unexplained: see the class comment. A VI panel with a custom window title lands
         // in one of these two too, which the kit documents - better a panel looked at by eye than a
@@ -333,10 +342,14 @@ internal static class LabViewState
     }
 
     /// <summary>
-    /// The kit's threshold, kept: a window is quiet when LabVIEW used less than one CPU second per
-    /// thirty seconds of wall clock. Scaled, so a shorter window keeps the same rate.
+    /// A window is quiet when LabVIEW used less than THREE CPU seconds per thirty seconds of wall
+    /// clock. Scaled, so a shorter window keeps the same rate. The kit's one second was too strict:
+    /// measured 2026-11-14 on LabVIEW 2026 with NI's service up, no project and nothing open,
+    /// 0.66-3.0 CPU s per 15 s for minutes - the close refused as busy for the whole 300 s waited,
+    /// while CloseMainWindow at 0.66 s per 15 s closed it in 3.4 s. A really busy LabVIEW (2025
+    /// right after its start) read 3.8-8.0 s per 15 s; a close it does not take is reported anyway.
     /// </summary>
-    internal const double IdleCpuSecondsPer30 = 1.0;
+    internal const double IdleCpuSecondsPer30 = 3.0;
 
     internal static bool IsBusy(double cpuSeconds, double windowSeconds) =>
         cpuSeconds >= IdleCpuSecondsPer30 * windowSeconds / 30.0;
