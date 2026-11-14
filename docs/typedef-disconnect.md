@@ -1189,6 +1189,26 @@ the tool inert would have "passed" the first row, and this repository has alread
 those - see the `.lvproj` sweep, where every guard passed its synthetic test by making the pass do
 nothing.
 
+### 13b-b. "THE .ctl IS IN THE SAVED FILE" IS NOT "THE TERMINAL IS BOUND" - changed 2026-11-14
+
+Until 2026-11-14 the first of the three conditions above was "every requested `.ctl` appears as a
+`<Label>` anywhere in the saved VI's type list". A field project then saw `verified: true` twice for
+VIs whose saved files had NO typedef link on the terminal. The type list names a `.ctl` wherever the
+VI uses it: a constant, a subVI's pane, a class's private data. Reproduced on a real file: the
+housekeeping fixture's `Get Cost.vi` names `Drink Type.ctl` through `Beverage.ctl` and has no typedef
+on its connector pane, so the old check passed it for any terminal.
+
+The check now reads the PANE's own type from the saved file (`TypedefTools.PaneTypedefs`): `CONP`
+names an index of `VCTP`'s `TopLevel` list, which names a flat `Function` type, and each terminal of
+that function names its flat type. A bound terminal's type is `<TypeDesc Type="TypeDef">`, whose
+inner TypeDesc carries the terminal's label and whose `<Label>` children name the owner and the
+`.ctl`. Measured on `Write Drink Type.vi`: CONP 1 -> TopLevel 1 -> flat 9 `Function`; its `Drink Type`
+terminal is flat 7, `TypeDef`, inner Label `Drink Type`, Labels `Beverage.lvclass`, `Drink Type.ctl`.
+
+The answer carries `boundOnSavedPane` per binding, `terminalsNotBoundOnSavedPane` and
+`savedPaneTypedefs` (what the pane does carry). `typedefInSavedFile` stays as information. A file
+whose pane cannot be laid out (raw `VCTP`, no `CONP`) answers `verified: null`.
+
 ### 13c. A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY - 2026-09-18
 
 Measured twice on one fixture inside a minute, same inputs, nothing else changed:

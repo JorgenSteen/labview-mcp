@@ -943,6 +943,62 @@ internal sealed class TypedefTools(LvaiConnection connection)
         return names;
     }
 
+    /// <summary>A connector-pane terminal whose type IN THE SAVED FILE is a typedef.</summary>
+    /// <param name="Terminal">The terminal's label, from the typedef's inner type.</param>
+    /// <param name="Ctl">The `.ctl` file name the typedef names.</param>
+    internal sealed record PaneTypedef(string Terminal, string Ctl);
+
+    /// <summary>What a saved VI says about typedefs.</summary>
+    /// <param name="CtlNames">Every `.ctl` named anywhere in its type list - <see cref="TypedefCtlNames"/>.</param>
+    /// <param name="Pane">The typedefs ON ITS CONNECTOR PANE - <see cref="PaneTypedefs"/>; null when
+    /// the pane's type could not be laid out from the file.</param>
+    internal sealed record SavedTypedefs(SortedSet<string> CtlNames, IReadOnlyList<PaneTypedef>? Pane);
+
+    /// <summary>
+    /// The connector-pane terminals of an extracted VI whose type is a TYPEDEF, read from the
+    /// pane's own type: <c>CONP</c> names an index of <c>VCTP</c>'s <c>TopLevel</c> list, that
+    /// names a flat type <c>Function</c>, and each terminal of the function names its flat type.
+    /// A bound terminal's type is <c>&lt;TypeDesc Type="TypeDef"&gt;</c> whose inner TypeDesc
+    /// carries the terminal's label and whose Label children name the owner and the `.ctl` -
+    /// measured on Write Drink Type.vi (the housekeeping fixture): CONP 1 -> TopLevel 1 -> flat 9
+    /// Function, terminal flat 7 = TypeDef, inner Label "Drink Type", Labels Beverage.lvclass and
+    /// Drink Type.ctl.
+    ///
+    /// WHY NOT <see cref="TypedefCtlNames"/>. A `.ctl` is named in the type list wherever the VI
+    /// uses it - a constant, a subVI's pane, a class's private data. Get Cost.vi of the same
+    /// fixture names Drink Type.ctl through Beverage.ctl and has no typedef on its pane at all, so
+    /// "the .ctl is in the file" said "verified" for a terminal that was never bound - which a field
+    /// project measured twice (2026-11, a saved file with no typedef link on the terminal).
+    /// Null when the file's pane type cannot be laid out (a raw VCTP, no CONP).
+    /// </summary>
+    internal static IReadOnlyList<PaneTypedef>? PaneTypedefs(XElement rsrc)
+    {
+        var vctp = rsrc.Element("VCTP")?.Element("Section");
+        var conp = rsrc.Element("CONP")?.Element("Section")?.Element("TypeDesc");
+        if (vctp is null || conp is null || (string?)conp.Attribute("TypeID") is not { } topIndex) return null;
+        var flat = vctp.Elements("TypeDesc").ToList();
+        var top = vctp.Element("TopLevel")?.Elements("TypeDesc")
+            .FirstOrDefault(t => (string?)t.Attribute("Index") == topIndex);
+        if (!int.TryParse((string?)top?.Attribute("FlatTypeID"), out var functionId) ||
+            functionId < 0 || functionId >= flat.Count ||
+            (string?)flat[functionId].Attribute("Type") != "Function")
+            return null;
+
+        var found = new List<PaneTypedef>();
+        foreach (var terminal in flat[functionId].Elements("TypeDesc"))
+        {
+            if (!int.TryParse((string?)terminal.Attribute("TypeID"), out var id) || id < 0 || id >= flat.Count)
+                continue;
+            var type = flat[id];
+            if ((string?)type.Attribute("Type") != "TypeDef") continue;
+            var ctl = type.Elements("Label").Select(l => (string?)l.Attribute("Text"))
+                .LastOrDefault(t => t is not null && t.EndsWith(".ctl", StringComparison.OrdinalIgnoreCase));
+            if (ctl is null) continue;
+            found.Add(new PaneTypedef((string?)type.Element("TypeDesc")?.Attribute("Label") ?? "", ctl));
+        }
+        return found;
+    }
+
     /// <summary>One requested binding: which pane terminal gets which `.ctl`.</summary>
     internal sealed record PaneBinding(string Terminal, string CtlPath);
 
@@ -1008,10 +1064,12 @@ internal sealed class TypedefTools(LvaiConnection connection)
         commit the binding.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath) - Replace is a SILENT no-op
         outside the IDE's instance.
-        THE VERDICT IS `verified`, three conditions: each .ctl appears in the SAVED VI's type
-        descriptors, every requested terminal is on the panel, and the helper matched as many as
-        asked. `terminalsBound` alone is not the verdict. `terminalsNotOnPanel` names what failed;
-        `terminalNamesSeen` lists the panel. A first open can read every control name as empty; the
+        THE VERDICT IS `verified`, three conditions: each terminal's type on the SAVED VI's
+        connector pane is its .ctl (read with pylabview - a .ctl used elsewhere in the VI does not
+        count), every requested terminal is on the panel, and the helper matched as many as asked.
+        `terminalsBound` alone is not the verdict. `terminalsNotBoundOnSavedPane` and
+        `terminalsNotOnPanel` name what failed; `savedPaneTypedefs` and `terminalNamesSeen` list
+        what the file and the panel carry. A first open can read every control name as empty; the
         tool retries once and says so in `retriedAfterEmptyNames`.
         """)]
     public async Task<string> BindPaneTypedefAsync(
@@ -1123,7 +1181,7 @@ internal sealed class TypedefTools(LvaiConnection connection)
 
             return DescribePaneBind(answer, bindings, viPath, lvclassPath, helperVi, aixml,
                                     helperGenerated, retried, steps,
-                                    await TypedefCtlNamesOnDiskAsync(viPath, timeoutSeconds, ct));
+                                    await SavedTypedefsAsync(viPath, timeoutSeconds, ct));
         }));
 
     /// <summary>
@@ -1133,7 +1191,7 @@ internal sealed class TypedefTools(LvaiConnection connection)
     internal static string DescribePaneBind(
         string runnerAnswer, IReadOnlyList<PaneBinding> bindings, string viPath, string lvclassPath,
         string helperVi, string aixml, bool helperGenerated, bool retried, JsonArray steps,
-        SortedSet<string>? onDisk)
+        SavedTypedefs? onDisk)
     {
         var values = ValuesOf(runnerAnswer);
         var bound = int.TryParse(Value(values, "terminals bound"), out var parsed) ? parsed : 0;
@@ -1142,10 +1200,14 @@ internal sealed class TypedefTools(LvaiConnection connection)
         var rows = new JsonArray();
         var missing = new JsonArray();
         var notOnPanel = new JsonArray();
+        var notOnPane = new JsonArray();
         foreach (var binding in bindings)
         {
             var wanted = Path.GetFileName(binding.CtlPath);
-            var present = onDisk?.Contains(wanted);
+            var present = onDisk?.CtlNames.Contains(wanted);
+            // THE TERMINAL'S OWN TYPE on the saved pane, not "the .ctl is somewhere in the file".
+            var onPane = onDisk?.Pane?.Any(p => p.Terminal == binding.Terminal &&
+                                                string.Equals(p.Ctl, wanted, StringComparison.OrdinalIgnoreCase));
             var onPanel = namesSeen.Contains(binding.Terminal);
             rows.Add(new JsonObject
             {
@@ -1153,8 +1215,10 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 ["ctl"] = wanted,
                 ["terminalOnPanel"] = onPanel,
                 ["typedefInSavedFile"] = present,
+                ["boundOnSavedPane"] = onPane,
             });
             if (present is false) missing.Add(wanted);
+            if (onPane is false) notOnPane.Add(binding.Terminal);
             if (!onPanel) notOnPanel.Add(binding.Terminal);
         }
 
@@ -1170,13 +1234,16 @@ internal sealed class TypedefTools(LvaiConnection connection)
         //
         // So the helper's count is not the verdict AND is not ignorable either: it is one of three.
         // Every requested terminal must be on the panel, the helper must have matched as many as
-        // were asked for, and every .ctl must be in the saved file. A null file reading still
+        // were asked for, and every terminal must carry its .ctl ON THE SAVED PANE. Until
+        // 2026-11-14 the last was "the .ctl is in the saved file", which any constant, subVI pane
+        // or class data using the .ctl satisfies too - a field project saw "verified" twice for a
+        // terminal with no typedef link (PaneTypedefs). A file whose pane cannot be laid out
         // answers null rather than true.
         var allOnPanel = notOnPanel.Count == 0;
         var boundAsManyAsAsked = bound >= bindings.Count;
-        var verified = onDisk is null
+        var verified = onDisk?.Pane is null
             ? (bool?)null
-            : missing.Count == 0 && allOnPanel && boundAsManyAsAsked;
+            : notOnPane.Count == 0 && allOnPanel && boundAsManyAsAsked;
 
         return Json.Document(new JsonObject
         {
@@ -1190,6 +1257,11 @@ internal sealed class TypedefTools(LvaiConnection connection)
             ["terminalNamesSeen"] = new JsonArray([.. namesSeen.Select(n => JsonValue.Create(n))]),
             ["bindings"] = rows,
             ["typedefsMissingFromSavedFile"] = missing,
+            ["terminalsNotBoundOnSavedPane"] = notOnPane,
+            ["savedPaneTypedefs"] = onDisk?.Pane is { } pane
+                ? new JsonArray([.. pane.Select(p => (JsonNode)new JsonObject
+                    { ["terminal"] = p.Terminal, ["ctl"] = p.Ctl })])
+                : null,
             ["terminalsNotOnPanel"] = notOnPanel,
             ["helperViPath"] = helperVi,
             ["helperAixmlPath"] = Path.GetFullPath(aixml),
@@ -1197,25 +1269,30 @@ internal sealed class TypedefTools(LvaiConnection connection)
             ["steps"] = steps,
             ["note"] = verified switch
             {
-                true => "Every requested .ctl is named in the SAVED VI's own type descriptors - " +
-                        "read from the file with pylabview, not from the session. Check the " +
-                        "caller with lvai_coercion_dots, which is what the repair is for.",
+                true => "Every requested terminal's type on the connector pane of the SAVED VI is " +
+                        "its typedef - read from the file with pylabview, not from the session. " +
+                        "Check the caller with lvai_coercion_dots, which is what the repair is for.",
                 false when notOnPanel.Count > 0 =>
                     "A requested terminal is NOT on this VI's panel - read terminalsNotOnPanel " +
                     "against terminalNamesSeen, which is what the panel really has, including any " +
-                    "double spaces. Nothing was bound for it. A .ctl already present from an " +
-                    "earlier bind makes the FILE check pass on its own, which is why that check is " +
-                    "not the whole verdict.",
-                false when missing.Count > 0 =>
+                    "double spaces. Nothing was bound for it.",
+                false when notOnPane.Count > 0 && missing.Count == notOnPane.Count =>
                     "At least one .ctl is NOT in the saved file, so the bind did not land whatever " +
                     "the helper reported. Check that a project is open and ACTIVE - Replace is a " +
                     "silent no-op outside the IDE's own application instance.",
+                false when notOnPane.Count > 0 =>
+                    "At least one terminal is NOT bound on the saved pane (terminalsNotBoundOnSavedPane; " +
+                    "savedPaneTypedefs lists what the pane does carry). Where its .ctl is still in the " +
+                    "file (typedefInSavedFile), something else in the VI uses it - a constant, a " +
+                    "subVI's pane, class data - and that is no evidence for the terminal. Check that " +
+                    "a project is open and ACTIVE - Replace is a silent no-op outside the IDE's own " +
+                    "application instance - and that the first bind after a project open landed.",
                 false =>
                     "The helper matched fewer terminals than were asked for - read terminalsBound " +
                     "against terminalsAsked, and the per-stage errors under steps.",
-                null => "The saved file could not be read back, so NOTHING is concluded here - in " +
-                        "particular not that the bind landed. The helper's own answer is under " +
-                        "steps.",
+                null => "The saved file's connector pane could not be read back, so NOTHING is " +
+                        "concluded here - in particular not that the bind landed. The helper's own " +
+                        "answer is under steps.",
             },
         });
     }
@@ -1355,8 +1432,8 @@ internal sealed class TypedefTools(LvaiConnection connection)
         }
     }
 
-    /// <summary>The `.ctl` names in a saved VI's type descriptors, or null when it cannot be read.</summary>
-    private static async Task<SortedSet<string>?> TypedefCtlNamesOnDiskAsync(
+    /// <summary>The typedefs a saved VI names - all of them, and those on its pane - or null when it cannot be read.</summary>
+    internal static async Task<SavedTypedefs?> SavedTypedefsAsync(
         string viPath, int timeoutSeconds, CancellationToken ct)
     {
         var outDirectory = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "panebind",
@@ -1366,7 +1443,8 @@ internal sealed class TypedefTools(LvaiConnection connection)
             var (mainXml, failure) =
                 await CtlTools.ExtractAsync(viPath, outDirectory, timeoutSeconds, ct);
             if (failure is not null || mainXml is null) return null;
-            return TypedefCtlNames(XDocument.Load(mainXml).Root!);
+            var rsrc = XDocument.Load(mainXml).Root!;
+            return new SavedTypedefs(TypedefCtlNames(rsrc), PaneTypedefs(rsrc));
         }
         catch (Exception error) when (error is not OperationCanceledException)
         {
