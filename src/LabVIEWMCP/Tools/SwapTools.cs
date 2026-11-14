@@ -49,8 +49,9 @@ internal sealed class SwapTools(LvaiConnection connection)
         Nodes are swapped first, constants last. Nodes and constants are found at ANY DEPTH (loops,
         Case frames).
         PRECONDITION: the project must be OPEN and ACTIVE - Replace is a silent no-op outside the
-        IDE's instance; Error 1055 is `errorKind: noActiveProject` (lvai_run_lunit_tests leaves no
-        active project - call lvai_open_file between them).
+        IDE's instance; Error 1055 with no active project is `errorKind: noActiveProject`
+        (lvai_run_lunit_tests leaves none - call lvai_open_file between them). A node whose subVI
+        FILE IS MISSING shows an empty name and is `missingSubVi`: pass standInMissing.
         REFUSALS: a socket named twice in swapsJson; a socket not on the diagram (`diagramSubVis`
         then lists every subVI name on the diagram, with repetition, as it was before this call). A
         node already pointed at a class member carries its QUALIFIED name
@@ -108,7 +109,14 @@ internal sealed class SwapTools(LvaiConnection connection)
             lost its sourced wire is named in `inputsLeftUnwired` and `ok` is false
             (`errorKind: badWireCleanupLostConnection`).
             """)]
-        bool removeBadWires = true)
+        bool removeBadWires = true,
+        [Description("""
+            A socket whose subVI FILE IS MISSING (the node shows an empty name; errorKind
+            missingSubVi): put a temporary copy of its target at the path the caller links, swap,
+            then delete the copy (`standIns`). Single-VI calls only; needs the pylabview reader's
+            link paths. The caller must not already be in memory with the subVI missing.
+            """)]
+        bool standInMissing = false)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_swap_subvis", out _, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
@@ -123,10 +131,135 @@ internal sealed class SwapTools(LvaiConnection connection)
                 "Give either `viPath` (one VI) or `editsJson` (several). Neither arrived.",
                 new { viPath, editsJson });
 
-        return await OneAndCleanAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
-                                      helperAixmlPath, regenerateHelper, timeoutSeconds,
-                                      cleanUpDiagram, removeBadWires, ct: ct);
+        if (!standInMissing)
+            return await OneAndCleanAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
+                                          helperAixmlPath, regenerateHelper, timeoutSeconds,
+                                          cleanUpDiagram, removeBadWires, ct: ct);
+        return await WithStandInsAsync(viPath, swapsJson, timeoutSeconds, ct,
+            () => OneAndCleanAsync(viPath, swapsJson, constantsJson, verify, verbose, helperViPath,
+                                   helperAixmlPath, regenerateHelper, timeoutSeconds,
+                                   cleanUpDiagram, removeBadWires, ct: ct));
     }
+
+    /// <summary>
+    /// THE FIELD WORKAROUND FOR A MISSING SUBVI, automated (report N17, measured 2026-11-14): a
+    /// copy of the target at the path the caller links makes the node resolve, Replace then
+    /// reaches it, and the copy is deleted - the caller ends up calling the target.
+    /// </summary>
+    private async Task<string> WithStandInsAsync(string viPath, string? swapsJson, int timeoutSeconds,
+                                                 CancellationToken ct, Func<Task<string>> swap)
+    {
+        List<NodeSwap> swaps;
+        try { swaps = NodeSwap.ParseAll(swapsJson); }
+        catch (Exception bad) when (bad is ArgumentException or InvalidOperationException)
+        {
+            return Json.Error("badArguments", bad.Message);
+        }
+        var exportPath = Path.Combine(Path.GetTempPath(), "LabVIEWMCP",
+            Path.ChangeExtension(Path.GetFileName(viPath), ".swap-links.xml"));
+        Directory.CreateDirectory(Path.GetDirectoryName(exportPath)!);
+        var exported = await new AixmlTools(connection).ConvertViToAixmlAsync(
+            viPath, exportPath, returnContent: true, maxContentChars: 0, timeoutSeconds,
+            refresh: true, ct: ct);
+        var linksXml = (Parse(exported) as JsonObject)?["xml"]?.GetValue<string>() ?? "";
+        var plan = StandInPlan(linksXml, Path.GetFullPath(viPath), swaps);
+        var placed = new List<(string File, long Length, List<string> Dirs)>();
+        var standIns = new JsonArray();
+        foreach (var item in plan)
+        {
+            var entry = new JsonObject { ["socket"] = item.Socket, ["linkedPath"] = item.LinkedPath };
+            if (item.Problem is not null) entry["skipped"] = item.Problem;
+            else
+            {
+                var dirs = new List<string>();
+                for (var d = Path.GetDirectoryName(item.LinkedPath!); d is not null && !Directory.Exists(d);
+                     d = Path.GetDirectoryName(d))
+                    dirs.Add(d);
+                Directory.CreateDirectory(Path.GetDirectoryName(item.LinkedPath!)!);
+                File.Copy(item.Target, item.LinkedPath!);
+                placed.Add((item.LinkedPath!, new FileInfo(item.LinkedPath!).Length, dirs));
+                entry["placed"] = true;
+            }
+            standIns.Add(entry);
+        }
+        string answer;
+        try { answer = await swap(); }
+        finally
+        {
+            foreach (var (file, length, dirs) in placed)
+            {
+                // only the copy this call wrote - a file someone replaced meanwhile stays
+                if (File.Exists(file) && new FileInfo(file).Length == length)
+                    try { File.Delete(file); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+                foreach (var dir in dirs)
+                    try { if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            try { File.Delete(exportPath); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+        foreach (var entry in standIns.OfType<JsonObject>())
+            if (entry["placed"] is not null)
+                entry["deleted"] = !File.Exists(entry["linkedPath"]!.GetValue<string>());
+        if (Read(answer) is not JsonObject node) return answer;
+        node["standIns"] = standIns;
+        if (placed.Count == 0)
+            node["standInNote"] = "No stand-in was placed - `standIns` says why for each socket.";
+        return Json.Document(node);
+    }
+
+    internal sealed record StandIn(string Socket, string Target, string? LinkedPath, string? Problem);
+
+    /// <summary>
+    /// Where each socket's stand-in goes: the reader's <c>&lt;?lvmcp calllink uid tp path?&gt;</c>
+    /// for the Call naming the socket. Only a RELATIVE link (`tp` 1, `|sub|Sub.vi` from the
+    /// caller's folder - the measured case) is honoured; a file already at that path, a missing
+    /// target or no link at all is a reason, never a guess.
+    /// </summary>
+    internal static List<StandIn> StandInPlan(string xml, string callerPath, IEnumerable<NodeSwap> swaps)
+    {
+        var calls = System.Text.RegularExpressions.Regex.Matches(xml, @"<Call\b[^>]*>")
+            .Select(m => (Uid: Attr(m.Value, "uid"), Target: Attr(m.Value, "target")?.Replace(@"\3A", ":")))
+            .ToList();
+        var links = new Dictionary<string, (string Tp, string Path)>(StringComparer.Ordinal);
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(xml,
+                     @"<\?lvmcp\s+calllink\s+uid=""([^""]*)""\s+tp=""([^""]*)""\s+path=""([^""]*)""\s*\?>"))
+            links[m.Groups[1].Value] = (m.Groups[2].Value, m.Groups[3].Value);
+        var callerDir = Path.GetDirectoryName(callerPath)!;
+        var plan = new List<StandIn>();
+        foreach (var swap in swaps)
+        {
+            var target = Path.GetFullPath(swap.Target);
+            var call = calls.FirstOrDefault(c =>
+                string.Equals(c.Target, swap.Socket, StringComparison.OrdinalIgnoreCase));
+            if (call.Uid is null || !links.TryGetValue(call.Uid, out var link))
+            {
+                plan.Add(new(swap.Socket, target, null,
+                    "no Call of that name with a link path in the reader's export"));
+                continue;
+            }
+            var segments = link.Path.Split('|');
+            if (link.Tp != "1" || segments.Length < 2 || segments[0].Length != 0
+                || segments.Skip(1).Any(x => x.Length == 0 || x.StartsWith('<') || x == ".."))
+            {
+                plan.Add(new(swap.Socket, target, null,
+                    $"the link is not a plain relative path (tp {link.Tp}, path {link.Path})"));
+                continue;
+            }
+            var linked = Path.GetFullPath(Path.Combine([callerDir, .. segments.Skip(1)]));
+            var problem = !File.Exists(target) ? "the target does not exist"
+                : File.Exists(linked) ? "a file is already at the linked path - the subVI is not missing there"
+                : !string.Equals(Path.GetFileName(linked), swap.Socket, StringComparison.OrdinalIgnoreCase)
+                    ? "the linked file name differs from the socket" : null;
+            plan.Add(new(swap.Socket, target, linked, problem));
+        }
+        return plan;
+    }
+
+    private static string? Attr(string element, string name) =>
+        System.Text.RegularExpressions.Regex.Match(element, $@"\b{name}=""([^""]*)""") is { Success: true } m
+            ? m.Groups[1].Value : null;
 
     /// <summary>
     /// One swap - which ends with Remove Bad Wires when asked - then our layout of the saved VI
@@ -361,6 +494,16 @@ internal sealed class SwapTools(LvaiConnection connection)
             var code = Scalar(values, "code");
             var source = Scalar(values, "source");
             var swapped = code == "0";
+            // 1055 IS "OBJECT REFERENCE IS INVALID", not "no active project". It was mapped to
+            // noActiveProject unread, and a node whose subVI FILE IS MISSING answers it too - its
+            // cast to SubVI fails - beside an active project (field report N17, reproduced
+            // 2026-11-14). The project is asked, and a nameless node on the diagram named.
+            string? kind1055 = null;
+            if (code == "1055")
+            {
+                var (active, _, _) = await new ActionTools(connection).ProjectIsActiveAsync(timeoutSeconds, ct: ct);
+                kind1055 = Kind1055(active, Names(values, "node names found"));
+            }
 
             // The names the diagram actually had, so an unmatched socket is visible rather than
             // silently swapping element 0.
@@ -438,9 +581,9 @@ internal sealed class SwapTools(LvaiConnection connection)
 
                 if ((Parse(exported) as JsonObject)?["xml"]?.GetValue<string>() is { } xml)
                 {
-                    socketsLeft = swaps.Count(s => xml.Contains(s.Socket, StringComparison.Ordinal));
-                    targets = new JsonArray([.. Targets(xml).Select(t => (JsonNode)t!)]);
                     after = SubVisInExport(xml);
+                    socketsLeft = SocketsLeft(after, swaps.Select(s => s.Socket));
+                    targets = new JsonArray([.. Targets(xml).Select(t => (JsonNode)t!)]);
 
                     if (wiringBefore is not null)
                     {
@@ -522,13 +665,15 @@ internal sealed class SwapTools(LvaiConnection connection)
                 // outside the IDE's own application instance. The answer used to report the bare
                 // code beside `Invoke Node in lvai_swap_subvis.vi`, which names the node rather
                 // than the cause and reads like an internal fault.
-                ["errorKind"] = code == "1055" ? "noActiveProject"
-                    : constantOutcome.Ambiguous.Count > 0 ? "constantLabelAmbiguous"
-                    : constantOutcome.Missing.Count > 0 ? "constantLabelNotOnDiagram" : null,
+                ["errorKind"] = kind1055
+                    ?? (constantOutcome.Ambiguous.Count > 0 ? "constantLabelAmbiguous"
+                    : constantOutcome.Missing.Count > 0 ? "constantLabelNotOnDiagram" : null),
                 ["steps"] = steps,
                 ["totalElapsedMs"] = total.ElapsedMilliseconds,
-                ["note"] = Note(ok, swapped, missing, socketsLeft, verify, code, after ?? present,
-                                constantOutcome),
+                ["note"] = kind1055 is { } k && k != NoActiveProject
+                    ? Note1055(k, missing)
+                    : Note(ok, swapped, missing, socketsLeft, verify, code, after ?? present,
+                           constantOutcome),
             };
             BadWireCleanup.Attach(result, cleanup);
             return Json.Document(result);
@@ -762,6 +907,40 @@ internal sealed class SwapTools(LvaiConnection connection)
     /// Every subVI call in an export, WITH repetition and in document order, unescaped the way
     /// the helper spells names (`\3A` is `:`), so a second swap can copy a name straight from it.
     /// </summary>
+    internal const string NoActiveProject = "noActiveProject";
+
+    /// <summary>
+    /// What a 1055 from the helper means. A nameless node on the diagram is a subVI whose file
+    /// LabVIEW cannot find (the helper reads its VI Name as empty - measured); otherwise an active
+    /// project means a reference went invalid for another reason, and only an inactive (or
+    /// unknown) project is the old noActiveProject.
+    /// </summary>
+    internal static string Kind1055(bool? projectActive, IReadOnlyList<string> namesOnDiagram) =>
+        namesOnDiagram.Any(n => n.Length == 0) ? "missingSubVi"
+        : projectActive is true ? "invalidReference"
+        : NoActiveProject;
+
+    internal static string Note1055(string kind, IReadOnlyList<string> missing) => kind == "missingSubVi"
+        ? "A subVI node on this diagram calls a VI whose FILE IS MISSING: LabVIEW shows it with an " +
+          "empty name, `diagramSubVis` lists it as '', and Replace cannot reach it (Error 1055, object " +
+          "reference is invalid - the project IS active). Nothing was saved. Call again with " +
+          "standInMissing: true - the tool then puts a temporary copy of the target at the path the " +
+          "caller links (" + string.Join(", ", missing.Select(m => $"'{m}'")) + "), swaps, and deletes the " +
+          "copy. If the caller is already in memory with the subVI missing, close the project " +
+          "(lvai_close_active_project) and re-open it first."
+        : "Error 1055 (object reference is invalid) although a project IS active, so this is not the " +
+          "no-active-project case. Nothing was saved. Read the swap step's `source` for the node.";
+
+    /// <summary>
+    /// The swap ENTRIES whose socket is still CALLED after the swap - by call target, exact or as
+    /// the qualified tail. It counted substrings of the whole export, so `Sub.vi` was "left" in a
+    /// diagram calling `NewSub.vi`, and in a description that named it (measured 2026-11-14).
+    /// </summary>
+    internal static int SocketsLeft(IReadOnlyList<string> callTargets, IEnumerable<string> sockets) =>
+        sockets.Count(socket => callTargets.Any(t =>
+            string.Equals(t, socket, StringComparison.OrdinalIgnoreCase)
+            || t.EndsWith(":" + socket, StringComparison.OrdinalIgnoreCase)));
+
     internal static List<string> SubVisInExport(string xml) =>
         [.. System.Text.RegularExpressions.Regex
             .Matches(xml, @"<Call\b[^>]*?\btarget=""([^""]+)""")

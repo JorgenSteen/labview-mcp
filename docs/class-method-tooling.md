@@ -1925,3 +1925,26 @@ methods). **Unmeasured on a class member**: `Save.Instrument` alone does not com
 with `lvai_exec_state` after a run that removed something. Also unmeasured: that a terminal
 reference recorded before `BD.Remove Bad Wires` still answers `Connected Wire` after it - if it does
 not, the sinks land in `inputsUnchecked`, which gates nothing.
+
+### A subVI whose file is missing - 2026-11-14
+
+A field project's copied VI called a dependency that did not resolve. `lvai_swap_subvis` answered
+Error 1055 as `noActiveProject` although the project was active. Reproduced on LabVIEW 2026 with
+`Caller.vi` -> `sub\Sub.vi`, Sub.vi moved OUT of the caller's tree. A sibling subfolder is not far
+enough: LabVIEW's default search found it there, and the swap simply worked. Caller then read
+`Missing subVI Sub.vi in VI Caller.vi`, and the helper listed the node as `''`. The 1055 came from
+its `To More Specific Class`: 1055 is "object reference is invalid", and the old code read it as
+no project. The pylabview reader still names the call (`target="Sub.vi"`) and its link
+`<?lvmcp calllink uid="4202" tp="1" path="|sub|Sub.vi"?>`.
+
+- The 1055 is now judged from the facts. A nameless node on the diagram is `missingSubVi`. An
+  active project is `invalidReference`. Only an inactive or unknown project is `noActiveProject`.
+- `standInMissing: true` automates the field workaround, measured by hand the same day. The tool
+  reads the reader's calllink for the socket's Call (a plain relative link only) and copies the
+  target to that path. It then swaps and deletes the copy, plus any folder it made. Caller then
+  called `NewSub.vi`, executable, and returned `length 5`. A file already at the linked path is
+  never overwritten. A caller ALREADY in memory with the subVI missing is not re-linked by a file
+  that appears later, so close and re-open the project first.
+- `socketsLeft` counted SUBSTRINGS of the whole export: `Sub.vi` was "left" in a diagram calling
+  `NewSub.vi`, and in a VI description that named it. A swap that landed answered `ok: false`. It
+  now counts call targets: an exact match, or the qualified tail.
