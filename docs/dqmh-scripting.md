@@ -1589,6 +1589,41 @@ into `Status`. The installed build refused it `namesDoNotMatch` as reported; the
 `execState 1 -> 1`, and the saved Main.vi's export wires `Module Data in` from the frame's `In3`
 tunnel and `Module Data out` into its `Out2`.
 
+### 9h-a. A frame that already holds code - `allowExistingCode` (2026-11-14)
+
+A field project could not put its initialisation into `Initialize`. `lvai_dqmh_place_handler`
+refused every frame holding a subVI (`frameAlreadyHasCode`), and no other wire source was possible.
+The user decided on 2026-11-14 that the handler goes at the frame's ENTRY, so it runs first. Measured
+in Initialize (DQMH 7.1.2):
+
+- **The error chain:** error tunnel -> `Synchronize Caller Events.vi` -> `Module Did Init.vi` -> out.
+- **The module data:** tunnel -> `Bundle By Name` -> out. This is not the straight pass-through
+  that `lvdqmh_splice_module_data` needs.
+
+`allowExistingCode: true` works in two stages. First the place helper puts the handler in the
+frame with NOTHING wired and deletes no text. Then `scripts/lvdqmh_splice_frame_entry.xml` splices
+it, one chain per run. For each chain, the helper:
+
+- finds the frame's inner SOURCE tunnel terminal whose wire feeds a sink named `error in` (the
+  error chain) or `input cluster` (module data into a Bundle/Unbundle By Name - only when the
+  handler has both module-data terminals);
+- finds the handler as the frame's subVI whose `VI Name` matches, retrying with the qualified name
+  the frame lists;
+- deletes that wire, wires the source to the handler's input, wires the handler's output to every
+  sink the wire fed, and saves Main.vi.
+
+A tunnel is not a `Node` in VI Server, which is why `lvbd_splice_by_names` could not take one.
+
+The place helper anchors the new handler on a node of `Arg Source Class`, by default the message
+frame's `Unbundle By Name`. Initialize has none: `Position` answered 1055 and nothing was placed.
+The frame's first subVI is now the anchor there.
+
+Measured on module `Pump2` with a handler that sets `Pressure` (`Module Data in/out`,
+`error in/out`): `placement inside`, both chains spliced (1 source, 1 sink each), Main.vi
+`execState` 1 before and after. The export reads `error in:444` and `Module Data in:472` on the
+handler. `Synchronize Caller Events` gets the handler's `error out`, and `Bundle By Name` its
+`Module Data out`. The frame's two `#DQMH_CodeNeeded` labels are left as they are.
+
 ### 9i. Every DQMH tool on the pylabview backend - no NI service, measured 2026-10-13
 
 The user asked for a DQMH demo with NO gRPC, and every `lvai_dqmh_*` tool but the reference takes

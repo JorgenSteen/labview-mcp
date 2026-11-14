@@ -220,6 +220,10 @@ Request and Wait for Reply frame leaves Main.vi NOT executable until it is fille
 3. It refuses `namesDoNotMatch` (naming the field), `frameNotFound` (listing the frames) and
    `frameAlreadyHasCode` - never wires a guess. Report `connected`, `warnings` and
    `mainViExecState` before and after.
+4. A frame that already HOLDS CODE (e.g. `Initialize` - hardware init, opening resources) takes
+   `allowExistingCode: true`: the handler goes in series at the frame's ENTRY and runs first; its
+   `error in/out` and (when it has both) `Module Data in/out` are spliced, nothing else in the
+   frame is rewired. Report `entrySplice` and `mainViExecState`.
 
 A Request and Wait for Reply frame leaves Main.vi broken through its unwired `Merge Errors` input until the handler is placed - the tool wires the handler's `error out` there too. A plain Request frame has no reply, so the handler's `error out` stays unwired there - it is
 listed under `warnings`; say so in the report.

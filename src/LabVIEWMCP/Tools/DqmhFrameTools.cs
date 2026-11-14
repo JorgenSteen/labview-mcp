@@ -27,6 +27,12 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
 {
     private const string Helper = "lvdqmh_place_frame_handler";
     private const string ConnectHelper = "lvbd_connect_by_names";
+
+    /// <summary>
+    /// A frame that already holds code (field report D7): the handler goes in series at the
+    /// frame's ENTRY - the user's choice of 2026-11-14, so it runs first.
+    /// </summary>
+    private const string EntryHelper = "lvdqmh_splice_frame_entry";
     private const string SpliceHelper = "lvbd_splice_by_names";
 
     /// <summary>
@@ -76,7 +82,10 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         pass-through, so a handler can reach the class the module data carries (`moduleData`).
         `ok` is false when the handler lands OUTSIDE the frame (`placement` is read back), its
         error out reaches nothing, or its module data could not be spliced. An input or field with no partner is reported, never guessed;
-        a frame already holding a subVI is refused. The #CodeNeeded text is deleted and Main.vi
+        a frame already holding a subVI is refused unless allowExistingCode: then the handler goes
+        in series at the frame's ENTRY - its error in/out into the wire from the frame's error
+        tunnel, its module data into the wire from the module-data tunnel - and runs first;
+        nothing else in the frame is rewired and no text is deleted. The #CodeNeeded text is deleted and Main.vi
         saved; the frame is read again (codeNeededTextsAfter) and Main.vi's exec state before and
         after is reported. Use `dryRun` first.
         Needs the module's project OPEN and ACTIVE.
@@ -92,7 +101,13 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         [Description("The handler input that takes the frame's module data; omit for 'Module Data in'")]
         string? moduleDataIn = null,
         [Description("The handler output that gives it back; omit for 'Module Data out'")]
-        string? moduleDataOut = null) =>
+        string? moduleDataOut = null,
+        [Description("""
+            Place the handler in a frame that already holds code (e.g. Initialize), in series at
+            the frame's ENTRY so it runs first; without it such a frame is refused
+            (frameAlreadyHasCode).
+            """)]
+        bool allowExistingCode = false) =>
         await Rpc.GuardAsync(() => DqmhTools.WithBackendAsync(backend, "lvai_dqmh_place_handler", async () =>
         {
             var dataIn = string.IsNullOrWhiteSpace(moduleDataIn) ? DefaultModuleDataIn : moduleDataIn.Trim();
@@ -180,10 +195,15 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["plan"] = plan.ToJson(),
                 ["moduleDataPlan"] = moduleData.Describe(),
             };
-            if (nodeClasses.Contains("SubVI"))
+            if (nodeClasses.Contains("SubVI") && !allowExistingCode)
                 return Json.Error("frameAlreadyHasCode",
                     "This frame already holds a subVI call - a handler was placed before, or a " +
-                    "person wrote code here. Nothing is added on top of it.", detail);
+                    "person wrote code here. Nothing is added on top of it; allowExistingCode puts " +
+                    "the handler in series at the frame's entry.", detail);
+            if (nodeClasses.Contains("SubVI"))
+                return await PlaceAtEntryAsync(headless, dqmh, scripts, projectPath, mainVi, frameName,
+                    handler, inputs, outputs, moduleData, texts, nodeClasses, detail, steps, dryRun,
+                    stopwatch, timeoutSeconds, ct);
             if (plan.Problems.Count > 0)
                 return Json.Error("namesDoNotMatch",
                     "The handler's terminals do not match the frame's fields - " +
@@ -309,6 +329,134 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             foreach (var (key, value) in detail) answer[key] = value?.DeepClone();
             return Json.Document(answer);
         }));
+
+    /// <summary>
+    /// D7: the handler placed with NOTHING wired by the place helper (no argument, error, reply or
+    /// merge pairs, no text deleted - the frame's own code stays as it is), then spliced in series
+    /// at the frame's entry, one chain per helper run: the error chain (the source tunnel whose
+    /// wire feeds an `error in`) and, when the handler takes module data, the module-data chain
+    /// (the source tunnel whose wire feeds an `input cluster` - DQMH's Bundle/Unbundle By Name).
+    /// </summary>
+    private async Task<string> PlaceAtEntryAsync(DqmhHeadless headless, DqmhTools dqmh, string scripts,
+        string projectPath, string mainVi, string frameName, string handler, List<string> inputs,
+        List<string> outputs, ModuleData moduleData, List<string> texts, List<string> nodeClasses,
+        JsonObject detail, JsonArray steps,
+        bool dryRun, Stopwatch stopwatch, int timeoutSeconds, CancellationToken ct)
+    {
+        var chains = new List<(string Name, string In, string Out, string Sink)>();
+        if (inputs.Contains("error in") && outputs.Contains("error out"))
+            chains.Add(("errorChain", "error in", "error out", "error in"));
+        if (moduleData.Splice)
+            chains.Add(("moduleData", moduleData.In, moduleData.Out, "input cluster"));
+        detail["entryChains"] = new JsonArray([.. chains.Select(c => (JsonNode)c.Name)]);
+        if (chains.Count == 0)
+            return Json.Error("nothingToSplice",
+                "The frame already holds code, and the handler has neither `error in`/`error out` nor " +
+                "both module-data terminals - there is no chain to put it into.", detail);
+        if (dryRun)
+            return Json.Document(DqmhHeadless.Merge(new JsonObject
+            {
+                ["ok"] = true,
+                ["dryRun"] = true,
+                ["route"] = "frameEntry",
+                ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
+            }, detail));
+
+        if (await headless.EnsureWrapperAsync(scripts, EntryHelper, [], projectPath, steps,
+                timeoutSeconds, ct) is { } wrapperError)
+            return wrapperError;
+        var mainBefore = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
+        var (placed, placeError) = await dqmh.RunDetailedAsync(scripts, Helper, new()
+        {
+            ["Main VI Path"] = mainVi,
+            ["Frame Name"] = frameName,
+            ["Handler VI Path"] = handler,
+            ["Error Source Class"] = "Function",
+            // THE PLACE HELPER ANCHORS THE HANDLER ON A NODE OF THIS CLASS. Its default, the message
+            // frame's Unbundle By Name, is not in a frame like Initialize: Position answered 1055
+            // and nothing was placed (measured 2026-11-14). The frame's first subVI is then the anchor.
+            ["Arg Source Class"] = nodeClasses.Contains("NamedUnbundler") ? "NamedUnbundler" : "SubVI",
+            ["Dry Run"] = "false",
+        }, timeoutSeconds, ct);
+        if (placed is null || placeError is not null || DqmhTools.Failed(placed) is not null)
+            return Json.Error("helperFailed", "The handler could not be placed.",
+                DqmhHeadless.Merge(detail, new JsonObject
+                {
+                    ["helperError"] = placeError,
+                    ["error"] = placed is null ? null : DqmhTools.Failed(placed),
+                }));
+        var placement = DqmhTools.Scalar(placed, "Placement");
+
+        // the handler's name as the frame's SubVI node reads it: bare for a loose VI, qualified
+        // for a library member - taken from the frame's own list when the bare name is not there
+        var handlerName = Path.GetFileName(handler);
+        var results = new JsonObject();
+        var allSpliced = true;
+        foreach (var chain in chains)
+        {
+            var (run, runError) = await dqmh.RunDetailedAsync(scripts, EntryHelper, new()
+            {
+                ["Main VI Path"] = mainVi,
+                ["Frame Name"] = frameName,
+                ["Handler Name"] = handlerName,
+                ["In Name"] = chain.In,
+                ["Out Name"] = chain.Out,
+                ["Sink Name"] = chain.Sink,
+                ["Dry Run"] = "false",
+            }, timeoutSeconds, ct);
+            if (run is not null && DqmhTools.Scalar(run, "handlers found") == "0"
+                && DqmhHeadless.Listed(run, "frame subVIs")
+                    .FirstOrDefault(n => n.EndsWith(":" + handlerName, StringComparison.OrdinalIgnoreCase)) is { } qualified)
+            {
+                handlerName = qualified;
+                (run, runError) = await dqmh.RunDetailedAsync(scripts, EntryHelper, new()
+                {
+                    ["Main VI Path"] = mainVi,
+                    ["Frame Name"] = frameName,
+                    ["Handler Name"] = handlerName,
+                    ["In Name"] = chain.In,
+                    ["Out Name"] = chain.Out,
+                    ["Sink Name"] = chain.Sink,
+                    ["Dry Run"] = "false",
+                }, timeoutSeconds, ct);
+            }
+            var spliced = run is not null && runError is null && DqmhTools.Failed(run) is null
+                          && DqmhHeadless.IsTrue(DqmhTools.Scalar(run, "spliced"));
+            allSpliced &= spliced;
+            results[chain.Name] = new JsonObject
+            {
+                ["spliced"] = spliced,
+                ["sourcesMatched"] = run is null ? null : DqmhTools.Scalar(run, "sources matched"),
+                ["sinksMoved"] = run is null ? null : DqmhTools.Scalar(run, "sinks moved"),
+                ["handlersFound"] = run is null ? null : DqmhTools.Scalar(run, "handlers found"),
+                ["error"] = runError ?? (run is null ? null : DqmhTools.Failed(run)),
+            };
+        }
+        var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
+        var visible = PlacedInside(placement);
+        var answer = new JsonObject
+        {
+            ["ok"] = allSpliced && visible && mainAfter is not 0,
+            ["route"] = "frameEntry",
+            ["placement"] = placement,
+            ["handlerVisible"] = visible,
+            ["handler"] = handler,
+            ["handlerName"] = handlerName,
+            ["entrySplice"] = results,
+            ["codeNeededTexts"] = texts.Count(IsCodeNeeded),
+            ["mainViExecStateBefore"] = mainBefore,
+            ["mainViExecState"] = mainAfter,
+            ["note"] = allSpliced
+                ? "The handler runs FIRST in the frame: in series at its entry, the frame's own code " +
+                  "after it unchanged. The frame's #CodeNeeded texts were left as they are."
+                : "Not every chain was spliced - `entrySplice` says which and why; the handler is on " +
+                  "the diagram (placement) and Main.vi was saved by the steps that did work.",
+            ["projectHygiene"] = DqmhHeadless.ProjectHygieneNote,
+            ["elapsedMs"] = stopwatch.ElapsedMilliseconds,
+        };
+        foreach (var (key, value) in detail) answer[key] = value?.DeepClone();
+        return Json.Document(answer);
+    }
 
     // ------------------------------------------------------------------ pure, tested
 
