@@ -6,11 +6,11 @@ counts on this page against the registration in the source, so they cannot drift
 
 ## What is served
 
-**123 tools over 23 RPCs.** Eighty-four map to no RPC: `lvai_status`, `lvai_dump_schema`,
+**124 tools over 23 RPCs.** Eighty-five map to no RPC: `lvai_status`, `lvai_dump_schema`,
 `lvai_palette_index`, `lvai_example_index`, `lvai_set_vi_icon`, `lvai_render_diagrams`, `lvai_layout_diagram` and `lvai_discuss_file` — which compose three RPCs
 rather than wrapping one — `lvai_check_aixml`, which reads an AIXML file, `lvai_describe_class` and `lvai_describe_ctl`, which read a `.lvclass`
 and a `.ctl` off disk and need no LabVIEW at all, the knowledge tools below, and the five `pylv_*`
-tools. 41 carry `readOnlyHint`,
+tools. 42 carry `readOnlyHint`,
 80 carry `destructiveHint`, so a client can gate the writes.
 
 The server also exposes its five embedded documents as **MCP resources** —
@@ -62,6 +62,7 @@ reaches a running LabVIEW over its ActiveX server where a question needs one.
 | `lvai_answer_dialog` | — (Win32 window reads, `PrintWindow`, posted input) | **presses one button of one allowlisted dialog** in the caller's OWN LabVIEW only: "Save changes? (Exit)" listing only LVMCP scratch VIs (Don't Save / Cancel), the "changed on disk" modal (Cancel), a Nigel message box (OK); anything else refused with its screenshot. [Restart](../labview-restart.md) |
 | `lvai_error_list` | — (a helper composed by our composer, NI's converter as fallback, run over LabVIEW's ActiveX server) | **what LabVIEW's Error List window shows**: every BROKEN VI in memory, each with the Error List's own lines (`Add: Contains unwired or bad terminal`, `Wire: Wire has loose ends.`) and the explanation under them. `lvai_exec_state` says THAT a VI is broken; this says WHY - a loose wire, an unwired input or a type conflict, which nothing else here names. Built on `{LV.Application}` `Get Broken VI List` and `{LV.VI}` `Get Errors`, two methods the public catalogue does not list. Reads the IDE's main instance and the ACTIVE PROJECT's; the helper is composed by our composer (NI's converter as fallback) and must run over ActiveX, because through NI's service it runs in the addon's own instance and sees an empty list, measured. Needs no NI service. Memory only, not disk - open a file first with `lvai_open_file`. [Reading the Error List](../error-list.md) |
 | `lvai_list_labview_installations` | — (reads the installed versions off the machine) |
+| `lvai_check_links` | — (reads each file's link records off disk; no LabVIEW) | **which links into LabVIEW's own folders** (`<vilib>`, `<userlib>`, `<instrlib>`, `<resource>`, `<menus>`) of a set of VIs, folders or a project an INSTALLED target LabVIEW lacks - the target named, or the save version the nearest `.lvproj` pins. Each absent path with the files that link it; relative links and `<extravilib>` channel instances are counted, not checked. Measured over LabVIEW 2026's 1 809 examples in 0.5 s: against 2026 itself only 4 links into modules not installed here, against 2020 32 (DQMH, newer Python and `error.llb` VIs). [Save version](../save-version.md) |
 
 ### Write — mutating
 

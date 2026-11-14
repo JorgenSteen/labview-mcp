@@ -93,6 +93,29 @@ is the caller's decision, with the project closed: a save that carries this sess
 edits must stay. Closing WITHOUT saving was not attempted - it needs a probe of what `Close` does on
 an unsaved project (a modal prompt stops every call).
 
+## 3a. Links the target LabVIEW lacks: `lvai_check_links` (2026-11-14)
+
+A file written for the old version can still link a `vi.lib` VI only the newer LabVIEW has - a
+save in the newer one relinks some calls - and the target says so only when it LOADS the VI. Two
+field projects found it on the target PC. `lvai_check_links` reads every file's link records (the
+`PTH0` path references in the top-level `LIvi`/`LIfp`/`LIbd` blocks, `Infra/ViLinks.cs`; no LabVIEW,
+no pylabview) and looks each path under `<vilib>`, `<userlib>`, `<instrlib>`, `<resource>` or
+`<menus>` up in an INSTALLED target: the release named, or the one the nearest `.lvproj` pins. An
+`.llb` member is looked up by its name in the `.llb` (a heuristic); a class's private data, linked
+through its `.lvclass`, is present when the class is. Relative links (the user's own code) and
+`<extravilib>` (channel instances LabVIEW generates per user) are counted, not checked.
+
+Measured 2026-11-14 over LabVIEW 2026's 1 809 example files (3 975 installation links, 0.5 s):
+
+| target | missing | what |
+|---|---|---|
+| LabVIEW 2026 (control) | 4 | DSC and Real-Time module VIs, modules not installed here |
+| LabVIEW 2020 | 32 | DQMH (not installed for 2020), the newer Python session VIs, `error.llb`'s newer string VIs, `Write Waveforms to File (1D).vi` |
+
+The first run also named every `Actor.lvclass\Actor.ctl`-style link missing: a class's private
+data control is linked THROUGH its class file. Shipping file lists of every LabVIEW version was
+left out on purpose: the check needs the target installed on the PC.
+
 ## 4. Not done, and why
 
 - **Saving through LabVIEW in an older version.** The tools that save through LabVIEW (layout,
