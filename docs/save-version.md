@@ -93,6 +93,17 @@ is the caller's decision, with the project closed: a save that carries this sess
 edits must stay. Closing WITHOUT saving was not attempted - it needs a probe of what `Close` does on
 an unsaved project (a modal prompt stops every call).
 
+## 3b. Putting the project file back: `restoreProjectFile` (2026-11-14)
+
+Closing WITHOUT saving would avoid the rewrite, but LabVIEW marks an older project modified on open,
+and an unsaved close of a modified project raises a modal prompt that stops every call. So the close
+still saves, and `lvai_close_active_project restoreProjectFile: true` writes the bytes taken before
+that save back - OPT-IN, for a session that changed nothing in the project on purpose, because it
+also undoes project edits LabVIEW held in memory. `projectRewrite.restored` says what happened.
+Measured on the 21.0 64-bit field copy in LabVIEW 2026 32-bit: the save took the file from 154 333 to
+100 137 bytes and Dependencies from 391 to 0; after the restore the file's hash equalled the original.
+The project's `.aliases` and `.lvlps` are not covered (LabVIEW re-saves them, measured same sizes).
+
 ## 3a. Links the target LabVIEW lacks: `lvai_check_links` (2026-11-14)
 
 A file written for the old version can still link a `vi.lib` VI only the newer LabVIEW has - a
