@@ -1209,6 +1209,19 @@ The answer carries `boundOnSavedPane` per binding, `terminalsNotBoundOnSavedPane
 `savedPaneTypedefs` (what the pane does carry). `typedefInSavedFile` stays as information. A file
 whose pane cannot be laid out (raw `VCTP`, no `CONP`) answers `verified: null`.
 
+**Measured live 2026-11-14, and what it found.** LabVIEW 2026, a class `Heater` whose private
+data holds the enum typedef `Mode.ctl`, a method `Set Mode.vi` with a plain enum control `Mode` on
+its pane, the project active. On the pylabview default the helper runs over ActiveX: every stage
+answered 0 and `terminals bound: 1`, and the saved VI kept a plain enum - three runs, and the same
+with NI's own build of the helper run over ActiveX, so it is the ROUTE, not our composer. Through NI's
+service (`backend: grpc`) the same call bound it: `savedPaneTypedefs` `Mode` -> `Mode.ctl`, `verified:
+true`. Both verdicts said "not verified" for the ActiveX runs (the `.ctl` was in the file nowhere),
+so this was a silent no-op the old check caught too - but it was the DEFAULT route. Since then, on
+the pylabview default the tool runs its helper through NI's service whenever it answers (`backend`
+grpc, `routeNote`); a call naming `backend` gets that backend, and with NI's service down the ActiveX
+run stays and `routeNote` says what to expect. Why the ActiveX route binds nothing - the helper opens
+the VI through the active project's own application, as on grpc - is not measured.
+
 ### 13c. A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY - 2026-09-18
 
 Measured twice on one fixture inside a minute, same inputs, nothing else changed:

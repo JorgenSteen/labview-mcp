@@ -1063,7 +1063,8 @@ internal sealed class TypedefTools(LvaiConnection connection)
         constants. A VI that is NOT a class member is not supported: Save.Instrument alone does not
         commit the binding.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath) - Replace is a SILENT no-op
-        outside the IDE's instance.
+        outside the IDE's instance. On the pylabview default it runs through NI's service when that
+        answers (`routeNote`): over ActiveX this Replace binds nothing (measured).
         THE VERDICT IS `verified`, three conditions: each terminal's type on the SAVED VI's
         connector pane is its .ctl (read with pylabview - a .ctl used elsewhere in the VI does not
         count), every requested terminal is on the panel, and the helper matched as many as asked.
@@ -1093,96 +1094,133 @@ internal sealed class TypedefTools(LvaiConnection connection)
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
         [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
-        await Rpc.GuardAsync(() => BackendRoute.WithBackendAsync(backend, "lvai_bind_pane_typedef", async () =>
+        await Rpc.GuardAsync(async () =>
         {
-            if (!File.Exists(viPath)) return Json.Error("badArguments", $"No .vi at '{viPath}'.");
-            if (!File.Exists(lvclassPath))
-                return Json.Error("badArguments", $"No .lvclass at '{lvclassPath}'.");
-            if (projectPath is { Length: > 0 } && !File.Exists(projectPath))
-                return Json.Error("badArguments", $"No .lvproj at projectPath '{projectPath}'.");
+            var (route, routeNote) = await PaneBindRouteAsync(backend, ct);
+            var answer = await BackendRoute.WithBackendAsync(route, "lvai_bind_pane_typedef", () =>
+                BindPaneCoreAsync(viPath, lvclassPath, bindingsJson, projectPath, helperViPath, helperAixmlPath,
+                                  regenerateHelper, timeoutSeconds, ct));
+            if (routeNote is null || JsonNode.Parse(answer) is not JsonObject o) return answer;
+            o["routeNote"] = routeNote;
+            return Json.Document(o);
+        });
 
-            IReadOnlyList<PaneBinding> bindings;
-            try { bindings = ParseBindings(bindingsJson); }
-            catch (ArgumentException bad) { return Json.Error("badArguments", bad.Message); }
+    /// <summary>
+    /// THE ACTIVEX ROUTE IS A SILENT NO-OP FOR THIS REPLACE - measured 2026-11-14 on LabVIEW 2026
+    /// with a class member's enum control and an enum typedef .ctl, the project active: run over
+    /// ActiveX, the helper answered every stage 0 and `terminals bound: 1`, and the saved VI kept a
+    /// plain enum - with OUR composed helper AND with NI's build of the same helper. The same call
+    /// through NI's service (RunVIAsTopLevel, the add-on's instance) bound it, read back from the
+    /// saved pane. So on the pylabview default the helper runs through NI's service whenever it
+    /// answers, and says so; a call naming its backend gets that backend. With NI's service down the
+    /// ActiveX run stays, and the saved-file verdict reports what it did.
+    /// </summary>
+    internal async Task<(string? Route, string? Note)> PaneBindRouteAsync(string? backend, CancellationToken ct)
+    {
+        if (backend is { Length: > 0 } || AixmlBackend.ServerDefault().Name != AixmlBackend.PyLabview)
+            return (backend, null);
+        var probe = await StatusTools.ProbeServiceAsync(connection, TimeSpan.FromSeconds(5), ct);
+        return probe["reachable"]?.GetValue<bool>() is true
+            ? (AixmlBackend.Grpc, "Ran through NI's service, not over ActiveX: over ActiveX this Replace " +
+                                  "answers success and binds nothing (measured 2026-11-14). Pass backend " +
+                                  "pylabview to force the ActiveX run.")
+            : (null, "NI's service is not reachable, so the helper ran over ActiveX, where this Replace " +
+                     "was measured to answer success and bind nothing (2026-11-14) - judge by `verified`, " +
+                     "read from the saved file. With LabVIEW 2025 or newer, NI's service binds it.");
+    }
 
-            foreach (var binding in bindings)
-                if (!File.Exists(binding.CtlPath))
-                    return Json.Error("badArguments",
-                        $"No .ctl at '{binding.CtlPath}' for terminal '{binding.Terminal}'.");
+    private async Task<string> BindPaneCoreAsync(
+        string viPath, string lvclassPath, string bindingsJson, string? projectPath, string? helperViPath,
+        string? helperAixmlPath, bool regenerateHelper, int timeoutSeconds, CancellationToken ct)
+    {
+        if (!File.Exists(viPath)) return Json.Error("badArguments", $"No .vi at '{viPath}'.");
+        if (!File.Exists(lvclassPath))
+            return Json.Error("badArguments", $"No .lvclass at '{lvclassPath}'.");
+        if (projectPath is { Length: > 0 } && !File.Exists(projectPath))
+            return Json.Error("badArguments", $"No .lvproj at projectPath '{projectPath}'.");
 
-            var aixml = helperAixmlPath ?? ScriptPath(PaneBindHelperAixmlFileName)
-                ?? throw new FileNotFoundException(
-                    "The helper's AIXML source could not be located; pass helperAixmlPath " +
-                    $"explicitly, pointing at {PaneBindHelperAixmlFileName}.");
-            if (!File.Exists(aixml))
-                throw new FileNotFoundException($"No helper AIXML at '{aixml}'.", aixml);
+        IReadOnlyList<PaneBinding> bindings;
+        try { bindings = ParseBindings(bindingsJson); }
+        catch (ArgumentException bad) { return Json.Error("badArguments", bad.Message); }
 
-            var helperVi = Path.GetFullPath(helperViPath ??
-                Path.Combine(AixmlBackend.HelperFolder(),
-                             "lvai_bind_pane_typedef.vi"));
-            if (Path.GetDirectoryName(helperVi) is { Length: > 0 } directory)
-                Directory.CreateDirectory(directory);
+        foreach (var binding in bindings)
+            if (!File.Exists(binding.CtlPath))
+                return Json.Error("badArguments",
+                    $"No .ctl at '{binding.CtlPath}' for terminal '{binding.Terminal}'.");
 
-            var steps = new JsonArray();
-            var helperGenerated = false;
-            if (regenerateHelper || HelperCache.NeedsRebuild(aixml, helperVi))
+        var aixml = helperAixmlPath ?? ScriptPath(PaneBindHelperAixmlFileName)
+            ?? throw new FileNotFoundException(
+                "The helper's AIXML source could not be located; pass helperAixmlPath " +
+                $"explicitly, pointing at {PaneBindHelperAixmlFileName}.");
+        if (!File.Exists(aixml))
+            throw new FileNotFoundException($"No helper AIXML at '{aixml}'.", aixml);
+
+        var helperVi = Path.GetFullPath(helperViPath ??
+            Path.Combine(AixmlBackend.HelperFolder(),
+                         "lvai_bind_pane_typedef.vi"));
+        if (Path.GetDirectoryName(helperVi) is { Length: > 0 } directory)
+            Directory.CreateDirectory(directory);
+
+        var steps = new JsonArray();
+        var helperGenerated = false;
+        if (regenerateHelper || HelperCache.NeedsRebuild(aixml, helperVi))
+        {
+            if (await GenerateHelperAsync(aixml, helperVi, timeoutSeconds, ct: ct)
+                is { } failure) return failure;
+            helperGenerated = true;
+        }
+
+        if (projectPath is { Length: > 0 })
+        {
+            var opened = await new ActionTools(connection).OpenFileAsync(
+                viPath: null, viName: null, projectPath: Path.GetFullPath(projectPath),
+                projectName: Path.GetFileName(projectPath),
+                checkActive: true, timeoutSeconds, ct: ct);
+            steps.Add(new JsonObject
             {
-                if (await GenerateHelperAsync(aixml, helperVi, timeoutSeconds, ct: ct)
-                    is { } failure) return failure;
-                helperGenerated = true;
-            }
+                ["step"] = "openProject",
+                ["answer"] = Parse(opened),
+            });
+            if ((Parse(opened) as JsonObject)?["projectBecameActive"]?.GetValue<bool>() is false)
+                return Json.Error("projectDidNotBecomeActive",
+                    "The project did not become active, and {LV.Control} Replace is a SILENT " +
+                    "no-op outside the IDE's own application instance - it would report " +
+                    "terminals retyped and change nothing.",
+                    new JsonObject { ["steps"] = steps });
+        }
 
-            if (projectPath is { Length: > 0 })
-            {
-                var opened = await new ActionTools(connection).OpenFileAsync(
-                    viPath: null, viName: null, projectPath: Path.GetFullPath(projectPath),
-                    projectName: Path.GetFileName(projectPath),
-                    checkActive: true, timeoutSeconds, ct: ct);
-                steps.Add(new JsonObject
-                {
-                    ["step"] = "openProject",
-                    ["answer"] = Parse(opened),
-                });
-                if ((Parse(opened) as JsonObject)?["projectBecameActive"]?.GetValue<bool>() is false)
-                    return Json.Error("projectDidNotBecomeActive",
-                        "The project did not become active, and {LV.Control} Replace is a SILENT " +
-                        "no-op outside the IDE's own application instance - it would report " +
-                        "terminals retyped and change nothing.",
-                        new JsonObject { ["steps"] = steps });
-            }
+        var inputs = new JsonObject
+        {
+            ["vi path"] = Path.GetFullPath(viPath),
+            ["class path"] = Path.GetFullPath(lvclassPath),
+            ["terminal names"] = string.Join("|", bindings.Select(b => b.Terminal)),
+            ["ctl paths"] =
+                string.Join("|", bindings.Select(b => Path.GetFullPath(b.CtlPath))),
+        }.ToJsonString();
 
-            var inputs = new JsonObject
-            {
-                ["vi path"] = Path.GetFullPath(viPath),
-                ["class path"] = Path.GetFullPath(lvclassPath),
-                ["terminal names"] = string.Join("|", bindings.Select(b => b.Terminal)),
-                ["ctl paths"] =
-                    string.Join("|", bindings.Select(b => Path.GetFullPath(b.CtlPath))),
-            }.ToJsonString();
+        var runner = new RunTools(connection);
+        var answer = await runner.RunViAndReadValuesAsync(
+            helperVi, inputs, includeRawXml: false, helperViPath: null,
+            helperAixmlPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
+        steps.Add(new JsonObject { ["step"] = "bind", ["answer"] = Parse(answer) });
 
-            var runner = new RunTools(connection);
-            var answer = await runner.RunViAndReadValuesAsync(
+        // A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY, measured twice on one fixture. One
+        // retry costs a second and turns a silent no-bind into a bind; more than one would be
+        // guessing, so a second empty reading is reported rather than hammered at.
+        var retried = false;
+        if (StringArray(ValuesOf(answer), "terminal names seen").All(n => n.Length == 0))
+        {
+            retried = true;
+            answer = await runner.RunViAndReadValuesAsync(
                 helperVi, inputs, includeRawXml: false, helperViPath: null,
                 helperAixmlPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
-            steps.Add(new JsonObject { ["step"] = "bind", ["answer"] = Parse(answer) });
+            steps.Add(new JsonObject { ["step"] = "bindRetry", ["answer"] = Parse(answer) });
+        }
 
-            // A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY, measured twice on one fixture. One
-            // retry costs a second and turns a silent no-bind into a bind; more than one would be
-            // guessing, so a second empty reading is reported rather than hammered at.
-            var retried = false;
-            if (StringArray(ValuesOf(answer), "terminal names seen").All(n => n.Length == 0))
-            {
-                retried = true;
-                answer = await runner.RunViAndReadValuesAsync(
-                    helperVi, inputs, includeRawXml: false, helperViPath: null,
-                    helperAixmlPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
-                steps.Add(new JsonObject { ["step"] = "bindRetry", ["answer"] = Parse(answer) });
-            }
-
-            return DescribePaneBind(answer, bindings, viPath, lvclassPath, helperVi, aixml,
-                                    helperGenerated, retried, steps,
-                                    await SavedTypedefsAsync(viPath, timeoutSeconds, ct));
-        }));
+        return DescribePaneBind(answer, bindings, viPath, lvclassPath, helperVi, aixml,
+                                helperGenerated, retried, steps,
+                                await SavedTypedefsAsync(viPath, timeoutSeconds, ct));
+    }
 
     /// <summary>
     /// The pane-bind verdict, kept apart from the RPC work so the part that decides `ok` is
