@@ -1,0 +1,232 @@
+<VI _name="Test Pump API.vi" description="Pump API Tester.">
+<Structure _name="Event Structure" uid="229" uid_parent="276">
+      <Tunnel _id="In1" uid="993" uid_parent="229" cond="true" inputs="value:717.value" />
+      <Tunnel _id="In2" uid="1044" uid_parent="229" cond="true" inputs="value:574.value" />
+      <Tunnel _id="In3" uid="1833" uid_parent="229" cond="true" inputs="value:1848.value" />
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Module Did Init&gt;\3A User Event " uid="531" uid_parent="229">
+        <Tunnel _id="Out1" uid="538" uid_parent="531" inputs="value:" />
+        <Tunnel _id="Out2" uid="791" uid_parent="531" inputs="value:1766.value" />
+        <Tunnel _id="In1" uid="953" uid_parent="531" outputs="value:953.value" />
+        <Tunnel _id="In2" uid="1015" uid_parent="531" outputs="value:1015.value" />
+        <Tunnel _id="Out3" uid="1125" uid_parent="531" inputs="value:1959.resulting string" />
+        <Tunnel _id="Out4" uid="1287" uid_parent="531" inputs="value:2007.x+1" />
+        <Tunnel _id="In3" uid="1766" uid_parent="531" outputs="value:1766.value" />
+        <Indicator _name="Module Running?" type="bool" uid="1205" uid_parent="531" value="false" inputs="value:550.Init?" />
+        <Constant type="string" uid="1997" uid_parent="531" value="%d: %s\0A%s" outputs="value:1997.value" />
+        <Constant type="string" uid="2322" uid_parent="531" value=" initialization succeeded." outputs="value:2322.value" />
+        <Constant type="string" uid="2351" uid_parent="531" value=" initialization failed." outputs="value:2351.value" />
+        <Node _name="Event Data Node" uid="550" uid_parent="531" fields="Init?,Info" outputs="Init?:550.Init?,Info:550.Info" />
+        <Node _name="Format Into String" uid="1959" uid_parent="531" inputs="format string:1997.value,initial string:,error in:,input 1:953.value,input 2:2219.concatenated string,input 3:1015.value" outputs="resulting string:1959.resulting string,error out:" />
+        <Node _name="Increment" uid="2007" uid_parent="531" outputs="x+1:2007.x+1" inputs="x:953.value" />
+        <Node _name="Concatenate Strings" uid="2219" uid_parent="531" inputs="string:550.Info,string:2419.s? t\3Af" outputs="concatenated string:2219.concatenated string" />
+        <Node _name="Select" uid="2419" uid_parent="531" outputs="s? t\3Af:2419.s? t\3Af" inputs="f:2351.value,s:550.Init?,t:2322.value" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Update Module Execution Status&gt;\3A User Event " uid="1764" uid_parent="229">
+        <Tunnel _id="Out1" uid="1788" uid_parent="1764" inputs="value:" />
+        <Tunnel _id="Out2" uid="1794" uid_parent="1764" inputs="value:1830.value" />
+        <Tunnel _id="In1" uid="1799" uid_parent="1764" outputs="value:1799.value" />
+        <Tunnel _id="In2" uid="1803" uid_parent="1764" outputs="value:1803.value" />
+        <Tunnel _id="Out3" uid="1807" uid_parent="1764" inputs="value:1913.resulting string" />
+        <Tunnel _id="Out4" uid="1814" uid_parent="1764" inputs="value:1956.x+1" />
+        <Tunnel _id="In3" uid="1830" uid_parent="1764" outputs="value:1830.value" />
+        <Constant type="string" uid="2027" uid_parent="1764" value="%d: %s\0A%s" outputs="value:2027.value" />
+        <Constant type="string" uid="2006" uid_parent="1764" value="Module reported its execution status." outputs="value:2006.value" />
+        <Node _name="Event Data Node" uid="1863" uid_parent="1764" fields="Running?" outputs="Running?:1863.Running?" />
+        <Node _name="Format Into String" uid="1913" uid_parent="1764" inputs="format string:2027.value,initial string:,error in:,input 1:1799.value,input 2:2006.value,input 3:1803.value" outputs="resulting string:1913.resulting string,error out:" />
+        <Node _name="Increment" uid="1956" uid_parent="1764" outputs="x+1:1956.x+1" inputs="x:1799.value" />
+        <Node _name="Local Variable" uid="2216" uid_parent="1764" element="Module Running?" inputs="Module Running?:1863.Running?" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Module Did Stop&gt;\3A User Event " uid="1305" uid_parent="229">
+        <Tunnel _id="Out1" uid="1314" uid_parent="1305" inputs="value:" />
+        <Tunnel _id="Out2" uid="1319" uid_parent="1305" inputs="value:1773.value" />
+        <Tunnel _id="In1" uid="1323" uid_parent="1305" outputs="value:1323.value" />
+        <Tunnel _id="In2" uid="1327" uid_parent="1305" outputs="value:1327.value" />
+        <Tunnel _id="Out3" uid="1333" uid_parent="1305" inputs="value:1439.resulting string" />
+        <Tunnel _id="Out4" uid="1336" uid_parent="1305" inputs="value:1475.x+1" />
+        <Tunnel _id="In3" uid="1773" uid_parent="1305" outputs="value:1773.value" />
+        <Constant type="string" uid="1570" uid_parent="1305" value="%d: %s\0A%s" outputs="value:1570.value" />
+        <Constant type="string" uid="1542" uid_parent="1305" value=" Did Stop." outputs="value:1542.value" />
+        <Constant _name="Module Did Init?" type="bool" uid="1772" uid_parent="1305" value="false" outputs="value:1772.value" />
+        <Node _name="Event Data Node" uid="1362" uid_parent="1305" fields="Origin" outputs="Origin:1362.Origin" />
+        <Node _name="Format Into String" uid="1439" uid_parent="1305" inputs="format string:1570.value,initial string:,error in:,input 1:1323.value,input 2:1505.concatenated string,input 3:1327.value" outputs="resulting string:1439.resulting string,error out:" />
+        <Node _name="Increment" uid="1475" uid_parent="1305" outputs="x+1:1475.x+1" inputs="x:1323.value" />
+        <Node _name="Concatenate Strings" uid="1505" uid_parent="1305" inputs="string:1362.Origin,string:1542.value" outputs="concatenated string:1505.concatenated string" />
+        <Node _name="Local Variable" uid="1685" uid_parent="1305" element="Module Running?" inputs="Module Running?:1772.value" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Status Updated&gt;\3A User Event " uid="337" uid_parent="229">
+        <Tunnel _id="Out1" uid="344" uid_parent="337" inputs="value:" />
+        <Tunnel _id="Out2" uid="347" uid_parent="337" inputs="value:1779.value" />
+        <Tunnel _id="In1" uid="957" uid_parent="337" outputs="value:957.value" />
+        <Tunnel _id="In2" uid="1019" uid_parent="337" outputs="value:1019.value" />
+        <Tunnel _id="Out3" uid="1146" uid_parent="337" inputs="value:1650.resulting string" />
+        <Tunnel _id="Out4" uid="1291" uid_parent="337" inputs="value:1739.x+1" />
+        <Tunnel _id="In3" uid="1779" uid_parent="337" outputs="value:1779.value" />
+        <Constant type="string" uid="1689" uid_parent="337" value="%d: %s\0A%s" outputs="value:1689.value" />
+        <Node _name="Event Data Node" uid="365" uid_parent="337" fields="Status" outputs="Status:365.Status" />
+        <Node _name="Format Into String" uid="1650" uid_parent="337" inputs="format string:1689.value,initial string:,error in:,input 1:957.value,input 2:365.Status,input 3:1019.value" outputs="resulting string:1650.resulting string,error out:" />
+        <Node _name="Increment" uid="1739" uid_parent="337" inputs="x:957.value" outputs="x+1:1739.x+1" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Error Reported&gt;\3A User Event " uid="1423" uid_parent="229">
+        <Tunnel _id="Out1" uid="1434" uid_parent="1423" inputs="value:" />
+        <Tunnel _id="Out2" uid="1438" uid_parent="1423" inputs="value:1797.value" />
+        <Tunnel _id="In1" uid="1448" uid_parent="1423" outputs="value:1448.value" />
+        <Tunnel _id="In2" uid="1461" uid_parent="1423" outputs="value:1461.value" />
+        <Tunnel _id="Out3" uid="1472" uid_parent="1423" inputs="value:2319.resulting string" />
+        <Tunnel _id="Out4" uid="1489" uid_parent="1423" inputs="value:2395.x+1" />
+        <Tunnel _id="In3" uid="1797" uid_parent="1423" outputs="value:1797.value" />
+        <Constant type="string" uid="2383" uid_parent="1423" value="%d: %s: %s Additional Information: %s\0A%s" outputs="value:2383.value" />
+        <Constant _name="regular expression (&quot;&quot;)" type="string" uid="2439" uid_parent="1423" value="[\\r\\n\5D" outputs="value:2439.value" />
+        <Constant _name="replace all CR/LF with spaces" type="bool" uid="2457" uid_parent="1423" value="true" outputs="value:2457.value" />
+        <Constant _name="type of dialog (OK msg\3A1)" type="uint16" uid="2546" uid_parent="1423" value="0" outputs="value:2546.value" />
+        <Node _name="Event Data Node" uid="1599" uid_parent="1423" fields="Module Name,Additional Information,Error" outputs="Module Name:1599.Module Name,Additional Information:1599.Additional Information,Error:1599.Error" />
+        <Node _name="Format Into String" uid="2319" uid_parent="1423" inputs="format string:2383.value,initial string:,error in:,input 1:1448.value,input 2:1599.Module Name,input 3:1112.result string,input 4:1599.Additional Information,input 5:1461.value" outputs="resulting string:2319.resulting string,error out:" />
+        <Node _name="Increment" uid="2395" uid_parent="1423" outputs="x+1:2395.x+1" inputs="x:1448.value" />
+        <Call uid="1112" uid_parent="1423" adapt="true" instance="Search and Replace Pattern (string).vi" target="Search and Replace Pattern.vi" inputs="string:2465.message,regular expression (&quot;&quot;):2439.value,replace string (&quot;&quot;):2448.String,offset (0):,replace all? (F):2457.value" outputs="result string:1112.result string,offset past match:" />
+        <Call uid="2448" uid_parent="1423" target="Space Constant.vi" outputs="String:2448.String" />
+        <Call uid="2465" uid_parent="1423" target="Simple Error Handler.vi" inputs="error code (no error\3A0):,error source (&quot; &quot;):,type of dialog (OK msg\3A1):2546.value,error in (no error):1599.Error" outputs="error?:,code out:,source out:,error out:,message:2465.message" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Start Module&quot;\3A Value Change " uid="1722" uid_parent="229">
+        <Tunnel _id="Out1" uid="1729" uid_parent="1722" inputs="value:" />
+        <Tunnel _id="Out2" uid="1732" uid_parent="1722" inputs="value:51.error out" />
+        <Tunnel _id="In1" uid="1738" uid_parent="1722" outputs="value:1738.value" />
+        <Tunnel _id="In2" uid="1745" uid_parent="1722" outputs="value:1745.value" />
+        <Tunnel _id="Out3" uid="1749" uid_parent="1722" inputs="value:1745.value" />
+        <Tunnel _id="Out4" uid="1753" uid_parent="1722" inputs="value:1738.value" />
+        <Tunnel _id="In3" uid="1801" uid_parent="1722" outputs="value:1801.value" />
+        <Control _name="Start Module" type="bool" style="latched" uid="1470" uid_parent="1722" value="false" outputs="value:" />
+        <Control _name="Show Diagram on Init" type="bool" uid="2276" uid_parent="1722" value="false" outputs="value:2276.value" />
+        <Node _name="Event Data Node" uid="1783" uid_parent="1722" fields="NewVal" outputs="NewVal:" />
+        <Node _name="Register For Events" uid="367" uid_parent="1722" outputs="event registration refnum:367.event registration refnum,error out:367.error out" inputs="event registration refnum:367.value,error in (no error):588.error out,event source:588.Pump Broadcast Events" />
+        <Call uid="588" uid_parent="1722" target="Pump.lvlib:Start Module.vi" inputs="Show Main VI Diagram on Init (F):2276.value,error in:1801.value" outputs="error out:588.error out,Wait for Event Sync?:588.Wait for Event Sync?,Pump Broadcast Events:588.Pump Broadcast Events,Module Was Already Running?:588.Module Was Already Running?,Module Name:" />
+        <Call uid="51" uid_parent="1722" target="Pump.lvlib:Synchronize Module Events.vi" outputs="error out:51.error out" inputs="error in:367.error out,Wait for Event Sync?:588.Wait for Event Sync?" />
+        <Node _name="Local Variable" uid="2163" uid_parent="1722" element="Module Running?" inputs="Module Running?:588.Module Was Already Running?" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Show Module Panel&quot;\3A Value Change " uid="1321" uid_parent="229">
+        <Tunnel _id="Out1" uid="1328" uid_parent="1321" inputs="value:" />
+        <Tunnel _id="Out2" uid="1332" uid_parent="1321" inputs="value:1381.error out" />
+        <Tunnel _id="In1" uid="984" uid_parent="1321" outputs="value:984.value" />
+        <Tunnel _id="In2" uid="1035" uid_parent="1321" outputs="value:1035.value" />
+        <Tunnel _id="Out3" uid="1180" uid_parent="1321" inputs="value:1035.value" />
+        <Tunnel _id="Out4" uid="1307" uid_parent="1321" inputs="value:984.value" />
+        <Tunnel _id="In3" uid="1821" uid_parent="1321" outputs="value:1821.value" />
+        <Control _name="Show Module Panel" type="bool" style="latched" uid="338" uid_parent="1321" value="false" outputs="value:" />
+        <Node _name="Event Data Node" uid="1350" uid_parent="1321" fields="OldVal" outputs="OldVal:" />
+        <Call uid="1381" uid_parent="1321" target="Pump.lvlib:Show Panel.vi" inputs="error in:1821.value" outputs="error out:1381.error out" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Hide Module Panel&quot;\3A Value Change " uid="1476" uid_parent="229">
+        <Tunnel _id="Out1" uid="1483" uid_parent="1476" inputs="value:" />
+        <Tunnel _id="Out2" uid="1486" uid_parent="1476" inputs="value:1523.error out" />
+        <Tunnel _id="In1" uid="989" uid_parent="1476" outputs="value:989.value" />
+        <Tunnel _id="In2" uid="1039" uid_parent="1476" outputs="value:1039.value" />
+        <Tunnel _id="Out3" uid="1184" uid_parent="1476" inputs="value:1039.value" />
+        <Tunnel _id="Out4" uid="1311" uid_parent="1476" inputs="value:989.value" />
+        <Tunnel _id="In3" uid="1825" uid_parent="1476" outputs="value:1825.value" />
+        <Control _name="Hide Module Panel" type="bool" style="latched" uid="476" uid_parent="1476" value="false" outputs="value:" />
+        <Node _name="Event Data Node" uid="1504" uid_parent="1476" fields="Source" outputs="Source:" />
+        <Call uid="1523" uid_parent="1476" target="Pump.lvlib:Hide Panel.vi" inputs="error in:1825.value" outputs="error out:1523.error out" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Show Block Diagram&quot;\3A Value Change " uid="2033" uid_parent="229">
+        <Tunnel _id="Out1" uid="2059" uid_parent="2033" inputs="value:" />
+        <Tunnel _id="Out2" uid="2064" uid_parent="2033" inputs="value:2062.error out" />
+        <Tunnel _id="In1" uid="2070" uid_parent="2033" outputs="value:2070.value" />
+        <Tunnel _id="In2" uid="2077" uid_parent="2033" outputs="value:2077.value" />
+        <Tunnel _id="Out3" uid="2112" uid_parent="2033" inputs="value:2077.value" />
+        <Tunnel _id="Out4" uid="2119" uid_parent="2033" inputs="value:2070.value" />
+        <Tunnel _id="In3" uid="2147" uid_parent="2033" outputs="value:2147.value" />
+        <Control _name="Show Block Diagram" type="bool" style="latched" uid="2069" uid_parent="2033" value="false" outputs="value:" />
+        <Node _name="Event Data Node" uid="2188" uid_parent="2033" fields="NewVal" outputs="NewVal:" />
+        <Call uid="2062" uid_parent="2033" target="Pump.lvlib:Show Diagram.vi" outputs="error out:2062.error out" inputs="error in:2147.value" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Stop Module&quot;\3A Value Change " uid="1026" uid_parent="229">
+        <Tunnel _id="Out1" uid="1179" uid_parent="1026" inputs="value:" />
+        <Tunnel _id="Out2" uid="1183" uid_parent="1026" inputs="value:1616.error out" />
+        <Tunnel _id="In1" uid="1198" uid_parent="1026" outputs="value:1198.value" />
+        <Tunnel _id="In2" uid="1204" uid_parent="1026" outputs="value:1204.value" />
+        <Tunnel _id="Out3" uid="1229" uid_parent="1026" inputs="value:1204.value" />
+        <Tunnel _id="Out4" uid="1234" uid_parent="1026" inputs="value:1198.value" />
+        <Tunnel _id="In3" uid="1829" uid_parent="1026" outputs="value:1829.value" />
+        <Control _name="Stop Module" type="bool" style="latched" uid="271" uid_parent="1026" value="false" outputs="value:" />
+        <Constant _name="Origin" type="string" uid="1713" uid_parent="1026" value="Pump Tester sent Stop Message." outputs="value:1713.value" />
+        <Node _name="Event Data Node" uid="1255" uid_parent="1026" fields="Source" outputs="Source:" />
+        <Call uid="1616" uid_parent="1026" target="Pump.lvlib:Stop Module.vi" inputs="Timeout to Wait for Stop (s) (-1\3A no timeout):,error in:1829.value,Wait for Module to Stop? (F):,Origin:1713.value" outputs="error out:1616.error out" />
+      </CaseFrame>
+      <CaseFrame selector=" Panel Close? " uid="237" uid_parent="229">
+        <Tunnel _id="Out1" uid="512" uid_parent="237" inputs="value:270.value" />
+        <Tunnel _id="Out2" uid="787" uid_parent="237" inputs="value:1760.value" />
+        <Tunnel _id="In1" uid="949" uid_parent="237" outputs="value:949.value" />
+        <Tunnel _id="In2" uid="1011" uid_parent="237" outputs="value:1011.value" />
+        <Tunnel _id="Out3" uid="1108" uid_parent="237" inputs="value:1011.value" />
+        <Tunnel _id="Out4" uid="1283" uid_parent="237" inputs="value:949.value" />
+        <Tunnel _id="In3" uid="1760" uid_parent="237" outputs="value:1760.value" />
+        <Constant _name="Discard?" type="bool" uid="270" uid_parent="237" value="true" outputs="value:270.value" />
+        <Node _name="Event Data Node" uid="258" uid_parent="237" fields="Source" outputs="Source:" />
+        <Node _name="Event Filter Node" uid="439" uid_parent="237" fields="Discard?" inputs="Discard?:270.value" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Level Reached&gt;\3A User Event " uid="1099" uid_parent="229">
+        <Tunnel _id="Out1" uid="1107" uid_parent="1099" inputs="value:" />
+        <Tunnel _id="Out2" uid="1111" uid_parent="1099" inputs="value:1128.value" />
+        <Tunnel _id="In1" uid="1115" uid_parent="1099" outputs="value:1115.value" />
+        <Tunnel _id="In2" uid="1118" uid_parent="1099" outputs="value:1118.value" />
+        <Tunnel _id="Out3" uid="1121" uid_parent="1099" inputs="value:1427.resulting string" />
+        <Tunnel _id="Out4" uid="1124" uid_parent="1099" inputs="value:1409.x+1" />
+        <Tunnel _id="In3" uid="1128" uid_parent="1099" outputs="value:1128.value" />
+        <Constant _name="format string" type="string" uid="1581" uid_parent="1099" value="Response Received - %s" outputs="value:1581.value" comment="#DQMH_CodeNeeded Replace this format string with a meaningful value for this broadcast\2C then wire broadcast data from the Event Data Node to the input(s) of the Format Into String function." />
+        <Constant _name="format string" type="string" uid="1606" uid_parent="1099" value="%d: %s\0A%s" outputs="value:1606.value" />
+        <Node _name="Event Data Node" uid="1150" uid_parent="1099" fields="Source,Type,Time,UsrEvtRef,Level" outputs="Source:,Type:,Time:,UsrEvtRef:,Level:" />
+        <Node _name="Increment" uid="1409" uid_parent="1099" outputs="x+1:1409.x+1" inputs="x:1115.value" />
+        <Node _name="Format Into String" uid="1427" uid_parent="1099" inputs="format string:1606.value,initial string:,error in:,input 1:1115.value,input 2:1500.resulting string,input 3:1118.value" outputs="resulting string:1427.resulting string,error out:" />
+        <Node _name="Format Into String" uid="1500" uid_parent="1099" outputs="resulting string:1500.resulting string,error out:" inputs="format string:1581.value,initial string:,error in:,input 1:" />
+        <FreeLabel comment="#DQMH_CodeNeeded\0A1. Process the event data sent by the &quot;Level Reached&quot; broadcast event.\0A2. Delete or edit this label when done." uid="1092" uid_parent="1099" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Level Low&gt;\3A User Event " uid="1216" uid_parent="229">
+        <Tunnel _id="Out1" uid="1230" uid_parent="1216" inputs="value:" />
+        <Tunnel _id="Out2" uid="1235" uid_parent="1216" inputs="value:1254.value" />
+        <Tunnel _id="In1" uid="1238" uid_parent="1216" outputs="value:1238.value" />
+        <Tunnel _id="In2" uid="1241" uid_parent="1216" outputs="value:1241.value" />
+        <Tunnel _id="Out3" uid="1245" uid_parent="1216" inputs="value:1787.resulting string" />
+        <Tunnel _id="Out4" uid="1249" uid_parent="1216" inputs="value:1759.x+1" />
+        <Tunnel _id="In3" uid="1254" uid_parent="1216" outputs="value:1254.value" />
+        <Constant _name="format string" type="string" uid="1880" uid_parent="1216" value="Response Received - %s" outputs="value:1880.value" comment="#DQMH_CodeNeeded Replace this format string with a meaningful value for this broadcast\2C then wire broadcast data from the Event Data Node to the input(s) of the Format Into String function." />
+        <Constant _name="format string" type="string" uid="1895" uid_parent="1216" value="%d: %s\0A%s" outputs="value:1895.value" />
+        <Node _name="Event Data Node" uid="1284" uid_parent="1216" fields="Source,Type,Time,UsrEvtRef,Level" outputs="Source:,Type:,Time:,UsrEvtRef:,Level:" />
+        <Node _name="Increment" uid="1759" uid_parent="1216" outputs="x+1:1759.x+1" inputs="x:1238.value" />
+        <Node _name="Format Into String" uid="1787" uid_parent="1216" inputs="format string:1895.value,initial string:,error in:,input 1:1238.value,input 2:1835.resulting string,input 3:1241.value" outputs="resulting string:1787.resulting string,error out:" />
+        <Node _name="Format Into String" uid="1835" uid_parent="1216" outputs="resulting string:1835.resulting string,error out:" inputs="format string:1880.value,initial string:,error in:,input 1:" />
+        <FreeLabel comment="#DQMH_CodeNeeded\0A1. Process the event data sent by the &quot;Level Low&quot; broadcast event.\0A2. Delete or edit this label when done." uid="1200" uid_parent="1216" />
+      </CaseFrame>
+      <CaseFrame selector=" &lt;Pump Broadcast Events.Tank Empty&gt;\3A User Event " uid="1243" uid_parent="229">
+        <Tunnel _id="Out1" uid="1265" uid_parent="1243" inputs="value:" />
+        <Tunnel _id="Out2" uid="1277" uid_parent="1243" inputs="value:1334.value" />
+        <Tunnel _id="In1" uid="1282" uid_parent="1243" outputs="value:1282.value" />
+        <Tunnel _id="In2" uid="1316" uid_parent="1243" outputs="value:1316.value" />
+        <Tunnel _id="Out3" uid="1322" uid_parent="1243" inputs="value:2120.resulting string" />
+        <Tunnel _id="Out4" uid="1329" uid_parent="1243" inputs="value:2099.x+1" />
+        <Tunnel _id="In3" uid="1334" uid_parent="1243" outputs="value:1334.value" />
+        <Constant _name="format string" type="string" uid="2223" uid_parent="1243" value="Response Received - %s" outputs="value:2223.value" comment="#DQMH_CodeNeeded Replace this format string with a meaningful value for this broadcast\2C then wire broadcast data from the Event Data Node to the input(s) of the Format Into String function." />
+        <Constant _name="format string" type="string" uid="2266" uid_parent="1243" value="%d: %s\0A%s" outputs="value:2266.value" />
+        <Node _name="Event Data Node" uid="1372" uid_parent="1243" fields="Source,Type,Time,UsrEvtRef,Remaining" outputs="Source:,Type:,Time:,UsrEvtRef:,Remaining:" />
+        <Node _name="Increment" uid="2099" uid_parent="1243" outputs="x+1:2099.x+1" inputs="x:1282.value" />
+        <Node _name="Format Into String" uid="2120" uid_parent="1243" inputs="format string:2266.value,initial string:,error in:,input 1:1282.value,input 2:2162.resulting string,input 3:1316.value" outputs="resulting string:2120.resulting string,error out:" />
+        <Node _name="Format Into String" uid="2162" uid_parent="1243" outputs="resulting string:2162.resulting string,error out:" inputs="format string:2223.value,initial string:,error in:,input 1:" />
+        <FreeLabel comment="#DQMH_CodeNeeded\0A1. Process the event data sent by the &quot;Tank Empty&quot; broadcast event.\0A2. Delete or edit this label when done." uid="1201" uid_parent="1243" />
+      </CaseFrame>
+      <CaseFrame selector=" &quot;Set Speed&quot;\3A Value Change " uid="1320" uid_parent="229">
+        <Tunnel _id="Out1" uid="1340" uid_parent="1320" inputs="value:" />
+        <Tunnel _id="Out2" uid="1365" uid_parent="1320" inputs="value:1635.error out" />
+        <Tunnel _id="In1" uid="1370" uid_parent="1320" outputs="value:1370.value" />
+        <Tunnel _id="In2" uid="1488" uid_parent="1320" outputs="value:1488.value" />
+        <Tunnel _id="Out3" uid="1503" uid_parent="1320" inputs="value:1488.value" />
+        <Tunnel _id="Out4" uid="1527" uid_parent="1320" inputs="value:1370.value" />
+        <Tunnel _id="In3" uid="1569" uid_parent="1320" outputs="value:1569.value" />
+        <Control _name="Set Speed" type="bool" style="latched" uid="1202" uid_parent="1320" value="false" outputs="value:" />
+        <Control _name="Speed" type="double" uid="1593" uid_parent="1320" value="0" outputs="value:1593.value" />
+        <Node _name="Event Data Node" uid="1649" uid_parent="1320" fields="Source" outputs="Source:" />
+        <Call uid="1635" uid_parent="1320" target="Pump.lvlib:Set Speed.vi" inputs="error in:1569.value,Speed:1593.value" outputs="error out:1635.error out" />
+        <FreeLabel comment="#DQMH_CodeNeeded\0A1. Position the new &quot;Set Speed&quot; button appropriately on the front panel.\0A2. Delete or edit this label when done." uid="1203" uid_parent="1320" />
+      </CaseFrame>
+      <Tunnel _id="Out1" uid="516" uid_parent="229" cond="true" outputs="value:516.value" />
+      <Tunnel _id="Out2" uid="795" uid_parent="229" outputs="value:795.value" />
+      <Tunnel _id="Out3" uid="1190" uid_parent="229" outputs="value:1190.value" />
+      <Tunnel _id="Out4" uid="1315" uid_parent="229" outputs="value:1315.value" />
+    </Structure>
+</VI>

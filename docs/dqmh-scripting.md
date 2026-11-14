@@ -1273,6 +1273,33 @@ it checks DQMH structure, not whether the code runs. `lvai_dqmh_validate_module`
 
 Not measured: whether a person's clean-up of those frames is scriptable; a Cloneable module.
 
+### 9d-a. Remove Event cleans up FIRST (2026-11-14)
+
+A field project listed it: Delacor's Remove Event deletes the event's VIs and leaves the rest broken.
+Measured on DQMH 7.1.2 / LabVIEW 2026, module `Pump`, after removing a Request: Main.vi's Event
+Handling Loop keeps the event's case EMPTIED (`Event Structure 'DQMH_EVENT_MAIN': One or more event
+cases have no events defined`, and `Dynamic event configuration does not match`), its message frame
+stays with a `#DQMH_Code_Review_Todo` label - and once the deleted argument typedef has left memory,
+that frame breaks Main.vi too (`Type Definition 'Set Speed Argument': not found`) - and the tester
+keeps the button frame calling the deleted VI (a Broadcast: its user-event frame).
+
+Taking those out AFTERWARDS does not work: each is the last holder of a file Delacor deleted while
+it was modified in memory, and removing it raises "Set Speed.vi / Set Flow Argument--cluster.ctl
+... is about to leave memory - Save / Don't Save" with Cancel disabled ("Programmatic close cannot be
+cancelled"). The scripting stops behind it, and the ActiveX runner's abort on its timeout then left
+LabVIEW in "Resetting VI: ..." for good - twice, LabVIEW had to be ended. Taken out BEFORE Delacor
+ran, on the same module, nothing prompted, Delacor's Remove Event ran clean and Main.vi stayed
+executable.
+
+So `lvai_dqmh_remove_event` runs `cleanupBefore` before Delacor: from the reader's export of the
+tester, every frame of the event's user event (`<Pump Broadcast Events.X>`) or calling its VI; from
+Main.vi's export, the Event Handling Loop case of `<Pump Request Events.X>` and the message frame
+`"X"`; for a Broadcast the loose call (`lvdqmh_remove_loose_call`). Frames go through
+`scripts/lvbd_remove_frames.xml` - one multi-frame structure picked by class and FRAME COUNT, indices
+highest first; a count shared with another structure of the class is reported, not guessed. Live:
+a Request and a Broadcast created and removed, Main.vi `execState` 1 before and after each, no
+dialog. A Round Trip's broadcast half (removed by Delacor with its request) keeps its tester frame.
+
 ### 9e. Module functions, the template, and the save dialog - measured 2026-10-06
 
 **Rename module, RT tester, Remove Do Something** are wrappers like §9d -

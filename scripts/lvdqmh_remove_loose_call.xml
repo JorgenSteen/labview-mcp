@@ -1,4 +1,4 @@
-<VI _name="lvdqmh_remove_loose_call.vi" description="Takes the LOOSE call Delacor drops for a new Broadcast (or a DQMH 7 private request) back out of a module's Main.vi\2C and the #CodeNeeded label anchored to it. Delacor puts the event VI on the root diagram with every input unwired\2C which leaves Main.vi NOT executable until somebody places it where the module fires the event (docs/dqmh-scripting.md 6.10). A call of the event VI is deleted only when NONE of its terminals is wired - a call the author has placed and wired stays - and a free label is deleted only when it names the marker (CodeNeeded) and the event (its quoted name). Main.vi is saved only when something was deleted\2C so a second run changes nothing. The label pass runs AFTER the call pass\3A an anchored comment is not a free Text object until its node is gone (measured 2026-11-14 on DQMH 7.1.2). A deleted object's reference is not closed - LabVIEW answers 1055\2C and that error skipped the save.\0A\0AMain.vi is reached in the ACTIVE PROJECT's application instance\3A a scripting edit made in any other instance reports success and changes nothing. Used by lvai_dqmh_new_event.">
+<VI _name="lvdqmh_remove_loose_call.vi" description="Takes the LOOSE call Delacor drops for a new Broadcast (or a DQMH 7 private request) back out of a module's Main.vi\2C and the #CodeNeeded label anchored to it. Delacor puts the event VI on the root diagram with every input unwired\2C which leaves Main.vi NOT executable until somebody places it where the module fires the event (docs/dqmh-scripting.md 6.10). A call of the event VI is deleted only when NONE of its terminals is wired - a call the author has placed and wired stays - and a free label is deleted only when it names the marker (CodeNeeded) and the event (its quoted name). Main.vi is saved only when something was deleted\2C so a second run changes nothing. A label is deleted only when this run deleted a call - a Request's own #CodeNeeded label in its message frame names the event too (measured\3A deleted by mistake before this rule). The label pass runs AFTER the call pass\3A an anchored comment is not a free Text object until its node is gone (measured 2026-11-14 on DQMH 7.1.2). A deleted object's reference is not closed - LabVIEW answers 1055\2C and that error skipped the save.\0A\0AMain.vi is reached in the ACTIVE PROJECT's application instance\3A a scripting edit made in any other instance reports success and changes nothing. Used by lvai_dqmh_new_event.">
   <Control _name="Main VI Path" outputs="value:4200.value" type="path" uid="4200" uid_parent="root" value=""/>
   <Control _name="Event VI Name" outputs="value:4201.value" type="string" uid="4201" uid_parent="root" value=""/>
   <Control _name="Quoted Event Name" outputs="value:4202.value" type="string" uid="4202" uid_parent="root" value=""/>
@@ -79,6 +79,7 @@
     <Tunnel _id="In2" inputs="value:4202.value" outputs="value:4402.value" uid="4402" uid_parent="4400"/>
     <Tunnel _id="In3" inputs="value:4219.value" outputs="value:4403.value" uid="4403" uid_parent="4400"/>
     <Tunnel _id="In4" inputs="value:4221.value" outputs="value:4404.value" uid="4404" uid_parent="4400"/>
+    <Tunnel _id="In5" inputs="value:4304.value" outputs="value:4420.value" uid="4420" uid_parent="4400"/>
     <ShiftReg uid="4405" uid_parent="4400">
       <Left inputs="value:4218.err" outputs="value:4406.value" uid="4406" uid_parent="4405"/>
       <Right inputs="value:4445.value" outputs="value:4407.value" uid="4407" uid_parent="4405"/>
@@ -93,8 +94,10 @@
     <Node _name="Search/Split String" inputs="string:4412.str,search string/char (-):4402.value,offset (0):" outputs="substring before match:,match + rest of string:,offset of match:4414.at" uid="4414" uid_parent="4400"/>
     <Node _name="Greater Or Equal To 0?" inputs="x:4413.at" outputs="x &gt;= 0?:4415.marker" uid="4415" uid_parent="4400"/>
     <Node _name="Greater Or Equal To 0?" inputs="x:4414.at" outputs="x &gt;= 0?:4416.event" uid="4416" uid_parent="4400"/>
-    <Node _name="And" inputs="x:4415.marker,y:4416.event" outputs="x .and. y?:4417.del" uid="4417" uid_parent="4400"/>
-    <Structure _name="Case Structure" selectin="4417.del" uid="4440" uid_parent="4400">
+    <Node _name="And" inputs="x:4415.marker,y:4416.event" outputs="x .and. y?:4417.both" uid="4417" uid_parent="4400"/>
+    <Node _name="Greater Than 0?" inputs="x:4420.value" outputs="x &gt; 0?:4421.calls" uid="4421" uid_parent="4400"/>
+    <Node _name="And" inputs="x:4417.both,y:4421.calls" outputs="x .and. y?:4422.del" uid="4422" uid_parent="4400"/>
+    <Structure _name="Case Structure" selectin="4422.del" uid="4440" uid_parent="4400">
       <Tunnel _id="In1" inputs="value:4412.text" uid="4441" uid_parent="4440"/>
       <Tunnel _id="In2" inputs="value:4412.err" uid="4442" uid_parent="4440"/>
       <Tunnel _id="In3" inputs="value:4409.value" uid="4443" uid_parent="4440"/>

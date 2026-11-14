@@ -65,9 +65,10 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
     [Description("""
         DQMH: removes one event from a module in the ACTIVE project, no dialog (Delacor's Remove
         Event.vi). Removing a Round Trip's REQUEST removes its broadcast half too
-        (`dependentBroadcast`). Delacor leaves clean-up for a person: Main.vi keeps a loose call to
-        a removed Broadcast and a #Code_Review_Todo frame, the API tester keeps the event's frame -
-        so both are typically NOT executable afterwards; `completionNeeded` says what to clean up.
+        (`dependentBroadcast`). What Delacor would leave broken is taken out FIRST (`cleanupBefore`):
+        the tester's frames of the event, Main.vi's event case and message frame, a Broadcast's loose
+        call - removed after Delacor, each would raise an uncancellable save prompt (measured). A
+        Round Trip's broadcast half keeps its tester frame; `completionNeeded` says what is left.
         Unit tests of the event are NOT removed; deleted files are listed. Refused while any module
         has unsaved changes or is locked.
         """)]
@@ -81,7 +82,8 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
             () => RunAsync(new EditAction(
             "remove", "lvdqmh_remove_event", RemoveTargets, moduleName, eventName, [],
             ["Dependent Broadcast?", "Dependent Broadcast Name"], null,
-            SubHelpers: EventSubHelpers, Completion: RemoveCompletion), timeoutSeconds, ct)));
+            SubHelpers: EventSubHelpers, Completion: RemoveCompletion,
+            PreScript: RemoveEventPreAsync), timeoutSeconds, ct)));
 
     [McpServerTool(Name = "lvai_dqmh_rename_event", Destructive = true, OpenWorld = true,
         Title = "Rename a DQMH event")]
@@ -504,7 +506,13 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         Func<Context, Task<string?>>? PreCheck, string? PostModuleName = null,
         string[]? SubHelpers = null, bool SaveLibrary = false, string? Completion = null,
         string? ClassicOnly = null, bool V7Only = false,
-        Func<Context, Dictionary<string, string>>? LateInputs = null);
+        Func<Context, Dictionary<string, string>>? LateInputs = null,
+        Func<Cleanup, Task<JsonObject>>? PreScript = null);
+
+    /// <summary>What a pre- or post-scripting clean-up step works with.</summary>
+    internal sealed record Cleanup(
+        DqmhHeadless Headless, DqmhTools Dqmh, string Scripts, string? ProjectPath, string Module,
+        string? Event, string MainVi, string Tester, JsonArray Steps, int TimeoutSeconds, CancellationToken Ct);
 
     /// <summary>The two helpers every event-edit wrapper calls - see EnsureWrapperAsync.</summary>
     private static readonly string[] EventSubHelpers = ["lvdqmh_close_modules", "lvdqmh_pick_event"];
@@ -649,6 +657,9 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         var before = DqmhHeadless.Snapshot.TakeOf(projectPath);
         var mainExecBefore = File.Exists(mainVi) ? await headless.ExecStateAsync(mainVi, timeoutSeconds, ct) : null;
         var testerExecBefore = File.Exists(tester) ? await headless.ExecStateAsync(tester, timeoutSeconds, ct) : null;
+        var cleanup = new Cleanup(headless, dqmh, scripts, projectPath, module, evt, mainVi, tester, steps,
+                                  timeoutSeconds, ct);
+        var preCleanup = action.PreScript is null ? null : await action.PreScript(cleanup);
         IReadOnlyList<LvValuesXml.Value>? run;
         JsonArray dialogs;
         var watch = DqmhDialogWatch.Start();
@@ -734,6 +745,7 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         var (dirtyAfter, _) = await DqmhHeadless.ProjectDirtyAsync(dqmh, scripts, projectPath,
             timeoutSeconds, ct);
         var saved = await DqmhHeadless.SaveNamedAsync(dqmh, scripts, dirtyAfter ?? [], timeoutSeconds, ct);
+
         var unsaved = (await DqmhHeadless.ProjectDirtyAsync(dqmh, scripts, projectPath,
             timeoutSeconds, ct)).Dirty ?? [];
 
@@ -766,6 +778,7 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
             ["savedMembers"] = DqmhHeadless.Array(saved),
             ["unsavedMembers"] = DqmhHeadless.Array(unsaved),
             ["librarySaved"] = librarySave,
+            ["cleanupBefore"] = preCleanup,
             ["dialogsAnswered"] = dialogs,
             ["completionNeeded"] = CompletionList(action, mainExec, testerExec, module),
             ["adoptedHelpers"] = DqmhHeadless.Array(adopted),
@@ -802,12 +815,167 @@ internal sealed class DqmhEventEditTools(LvaiConnection connection)
         "Delacor leaves the project's virtual folder named `<old name> Module`; rename it in the " +
         "project if the label matters.";
 
+    private const string FramesHelper = "lvbd_remove_frames";
+    private const string LooseCallHelper = "lvdqmh_remove_loose_call";
+
+    /// <summary>
+    /// BEFORE Delacor's Remove Event, everything it would leave behind: the tester's frames of the
+    /// event, Main.vi's Event Handling Loop case for it and its message frame, and for a broadcast
+    /// the loose call Main.vi may still hold. Delacor leaves those broken (an emptied case "One or
+    /// more event cases have no events defined", a #DQMH_Code_Review_Todo frame unbundling the
+    /// DELETED argument typedef, the tester calling the deleted VI). They go BEFORE it, because
+    /// after it each one is the last holder of a file Delacor deleted while it was modified in
+    /// memory, so removing it raises "...is about to leave memory - Save / Don't Save", a
+    /// programmatic close that cannot be cancelled and stops every call; aborting a helper blocked
+    /// on it left LabVIEW in "Resetting VI" for good, twice (measured 2026-11-14, DQMH 7.1.2,
+    /// LabVIEW 2026). Removed first, Delacor's Remove Event ran clean on the same module and Main.vi
+    /// stayed executable.
+    /// </summary>
+    private static async Task<JsonObject> RemoveEventPreAsync(Cleanup c)
+    {
+        var result = new JsonObject();
+        if (c.Event is null) return result;
+        var bare = Path.GetFileNameWithoutExtension(c.Event);
+        var bareModule = Path.GetFileNameWithoutExtension(c.Module);
+        if (File.Exists(c.Tester))
+            result["tester"] = await RemoveFramesAsync(c, c.Tester, aixml =>
+                TesterFramesOf(aixml, bareModule, $"{c.Module}:{c.Event}", bare));
+        if (File.Exists(c.MainVi))
+        {
+            result["mainEventCase"] = await RemoveFramesAsync(c, c.MainVi, aixml =>
+                MainEventFramesOf(aixml, bareModule, bare));
+            result["mainMessageFrame"] = await RemoveFramesAsync(c, c.MainVi, aixml =>
+                MainMessageFramesOf(aixml, bare));
+        }
+        if (File.Exists(c.MainVi) && File.Exists(Path.Combine(c.Scripts, LooseCallHelper + ".xml")))
+        {
+            var failure = await c.Headless.EnsureWrapperAsync(c.Scripts, LooseCallHelper, [], c.ProjectPath, c.Steps,
+                c.TimeoutSeconds, c.Ct);
+            var run = failure is null ? await c.Dqmh.RunAsync(c.Scripts, LooseCallHelper, new()
+            {
+                ["Main VI Path"] = c.MainVi,
+                ["Event VI Name"] = $"{c.Module}:{c.Event}",
+                ["Quoted Event Name"] = "\"" + bare + "\"",
+            }, c.TimeoutSeconds, c.Ct) : null;
+            result["mainLooseCall"] = run is null
+                ? new JsonObject { ["ran"] = false, ["reason"] = failure ?? $"{LooseCallHelper} could not be run" }
+                : new JsonObject
+                {
+                    ["callsDeleted"] = DqmhTools.Scalar(run, "Calls Deleted"),
+                    ["labelsDeleted"] = DqmhTools.Scalar(run, "Labels Deleted"),
+                    ["error"] = DqmhTools.Failed(run),
+                };
+        }
+        return result;
+    }
+
+    /// <summary>Frames to take out of ONE structure: its class, its frame count, the indices (highest first).</summary>
+    internal sealed record FrameChoice(string StructureClass, int FrameCount, List<int> Frames, string? Problem = null);
+
+    /// <summary>Export the VI, choose the frames, remove them through the frame helper.</summary>
+    private static async Task<JsonObject> RemoveFramesAsync(Cleanup c, string vi, Func<string, FrameChoice> choose)
+    {
+        var (aixml, code, message) = await c.Headless.ExportAsync(vi, "dqmh-cleanup", c.TimeoutSeconds, c.Ct);
+        if (aixml is null)
+            return new JsonObject { ["ran"] = false, ["reason"] = $"the export failed ({code}): {message}" };
+        var choice = choose(aixml);
+        if (choice.Problem is not null) return new JsonObject { ["ran"] = false, ["reason"] = choice.Problem };
+        if (choice.Frames.Count == 0) return new JsonObject { ["framesRemoved"] = 0 };
+        if (!File.Exists(Path.Combine(c.Scripts, FramesHelper + ".xml")))
+            return new JsonObject { ["ran"] = false, ["reason"] = $"{FramesHelper}.xml is missing from the scripts folder" };
+        if (await c.Headless.EnsureWrapperAsync(c.Scripts, FramesHelper, [], c.ProjectPath, c.Steps,
+                c.TimeoutSeconds, c.Ct) is { } failure)
+            return new JsonObject { ["ran"] = false, ["reason"] = failure };
+        var run = await c.Dqmh.RunAsync(c.Scripts, FramesHelper, new()
+        {
+            ["VI Path"] = vi,
+            ["Structure Class"] = choice.StructureClass,
+            ["Frame Count"] = choice.FrameCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["Frame Indices"] = "<Array><Name>Frame Indices</Name><Dimsize>" + choice.Frames.Count + "</Dimsize>" +
+                                string.Concat(choice.Frames.Select(f => $"<I32><Name></Name><Val>{f}</Val></I32>")) + "</Array>",
+        }, c.TimeoutSeconds, c.Ct);
+        return run is null
+            ? new JsonObject { ["ran"] = false, ["reason"] = $"{FramesHelper} could not be run" }
+            : new JsonObject
+            {
+                ["structure"] = $"{choice.StructureClass} of {choice.FrameCount} frames",
+                ["framesAsked"] = new JsonArray([.. choice.Frames.Select(f => (JsonNode)f)]),
+                ["framesRemoved"] = DqmhTools.Scalar(run, "Frames Removed"),
+                ["error"] = DqmhTools.Failed(run),
+            };
+    }
+
+    /// <summary>The structures of one kind in an exported VI, each as its frames' (selector, label, call targets, free-label texts).</summary>
+    private static List<List<(string Selector, string Label, List<string> Calls, List<string> Notes)>> Structures(
+        string aixml, string name)
+    {
+        var end = aixml.IndexOf("</VI>", StringComparison.Ordinal);
+        var doc = System.Xml.Linq.XElement.Parse(end > 0 ? aixml[..(end + 5)] : aixml);
+        return [.. doc.Descendants("Structure").Where(s => (string?)s.Attribute("_name") == name)
+            .Select(s => s.Elements("CaseFrame").Select(f => (
+                ((string?)f.Attribute("selector") ?? "").Trim(),
+                (string?)f.Attribute("label") ?? "",
+                f.Descendants("Call").Select(k => (string?)k.Attribute("target") ?? "").ToList(),
+                f.Descendants("FreeLabel").Select(k => (string?)k.Attribute("comment") ?? "").ToList())).ToList())];
+    }
+
+    /// <summary>
+    /// The frames of the ONE structure of kind <paramref name="name"/> that <paramref name="pick"/>
+    /// selects frames in, highest index first. Several structures with picks, or a frame count the
+    /// helper could not tell apart from another structure of the class, is a problem, not a guess.
+    /// </summary>
+    private static FrameChoice Choose(string aixml, string name, string structureClass,
+        Func<(string Selector, string Label, List<string> Calls, List<string> Notes), bool> pick)
+    {
+        var structures = Structures(aixml, name);
+        var hits = structures.Select(st => (st, frames: st.Select((f, i) => (f, i)).Where(x => pick(x.f))
+            .Select(x => x.i).OrderDescending().ToList())).Where(x => x.frames.Count > 0).ToList();
+        if (hits.Count == 0) return new FrameChoice(structureClass, 0, []);
+        if (hits.Count > 1)
+            return new FrameChoice(structureClass, 0, [], $"{hits.Count} {name}s hold such frames; they are left alone");
+        var count = hits[0].st.Count;
+        if (structures.Count(st => st.Count == count) > 1)
+            return new FrameChoice(structureClass, 0, [],
+                $"another {name} also has {count} frames, so the helper could not tell them apart; left alone");
+        return new FrameChoice(structureClass, count, hits[0].frames);
+    }
+
+    /// <summary>
+    /// The tester's frames of one event, highest index first: the frame handling its user event
+    /// (`&lt;Pump Broadcast Events.Level Low&gt;: User Event`) and every frame calling its VI (a
+    /// request's button frame).
+    /// </summary>
+    internal static FrameChoice TesterFramesOf(string aixml, string bareModule, string qualifiedEventVi, string bareEvent)
+    {
+        var broadcast = $"<{bareModule} Broadcast Events.{bareEvent}>";
+        return Choose(aixml, "Event Structure", "EventStructure", f =>
+            f.Selector.Contains(broadcast, StringComparison.Ordinal)
+            || f.Calls.Contains(qualifiedEventVi, StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Main.vi's Event Handling Loop case of one request, before Delacor removes it: the frame
+    /// handling `&lt;Pump Request Events.Set Speed&gt;: User Event`.
+    /// </summary>
+    internal static FrameChoice MainEventFramesOf(string aixml, string bareModule, string bareEvent)
+    {
+        var request = $"<{bareModule} Request Events.{bareEvent}>";
+        return Choose(aixml, "Event Structure", "EventStructure", f => f.Selector.Contains(request, StringComparison.Ordinal));
+    }
+
+    /// <summary>Main.vi's message frame of one event, before Delacor removes it: selector `"&lt;Event&gt;"`.</summary>
+    internal static FrameChoice MainMessageFramesOf(string aixml, string bareEvent)
+    {
+        var quoted = "\"" + bareEvent + "\"";
+        return Choose(aixml, "Case Structure", "CaseStructure", f => f.Selector == quoted);
+    }
+
     private const string RemoveCompletion =
-        "Delacor leaves the clean-up of a removal to a person, and its dialog opens the Error List " +
-        "for it: a removed Broadcast's loose #CodeNeeded call stays in Main.vi pointing at the " +
-        "deleted VI, a removed Round Trip's message frame stays with a #Code_Review_Todo label, " +
-        "and the API tester keeps the removed event's frame (`Unknown Event`) and calls. Delete " +
-        "those, then check both VIs again.";
+        "Something is still not executable after the removal. `cleanupBefore` says what was taken " +
+        "out before Delacor ran (the tester's frames of the event, Main.vi's event case and message " +
+        "frame, a broadcast's loose call) and why a step was left alone - a structure that could not " +
+        "be told apart, or a Round Trip's broadcast half, whose tester frame stays. Read both VIs' " +
+        "errors (lvai_error_list) before deleting anything by hand.";
 
     private const string ConvertCompletion =
         "Delacor keeps the request's OLD message frame in Main.vi, labelled #Code_Review_Todo, " +
