@@ -459,7 +459,7 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         string typeName, List<DqmhTools.Argument> arguments, List<DqmhTools.Argument> replyArguments,
         string roundTripBroadcastName, string description, bool addTesterButton,
         int timeoutSeconds, CancellationToken ct, int requestScoping = 0,
-        string consumingLoop = DqmhTools.DefaultConsumingLoop)
+        string consumingLoop = DqmhTools.DefaultConsumingLoop, bool removeLooseCall = true)
     {
         if (!File.Exists(Path.Combine(scripts, EventHelper + ".xml")))
             return Json.Error("scriptsMissing",
@@ -709,6 +709,39 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
                 };
         }
 
+        // THE LOOSE CALL. For a Broadcast (and on 7.x a private request) Delacor drops the event VI
+        // on Main.vi's root diagram with every input unwired and a #CodeNeeded label, which leaves
+        // Main.vi broken until a person places it (docs/dqmh-scripting.md 6.10; a field project
+        // listed it as a gap). Removed by default: a call none of whose terminals is wired, and the
+        // label naming the event - measured 2026-11-14 on DQMH 7.1.2, Main.vi back to execState 1.
+        JsonObject? looseCall = null;
+        var looseMarker = typeIndex == 1 ? "\"" + eventName.Trim() + "\""
+            : typeIndex == 0 && requestScoping == 1 && route.Generation == DqmhGeneration.V7
+                ? "Private." + eventName.Trim() : null;
+        if (removeLooseCall && looseMarker is not null && File.Exists(mainVi))
+        {
+            var failure = File.Exists(Path.Combine(scripts, LooseCallHelper + ".xml"))
+                ? await EnsureWrapperAsync(scripts, LooseCallHelper, [], projectPath, steps, timeoutSeconds, ct)
+                : $"{LooseCallHelper}.xml is missing from the scripts folder";
+            var removed = failure is null
+                ? await dqmh.RunAsync(scripts, LooseCallHelper, new()
+                {
+                    ["Main VI Path"] = mainVi,
+                    ["Event VI Name"] = $"{module}:{DelacorEventName(eventName)}",
+                    ["Quoted Event Name"] = looseMarker,
+                }, timeoutSeconds, ct)
+                : null;
+            looseCall = removed is null
+                ? new JsonObject { ["removed"] = false, ["reason"] = failure ?? $"{LooseCallHelper} could not be run" }
+                : new JsonObject
+                {
+                    ["removed"] = DqmhTools.Scalar(removed, "Calls Deleted") is { } n && n != "0",
+                    ["callsDeleted"] = DqmhTools.Scalar(removed, "Calls Deleted"),
+                    ["labelsDeleted"] = DqmhTools.Scalar(removed, "Labels Deleted"),
+                    ["error"] = DqmhTools.Failed(removed),
+                };
+        }
+
         // Nothing in the project was unsaved before this call - it refuses otherwise - so
         // whatever is unsaved now is the scripting's own work: module members, the tester, its
         // unit tests. Save it, as a person would after Delacor's dialog.
@@ -731,7 +764,8 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         var completion = new JsonArray();
         foreach (var item in EventCompletion(eventName.Trim(), typeIndex, requestScoping,
                      roundTripBroadcastName.Trim(), bareModule, route.Generation, addTesterButton,
-                     mainExecBefore, mainExec, testerExecBefore, testerExec))
+                     mainExecBefore, mainExec, testerExecBefore, testerExec,
+                     looseCall?["removed"]?.GetValue<bool>() is true))
             completion.Add(item);
 
         var answer = new JsonObject
@@ -757,6 +791,7 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
             ["testerExecStateBefore"] = testerExecBefore,
             ["testerExecState"] = testerExec,
             ["testerWiring"] = testerWiring,
+            ["looseCall"] = looseCall,
             ["savedMembers"] = Array(saved),
             ["unsavedMembers"] = Array(unsaved),
             ["dialogsAnswered"] = dialogs,
@@ -787,10 +822,16 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
     /// </summary>
     internal static List<string> EventCompletion(string eventName, int typeIndex, int requestScoping,
         string roundTripBroadcastName, string bareModule, DqmhGeneration generation,
-        bool addTesterButton, int? mainExecBefore, int? mainExec, int? testerExecBefore, int? testerExec)
+        bool addTesterButton, int? mainExecBefore, int? mainExec, int? testerExecBefore, int? testerExec,
+        bool looseCallRemoved = false)
     {
         var items = new List<string>();
         var v7 = generation == DqmhGeneration.V7;
+        if (looseCallRemoved)
+            items.Add($"Main.vi: the call to {eventName}.vi that Delacor dropped LOOSE (inputs unwired, " +
+                      "#CodeNeeded) was removed, so Main.vi stays executable - the module does NOT " +
+                      (typeIndex == 1 ? "fire this broadcast" : "send this private request") +
+                      $" yet. Drop {eventName}.vi where it should happen and wire it.");
         if (mainExec is 0)
         {
             var own = items.Count;
@@ -888,6 +929,7 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         "lvai_close_active_project AND projectPath, whose sweep removes them.";
 
     private const string TesterHelper = "lvdqmh_wire_tester_event";
+    private const string LooseCallHelper = "lvdqmh_remove_loose_call";
     private const string FillHelper = "lvbd_fill_unwired_inputs";
 
     /// <summary>

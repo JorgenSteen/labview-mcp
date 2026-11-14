@@ -1192,6 +1192,30 @@ five. Every answer carries a `projectHygiene` note saying so.
 always scripts new arguments), a custom enqueue VI, and the route in a LabVIEW where the four
 Delacor targets were never opened before the first call.
 
+### 9c-a. The loose call is removed by default (2026-11-14)
+
+A field project listed it as a gap: for a Broadcast (and on 7.x a private request) Delacor drops the
+event VI loose on `Main.vi`'s root diagram, every input unwired, with an anchored
+`#DQMH_CodeNeeded` (5/6: `#CodeNeeded`) label - and `Main.vi` stays broken until a person places it
+(§6.10). `lvai_dqmh_new_event` now runs `scripts/lvdqmh_remove_loose_call.xml` after the scripting
+(`keepLooseCall` keeps Delacor's stub): in the active project's instance it deletes every call of the
+event VI none of whose terminals is wired, then every free label naming the marker (`CodeNeeded`) and
+the event (`"<Event>"`, or `Private.<Event>` for a private request), and saves `Main.vi` only when it
+deleted something. The answer's `looseCall` names the counts, and `completionNeeded` says the module
+does not fire the event until its VI is placed.
+
+Measured on DQMH 7.1.2 in LabVIEW 2026, module `Pump`: three broadcasts, `Main.vi` `execState` 0 after
+Delacor and 1 after the removal, nothing left unsaved. Two traps the first helper fell into: an
+ANCHORED label is not a free `Text` object until its node is gone (the label pass found it only on a
+second run), so the label pass runs after the call pass; and closing a deleted object's reference
+answers 1055 - which, chained, skipped the save, leaving the fix in memory only.
+
+The TESTER is not fixed yet: its broadcast frame's inner `Format Into String` keeps
+`'Response Received - %s'` with `input 1` unwired. Measured: a format with no specifier and an unwired
+`input 1` is still broken; a double needs `%g` (`%s` broken), a Boolean or string takes `%s`. Wiring
+the Event Data Node's argument there needs the specifier chosen per type and the node grown per
+argument - open.
+
 ### 9d. Remove, rename, convert and validate with no dialog - measured 2026-10-06
 
 Same fixture, backed up first. The three edits are wrappers again - `scripts/lvdqmh_remove_event.xml`,

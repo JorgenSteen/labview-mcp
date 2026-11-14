@@ -71,7 +71,10 @@ internal sealed class DqmhTools(LvaiConnection connection)
         answer lists the files written with each VI's exec state and whether Main.vi is still
         executable. Works with DQMH 5/6 and 7.x (`dqmhGeneration`). What Delacor leaves for a person
         is in `completionNeeded` - a frame's #CodeNeeded code (lvai_dqmh_place_handler), and on 7.x a
-        Broadcast's tester status string. docs/dqmh-scripting.md section 9c.
+        Broadcast's tester status string. The call Delacor drops LOOSE on Main.vi for a Broadcast
+        (or a 7.x private request) is removed by default so Main.vi stays executable (`looseCall`;
+        keepLooseCall keeps it) - the module then does not fire it until you place the event VI.
+        docs/dqmh-scripting.md section 9c.
         """)]
     public async Task<string> NewEvent(
         [Description("Module, e.g. 'Heater' or 'Heater.lvlib', matched case-insensitively")]
@@ -112,7 +115,11 @@ internal sealed class DqmhTools(LvaiConnection connection)
                      "call again collects the answer (the client gives up at 60 s)")]
         int answerWithinSeconds = 45,
         [Description(BackendDescription)] string? backend = null,
-        CancellationToken ct = default) =>
+        CancellationToken ct = default,
+        [Description("Keep the call Delacor drops LOOSE on Main.vi for a Broadcast (or a 7.x private " +
+                     "request), inputs unwired - which leaves Main.vi broken. Default false: it is " +
+                     "removed with its #CodeNeeded label (`looseCall`)")]
+        bool keepLooseCall = false) =>
         await Rpc.GuardAsync(() => WithBackendAsync(backend, "lvai_dqmh_new_event", async () =>
         {
             if (string.IsNullOrWhiteSpace(moduleName))
@@ -179,14 +186,15 @@ internal sealed class DqmhTools(LvaiConnection connection)
             // lvai_dqmh_new_module, and the SAME call collects the answer.
             var key = string.Join("|", moduleName.Trim(), eventName.Trim(), EventTypes[typeIndex],
                 argumentsJson, replyArgumentsJson, (roundTripBroadcastName ?? "").Trim(), description,
-                addTesterButton, RequestScopings[scoping], loop,
+                addTesterButton, RequestScopings[scoping], loop, keepLooseCall,
                 OnPyLabview ? AixmlBackend.PyLabview : AixmlBackend.Grpc);
             return await ResumableCall.RunAsync("lvai_dqmh_new_event", key,
                 TimeSpan.FromSeconds(answerWithinSeconds),
                 () => new DqmhHeadless(connection).NewEventAsync(
                     this, scripts, moduleName, eventName, typeIndex, EventTypes[typeIndex],
                     arguments, replyArguments, roundTripBroadcastName ?? "", description,
-                    addTesterButton, timeoutSeconds, CancellationToken.None, scoping, loop),
+                    addTesterButton, timeoutSeconds, CancellationToken.None, scoping, loop,
+                    removeLooseCall: !keepLooseCall),
                 "Call lvai_dqmh_new_event again with the SAME arguments: it waits for this run and " +
                 "returns its answer. Do not start other LabVIEW work meanwhile, and do not take an " +
                 "eventNameInUse refusal on a new call as a failure - the event may be the one this run wrote.",

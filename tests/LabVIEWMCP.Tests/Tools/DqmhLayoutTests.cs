@@ -212,6 +212,23 @@ public class DqmhLayoutTests
     }
 
     /// <summary>
+    /// A broadcast whose loose call was removed (measured 2026-11-14 on DQMH 7.1.2: Main.vi stays
+    /// executable) still owes the module a placed call - that is said, and nothing about Main.vi
+    /// being broken.
+    /// </summary>
+    [Fact]
+    public void A_removed_loose_call_is_named_as_a_broadcast_the_module_does_not_fire_yet()
+    {
+        var items = DqmhHeadless.EventCompletion("Tank Empty", 1, 0, "", "Pump",
+            DqmhGeneration.V7, true, mainExecBefore: 1, mainExec: 1, testerExecBefore: 1, testerExec: 1,
+            looseCallRemoved: true);
+
+        var item = Assert.Single(items);
+        Assert.Contains("does NOT fire this broadcast", item);
+        Assert.Contains("Drop Tank Empty.vi", item);
+    }
+
+    /// <summary>
     /// Issue #112: with no project path the file comparison had no folder, and every count read
     /// 0. It falls back to the module folder now.
     /// </summary>
