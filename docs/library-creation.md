@@ -128,3 +128,9 @@ fixture's `Weather Monitor Views.lvlib` and reading the file's `LIBN`, with the 
 composed loose as the control.
 
 NI's gRPC converter is unchanged: it writes no membership for a bare name.
+
+Measured live 2026-11-14 on LabVIEW 2026, pylabview: a VI put into a new `.lvlib` with
+`lvai_create_library`, then regenerated with `lvai_generate_vi` from the same bare-named AIXML. The
+branch build answered `libraryMember`, the file's `LIBN` named the library and `lvai_exec_state` read
+it executable inside the project. The previous build (a75c108), same call, answered `ok: true` and
+wrote the VI with no `LIBN` - loose, while the `.lvlib` still listed it.

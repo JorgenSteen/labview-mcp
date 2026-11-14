@@ -81,7 +81,10 @@ counts the rest (NI's packed libraries, vi.lib). A class loads with all its memb
 class always shows; a library with no member loaded does not. Each application instance is its
 own name space, so one owner can be loaded twice: `ownersInSeveralInstances` names an owner held by
 more than one instance, with `sameFolders`, and a `warning` when the folders differ - a field
-project could not tell whether the class in memory was this tree's copy or another's.
+project could not tell whether the class in memory was this tree's copy or another's. Measured
+live 2026-11-14 on LabVIEW 2026: a library opened through its project and a copy of it opened loose
+from a second folder answered `ownersInSeveralInstances` with both folders, `sameFolders: false`
+and the warning.
 
 ## 3. A defect the port found in its own helper: the close race
 
