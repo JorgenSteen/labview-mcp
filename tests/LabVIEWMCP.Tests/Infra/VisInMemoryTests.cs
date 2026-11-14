@@ -148,4 +148,55 @@ public class VisInMemoryTests
         Assert.False(Helpers("Lib.lvlib:lvai_exec_state.vi"));
         Assert.False(Helpers("README.vi"));
     }
+
+    [Fact]
+    public void Owners_are_read_off_the_members_qualified_names_with_their_folders()
+    {
+        var reading = VisInMemory.Parse(
+        [
+            "0\t0\t0\tC:\\a\\Heater\\Heater.lvclass\\Read.vi\tHeater.lvlib:Heater.lvclass:Read.vi",
+            "0\t0\t0\tC:\\a\\Heater\\Heater.lvclass\\Write.vi\tHeater.lvlib:Heater.lvclass:Write.vi",
+            "0\t0\t0\tC:\\a\\Heater\\Init.vi\tHeater.lvlib:Init.vi",
+            "0\t0\t0\tLV AI Core.lvlibp:Is Nigel sharing enabled.vi",
+            "0\t0\t0\tLoose.vi",
+        ], Helpers);
+
+        var owners = reading.Owners;
+        var lib = Assert.Single(owners, o => o.Name == "Heater.lvlib");
+        Assert.Equal("library", lib.Kind);
+        Assert.Equal(3, lib.MembersInMemory);
+        Assert.Equal([@"C:\a\Heater", @"C:\a\Heater\Heater.lvclass"], lib.Folders);
+        var cls = Assert.Single(owners, o => o.Name == "Heater.lvlib:Heater.lvclass");
+        Assert.Equal("class", cls.Kind);
+        Assert.Equal(2, cls.MembersInMemory);
+        Assert.Equal(VisInMemory.OriginOther, cls.Origin);
+        Assert.Equal([@"C:\a\Heater\Heater.lvclass"], cls.Folders);
+        // the service's packed library is an owner too, but not the user's: counted, not listed
+        Assert.Equal("packedLibrary", Assert.Single(owners, o => o.Name == "LV AI Core.lvlibp").Kind);
+        var json = reading.ToJson();
+        Assert.Equal(2, json["owners"]!.AsArray().Count);
+        Assert.Equal(1, json["ownersElsewhere"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void One_owner_in_two_instances_from_two_folders_is_flagged()
+    {
+        System.Text.Json.Nodes.JsonObject Instance(string context, string folder) =>
+            new()
+            {
+                ["context"] = context,
+                ["owners"] = VisInMemory.Parse([$"0\t0\t0\t{folder}\\Read.vi\tHeater.lvclass:Read.vi"], Helpers)
+                    .ToJson()["owners"]!.DeepClone(),
+            };
+
+        var split = LabVIEWMcp.Tools.LabViewStateTools.OwnersInSeveralInstances(
+            [Instance("main", @"C:\tree-a\Heater"), Instance("project", @"C:\tree-b\Heater")]);
+        var same = LabVIEWMcp.Tools.LabViewStateTools.OwnersInSeveralInstances(
+            [Instance("main", @"C:\tree-a\Heater"), Instance("project", @"C:\Tree-A\Heater")]);
+        var once = LabVIEWMcp.Tools.LabViewStateTools.OwnersInSeveralInstances([Instance("main", @"C:\tree-a\Heater")]);
+
+        Assert.False(Assert.Single(split)!["sameFolders"]!.GetValue<bool>());
+        Assert.True(Assert.Single(same)!["sameFolders"]!.GetValue<bool>());
+        Assert.Empty(once);
+    }
 }

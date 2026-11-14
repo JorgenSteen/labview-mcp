@@ -19,6 +19,22 @@ internal sealed record VisInMemoryEntry(long FrontPanelMods, long DiagramMods, i
     public bool Modified => FrontPanelMods != 0 || DiagramMods != 0;
 }
 
+/// <summary>A library, class or other owner in memory, known by its loaded members.</summary>
+/// <param name="Kind">library / class / packedLibrary / xcontrol / statechart / owner.</param>
+/// <param name="Folders">Where its members with a path were loaded from.</param>
+internal sealed record OwnerInMemory(string Name, string Kind, int MembersInMemory, string Origin,
+                                     IReadOnlyList<string> Folders)
+{
+    public JsonObject ToJson() => new()
+    {
+        ["name"] = Name,
+        ["kind"] = Kind,
+        ["membersInMemory"] = MembersInMemory,
+        ["folders"] = new JsonArray([.. Folders.Take(5).Select(f => (JsonNode)f)]),
+        ["foldersTruncated"] = Folders.Count > 5 ? true : null,
+    };
+}
+
 /// <summary>What one run of the helper found.</summary>
 internal sealed record VisInMemoryReading(IReadOnlyList<VisInMemoryEntry> Entries, IReadOnlyList<string> Unparsed)
 {
@@ -53,9 +69,54 @@ internal sealed record VisInMemoryReading(IReadOnlyList<VisInMemoryEntry> Entrie
     /// </summary>
     public IReadOnlyList<VisInMemoryEntry> Installation => [.. Entries.Where(e => e.Origin == VisInMemory.OriginInstallation)];
 
+    /// <summary>
+    /// The libraries, classes and other owners IN MEMORY, read off their loaded members'
+    /// qualified names (`Lib.lvlib:Class.lvclass:Method.vi` makes `Lib.lvlib` and
+    /// `Lib.lvlib:Class.lvclass` both owners). LabVIEW lists no owner itself - All VIs In Memory
+    /// names VIs only - but a class loads with every member, so a loaded class always shows here;
+    /// a library none of whose members is loaded does not. `folders` are where the members were
+    /// loaded FROM: the question a field project could not answer was whether a class in memory
+    /// was the copy from this tree or another one (2026-11).
+    /// </summary>
+    public IReadOnlyList<OwnerInMemory> Owners => _owners ??= ComputeOwners();
+
+    private IReadOnlyList<OwnerInMemory>? _owners;
+
+    private IReadOnlyList<OwnerInMemory> ComputeOwners()
+    {
+        var owners = new Dictionary<string, List<VisInMemoryEntry>>(StringComparer.Ordinal);
+        foreach (var entry in Entries)
+        {
+            var parts = entry.Name.Split(':');
+            for (var depth = 1; depth < parts.Length; depth++)
+            {
+                var owner = string.Join(':', parts[..depth]);
+                if (!owners.TryGetValue(owner, out var members)) owners[owner] = members = [];
+                members.Add(entry);
+            }
+        }
+        return [.. owners.Select(o => new OwnerInMemory(
+            o.Key,
+            VisInMemory.OwnerKind(o.Key),
+            o.Value.Count,
+            // the origin of the members, the user's code winning: one member of somebody's
+            // code under an installation library is still somebody's code
+            o.Value.Any(m => m.Origin == VisInMemory.OriginOther) ? VisInMemory.OriginOther
+                : o.Value.GroupBy(m => m.Origin).OrderByDescending(g => g.Count()).First().Key,
+            [.. o.Value.Where(m => m.Path is { Length: > 0 })
+                .Select(m => System.IO.Path.GetDirectoryName(m.Path!)!)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)]))
+            .OrderBy(o => o.Name, StringComparer.OrdinalIgnoreCase)];
+    }
+
     public JsonObject ToJson() => new()
     {
         ["count"] = Count,
+        // Owners of the user's code in full; the rest (NI's service, vi.lib, helpers) only counted.
+        ["owners"] = new JsonArray([.. Owners.Where(o => o.Origin == VisInMemory.OriginOther).Take(50)
+            .Select(o => (JsonNode)o.ToJson())]),
+        ["ownersTruncated"] = Owners.Count(o => o.Origin == VisInMemory.OriginOther) > 50 ? true : null,
+        ["ownersElsewhere"] = Owners.Count(o => o.Origin != VisInMemory.OriginOther),
         ["byOrigin"] = new JsonObject
         {
             [VisInMemory.OriginService] = Entries.Count(e => e.Origin == VisInMemory.OriginService),
@@ -107,7 +168,8 @@ internal sealed record VisInMemoryReading(IReadOnlyList<VisInMemoryEntry> Entrie
 /// 2026-10-08): 419 names, 341 from `LV AI gRPC Service.lvlibp`, 63 from `LV AI Core.lvlibp` and 15
 /// from `GSW.lvlibp`, none modified - and docs/lvclass-creation.md measured the same instance at 404,
 /// every one from the service library. An open project's VIs live in the project's own instance and
-/// are NOT listed, and classes and libraries never are. So this is evidence about the default
+/// are NOT listed, and classes and libraries never are - they are known by their loaded members'
+/// qualified names (<see cref="VisInMemoryReading.Owners"/>). So this is evidence about the default
 /// instance only, and the answer says so.
 /// </summary>
 internal static class VisInMemory
@@ -167,6 +229,21 @@ internal static class VisInMemory
         if (LabViewState.IsScratchTitle(name) || isHelper(name) || IsHelperPath(path)) return OriginHelper;
         if (path is not null && installationRoot is { Length: > 0 } root && Under(path, root)) return OriginInstallation;
         return OriginOther;
+    }
+
+    /// <summary>What kind of owner a qualified-name prefix is, by its last part's extension.</summary>
+    internal static string OwnerKind(string owner)
+    {
+        var last = owner[(owner.LastIndexOf(':') + 1)..];
+        return System.IO.Path.GetExtension(last).ToLowerInvariant() switch
+        {
+            ".lvlib" => "library",
+            ".lvclass" => "class",
+            ".lvlibp" => "packedLibrary",
+            ".xctl" => "xcontrol",
+            ".lvsc" => "statechart",
+            _ => "owner",
+        };
     }
 
     private static bool IsHelperPath(string? path) =>

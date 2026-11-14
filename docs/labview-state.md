@@ -73,6 +73,16 @@ so they cannot be sorted by it and land in `other`; the answer lists the readabl
 for that reason. NI's own packed-library lines answer 1035 too and do not count against
 `onlyServiceAndHelpers`; everything else unreadable does.
 
+**Libraries and classes (2026-11-14).** `All VIs In Memory` names VIs only, never an owner. The
+answer derives them from the members' qualified names: `Lib.lvlib:Class.lvclass:Read.vi` makes
+`Lib.lvlib` and `Lib.lvlib:Class.lvclass` owners. `owners` lists those of the user's code (`other`)
+with `kind`, `membersInMemory` and the `folders` the members were loaded from; `ownersElsewhere`
+counts the rest (NI's packed libraries, vi.lib). A class loads with all its members, so a loaded
+class always shows; a library with no member loaded does not. Each application instance is its
+own name space, so one owner can be loaded twice: `ownersInSeveralInstances` names an owner held by
+more than one instance, with `sameFolders`, and a `warning` when the folders differ - a field
+project could not tell whether the class in memory was this tree's copy or another's.
+
 ## 3. A defect the port found in its own helper: the close race
 
 The first project-instance run answered `1025` for EVERY VI. The helper closed the project's
