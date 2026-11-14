@@ -498,7 +498,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Class methods | `docs/class-method-tooling.md` | `lvai_add_class_method` |
 | Libraries | `docs/library-creation.md` | `lvai_create_library`, `lvai_add_to_library`, `lvai_remove_from_library` |
 | Actor Framework; overrides | `docs/labview-actor-framework.md`, `docs/af-override-tools.md` | `lvai_create_message_class`, `lvai_create_override`, `lvai_af_add_hook` |
-| Typedefs | `docs/typedef-constants.md`, `docs/typedef-disconnect.md` | `lvai_create_typedef`, `lvai_describe_ctl`, `lvai_bind_*`, `lvai_coercion_dots` |
+| Typedefs | `docs/typedef-constants.md`, `docs/typedef-disconnect.md` | `lvai_create_typedef`, `lvai_add_typedef_elements`, `lvai_describe_ctl`, `lvai_bind_*`, `lvai_coercion_dots` |
 | DQMH | `docs/dqmh-patterns.md`, `docs/dqmh-scripting.md` | `lvai_dqmh_reference`, `lvai_dqmh_*` |
 | `.lvproj`, `.lvlib`, `.lvclass` structure | `docs/lvproj-structure.md`, `docs/lvlib-lvclass-structure.md` | `lvai_lvproj_reference`, `lvai_lvlib_reference` |
 | Unit tests (Caraya) | `docs/labview-unit-testing.md` | `lvai_generate_test`, `lvai_generate_class_test`, `lvai_generate_method_test`, `lvai_run_caraya_tests` |

@@ -355,3 +355,27 @@ that is ALREADY LOADED in the project is read correctly either way; the report's
 VIs not edited themselves, read while the project held edited typedefs they depend on - was not
 reproduced, and the fix rests on the coercion sweep's measured second-copy defect plus `instance`,
 which now makes the copy read visible.
+
+## Appending elements to a cluster typedef - `lvai_add_typedef_elements` (2026-11-14)
+
+A field project had no tool to add an element to a DQMH module's `Module Data--cluster.ctl`.
+`lvai_add_class_field` drives NI's Message Maker provider, `Add Member Data to Private Data
+Control.vi`. Pointed at that `.ctl`, it answered Error 74 at its first step, `LabVIEW Class:Open`,
+and changed nothing. The provider's chain after that step is generic, read off its export.
+`scripts/lvai_add_cluster_elements.xml` runs that chain on the `.ctl`:
+
+- `Open VI Reference` in the active project's instance, then `FP.Open`;
+- `Traverse for GObjects` (`Cluster`, front panel) - the FIRST cluster;
+- `{LV.Control}` `Move` of each carrier control into it (`owner` the cluster, `position` 0,0,
+  `duplicate` TRUE);
+- `CtlVIApplyChanges`, `Save.Instrument` with no path (in place), `FP.Close`.
+
+Measured on LabVIEW 2026, module `Pump2`. `[Status]` became `[Status, Flow Rate]`, still a typedef
+(not strict), and Main.vi and the tester stayed `execState` 1. Only the `.ctl` changed on disk.
+**The callers follow IN MEMORY only.** LabVIEW read Main.vi's `Data Cluster` constant as
+`cluster{string.Status,double.Flow Rate}`, while the file still held `cluster{string.Status}`. An
+unsaved VI in the project makes every DQMH tool refuse the next call. So with `projectPath` the
+tool saves the project-folder VIs this call left modified (`callersSaved`). It leaves alone those
+that were unsaved before (`unsavedBefore`). **A second run with the same carrier** appended `Flow
+Rate 2` - LabVIEW makes a label unique rather than refusing. The tool refuses a name already
+present before LabVIEW (`elementAlreadyPresent`).
