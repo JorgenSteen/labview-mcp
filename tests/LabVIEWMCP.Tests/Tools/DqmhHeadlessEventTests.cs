@@ -221,4 +221,26 @@ public class DqmhHeadlessEventTests
         Assert.Equal(@"Load % a\b", format.Field);
         Assert.Equal(@"Response Received - Load %% a\\b: %g", format.Format);
     }
+
+    // A typedef argument (field report D5): the type is only the carrier's placeholder.
+    [Fact]
+    public void A_typedef_argument_needs_no_type()
+    {
+        var parsed = DqmhTools.ParseArguments("""[{"name":"Mode","typedef":"C:\\p\\Pump Mode.ctl"},{"name":"Gain","type":"double"}]""");
+
+        Assert.NotNull(parsed);
+        Assert.Equal(new DqmhTools.Argument("Mode", "string", @"C:\p\Pump Mode.ctl"), parsed![0]);
+        Assert.Null(parsed[1].Typedef);
+    }
+
+    [Fact]
+    public void A_typedef_that_is_no_ctl_on_disk_is_refused()
+    {
+        using var tree = new TempTree("d5-typedef");
+        var ctl = tree.Write("Pump Mode.ctl", "x");
+
+        Assert.Null(DqmhTools.TypedefProblem([new DqmhTools.Argument("Mode", "string", ctl)]));
+        Assert.Contains("not a .ctl", DqmhTools.TypedefProblem([new DqmhTools.Argument("Mode", "string", tree.PathOf("Missing.ctl"))]));
+        Assert.Contains("not a .ctl", DqmhTools.TypedefProblem([new DqmhTools.Argument("Mode", "string", tree.Write("Mode.vi", "x"))]));
+    }
 }

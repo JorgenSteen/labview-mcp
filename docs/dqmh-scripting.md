@@ -1242,6 +1242,38 @@ Then through the tool, four more broadcasts - a double, none, an `array{double}`
 the tester read 1 after each, `testerBroadcast` named `Flow`/`%g`, `Time` twice and `Count`/`%d`,
 11-13.5 s per call, Main.vi 1 throughout.
 
+### 9c-c. Typedef arguments, and the windows the scripting opens (2026-11-14)
+
+**A typedef argument** (field report D5). An argument may name a `.ctl`:
+`{"name":"Mode","typedef":"C:\p\Pump Mode.ctl"}`, with `type` optional - it is only the
+placeholder.
+
+The field route took three binds after Delacor: the argument cluster, the request VI's input and
+the tester's control. Binding the element inside `<Event> Argument--cluster.ctl` alone reached
+Main.vi and the request VI's `DQMH_ARG` constant. The request VI's pane input and the tester's
+control stayed separate plain enums.
+
+What works: the tool binds the CARRIER's control to the `.ctl` before Delacor scripts the event
+(`scripts/lvai_bind_panel_controls.xml`: `{LV.Control}` `Replace` by label, save). Delacor copies the
+carrier's controls, and the typedef comes along everywhere. Measured on LabVIEW 2026 with a Request
+and a Broadcast taking an enum typedef `Pump Mode.ctl`:
+
+- the argument cluster element reads `typedef: Pump Mode.ctl`;
+- pylabview finds a TypeDef wrapper naming `Pump Mode.ctl` on the request VI's `Mode` control, on
+  the tester's, and on the broadcast VI's;
+- every VI `execState` 1;
+- the tester's broadcast frame wired `Mode` with `%s`.
+
+The answer carries `typedefCarriers` (asked, bound) and `typedefArguments` (`linkedInCluster`, read
+from the saved cluster `.ctl`).
+
+**The windows.** Delacor's scripting OPENS Main.vi and the tester - panel and diagram, four windows
+on a Broadcast, measured. The tool reads both VIs' window state before the call. After its save it
+closes the windows that were not open before (`scripts/lvai_vi_windows.xml`; `windows` in the
+answer). It never closes while anything is unsaved, because closing the last window of an unsaved
+VI raises the save prompt. Measured: both a Request and a Broadcast left only the project
+explorer open.
+
 ### 9d. Remove, rename, convert and validate with no dialog - measured 2026-10-06
 
 Same fixture, backed up first. The three edits are wrappers again - `scripts/lvdqmh_remove_event.xml`,

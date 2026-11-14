@@ -617,6 +617,41 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         if (await dqmh.BuildCarrierAsync(replyArguments, replyVi, timeoutSeconds, ct) is { } r)
             return r;
 
+        // A TYPEDEF ARGUMENT (field report D5): the carrier holds a placeholder control, bound to the
+        // .ctl here, before Delacor copies the carrier's controls into the event's clusters.
+        var typedefCarriers = new JsonArray();
+        foreach (var (carrier, list) in new[] { (argumentsVi, arguments), (replyVi, replyArguments) })
+        {
+            var bound = list.Where(x => x.Typedef is not null).ToList();
+            if (bound.Count == 0) continue;
+            var failure = File.Exists(Path.Combine(scripts, PanelBindHelper + ".xml"))
+                ? await EnsureWrapperAsync(scripts, PanelBindHelper, [], projectPath, steps, timeoutSeconds, ct)
+                : $"{PanelBindHelper}.xml is missing from the scripts folder";
+            if (failure is not null)
+                return Json.Error("typedefBindFailed",
+                    "The arguments carrier could not be bound to its typedefs; nothing was scripted.",
+                    new { error = failure, steps });
+            var bindRun = await dqmh.RunAsync(scripts, PanelBindHelper, new()
+            {
+                ["vi path"] = carrier,
+                ["Labels"] = DqmhFrameTools.StringArrayXml("Labels", bound.Select(x => x.Name).ToList()),
+                ["Typedef Paths"] = DqmhFrameTools.StringArrayXml("Typedef Paths",
+                    bound.Select(x => Path.GetFullPath(x.Typedef!)).ToList()),
+            }, timeoutSeconds, ct);
+            var boundNames = bindRun is null ? [] : Listed(bindRun, "Bound");
+            typedefCarriers.Add(new JsonObject
+            {
+                ["carrier"] = Path.GetFileName(carrier),
+                ["asked"] = Array(bound.Select(x => x.Name)),
+                ["bound"] = Array(boundNames),
+                ["error"] = bindRun is null ? "the bind helper could not be run" : DqmhTools.Failed(bindRun),
+            });
+            if (bindRun is null || DqmhTools.Failed(bindRun) is not null || boundNames.Count != bound.Count)
+                return Json.Error("typedefBindFailed",
+                    "The arguments carrier could not be bound to its typedefs; nothing was scripted.",
+                    new { typedefCarriers, steps });
+        }
+
         // ---- 4. script ----------------------------------------------------------------------
         // ISSUE #112: `createdFiles: []` and `ok: false` for events whose files were plainly
         // there. A snapshot needs a folder; when the active-project check names no project path
@@ -627,6 +662,13 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
         var mainBefore = File.Exists(mainVi) ? new FileInfo(mainVi).Length : -1;
         var mainExecBefore = File.Exists(mainVi) ? await ExecStateAsync(mainVi, timeoutSeconds, ct) : null;
         var testerExecBefore = File.Exists(tester) ? await ExecStateAsync(tester, timeoutSeconds, ct) : null;
+        // THE WINDOWS BEFORE: Delacor's scripting opens Main.vi and the tester (measured 2026-11-14 on
+        // a Broadcast - four windows the user then found all over LabVIEW); only what was not open
+        // before is closed again, after the save.
+        var windowVis = new[] { mainVi, tester }.Where(File.Exists).ToList();
+        var windowsBefore = windowVis.Count > 0
+            ? await VisWindowsAsync(dqmh, scripts, projectPath, steps, windowVis, null, null, timeoutSeconds, ct)
+            : null;
         inputs["Arguments VI Path"] = argumentsVi;
         inputs["Reply Payload VI Path"] = replyVi;
         inputs["Script?"] = "true";
@@ -788,12 +830,40 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
                                           "the other arguments are on its Event Data Node, unwired.";
         }
 
+        // THE TYPEDEF LINK, read from the saved clusters: each typedef argument's element must be an
+        // instance of its .ctl.
+        JsonArray? typedefArguments = null;
+        if (arguments.Concat(replyArguments).Any(x => x.Typedef is not null) && folder.Length > 0)
+            typedefArguments = await TypedefLinksAsync(folder, eventName.Trim(), arguments, replyArguments,
+                timeoutSeconds, ct);
+
         // Nothing in the project was unsaved before this call - it refuses otherwise - so
         // whatever is unsaved now is the scripting's own work: module members, the tester, its
         // unit tests. Save it, as a person would after Delacor's dialog.
         var (dirtyAfter, _) = await ProjectDirtyAsync(dqmh, scripts, projectPath, timeoutSeconds, ct);
         var saved = await SaveNamedAsync(dqmh, scripts, dirtyAfter ?? [], timeoutSeconds, ct);
         var unsaved = (await ProjectDirtyAsync(dqmh, scripts, projectPath, timeoutSeconds, ct)).Dirty ?? [];
+
+        // Close the windows the scripting opened - never while anything is unsaved: closing the last
+        // window of an unsaved VI raises LabVIEW's save prompt, a modal that stops every call.
+        JsonObject? windows = null;
+        if (windowsBefore is { } wb)
+        {
+            if (unsaved.Count > 0)
+                windows = new JsonObject { ["closed"] = false, ["reason"] = "VIs are left unsaved" };
+            else
+            {
+                var after = await VisWindowsAsync(dqmh, scripts, projectPath, steps, windowVis,
+                    [.. wb.Panels.Select(open => !open)], [.. wb.Diagrams.Select(open => !open)], timeoutSeconds, ct);
+                windows = new JsonObject
+                {
+                    ["closed"] = after is not null,
+                    ["openedByScripting"] = Array(windowVis.Select((v, i) =>
+                        $"{Path.GetFileName(v)}: panel {(after?.Panels.ElementAtOrDefault(i) == true && !wb.Panels[i] ? "closed" : "-")}, " +
+                        $"diagram {(after?.Diagrams.ElementAtOrDefault(i) == true && !wb.Diagrams[i] ? "closed" : "-")}")),
+                };
+            }
+        }
 
         List<string> created = [], modified = [];
         if (before is not null)
@@ -838,6 +908,9 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
             ["testerExecState"] = testerExec,
             ["testerWiring"] = testerWiring,
             ["testerBroadcast"] = testerBroadcast,
+            ["windows"] = windows,
+            ["typedefCarriers"] = typedefCarriers.Count > 0 ? typedefCarriers : null,
+            ["typedefArguments"] = typedefArguments,
             ["looseCall"] = looseCall,
             ["savedMembers"] = Array(saved),
             ["unsavedMembers"] = Array(unsaved),
@@ -978,6 +1051,85 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
     private const string TesterHelper = "lvdqmh_wire_tester_event";
     private const string LooseCallHelper = "lvdqmh_remove_loose_call";
     private const string TesterBroadcastHelper = "lvdqmh_wire_tester_broadcast";
+    private const string PanelBindHelper = "lvai_bind_panel_controls";
+    private const string WindowsHelper = "lvai_vi_windows";
+
+    internal sealed record VisWindows(List<bool> Panels, List<bool> Diagrams);
+
+    /// <summary>
+    /// Which of <paramref name="vis"/> have their panel / diagram window open - read BEFORE any
+    /// close asked for (closePanels / closeDiagrams, one flag per VI; null reads only). Null when
+    /// the helper cannot be run or reports an error: then nothing is closed.
+    /// </summary>
+    private async Task<VisWindows?> VisWindowsAsync(DqmhTools dqmh, string scripts, string? projectPath,
+        JsonArray steps, List<string> vis, List<bool>? closePanels, List<bool>? closeDiagrams,
+        int timeoutSeconds, CancellationToken ct)
+    {
+        if (!File.Exists(Path.Combine(scripts, WindowsHelper + ".xml"))) return null;
+        if (await EnsureWrapperAsync(scripts, WindowsHelper, [], projectPath, steps, timeoutSeconds, ct) is not null)
+            return null;
+        var run = await dqmh.RunAsync(scripts, WindowsHelper, new()
+        {
+            ["VI Paths"] = DqmhFrameTools.StringArrayXml("VI Paths", vis),
+            ["Close Panels"] = DqmhFrameTools.BoolArrayXml("Close Panels", closePanels ?? [.. vis.Select(_ => false)]),
+            ["Close Diagrams"] = DqmhFrameTools.BoolArrayXml("Close Diagrams", closeDiagrams ?? [.. vis.Select(_ => false)]),
+        }, timeoutSeconds, ct);
+        if (run is null || DqmhTools.Failed(run) is not null) return null;
+        var panels = Listed(run, "FP Open").Select(IsTrue).ToList();
+        var diagrams = Listed(run, "BD Open").Select(IsTrue).ToList();
+        return panels.Count == vis.Count && diagrams.Count == vis.Count ? new VisWindows(panels, diagrams) : null;
+    }
+
+    /// <summary>
+    /// For each typedef argument, whether the event's saved cluster .ctl (`&lt;Event&gt; Argument--cluster.ctl`
+    /// for arguments, a `Reply` one for the reply) holds the element as an instance of that .ctl.
+    /// </summary>
+    private static async Task<JsonArray> TypedefLinksAsync(string folder, string eventName,
+        List<DqmhTools.Argument> arguments, List<DqmhTools.Argument> replyArguments, int timeoutSeconds,
+        CancellationToken ct)
+    {
+        var result = new JsonArray();
+        foreach (var (list, marker) in new[] { (arguments, "Argument"), (replyArguments, "Reply") })
+        {
+            var wanted = list.Where(x => x.Typedef is not null).ToList();
+            if (wanted.Count == 0) continue;
+            var ctl = Directory.EnumerateFiles(folder, "*--cluster.ctl")
+                .FirstOrDefault(f => Path.GetFileName(f).StartsWith(eventName, StringComparison.OrdinalIgnoreCase)
+                                     && Path.GetFileName(f).Contains(marker, StringComparison.OrdinalIgnoreCase));
+            JsonArray? members = null;
+            if (ctl is not null)
+            {
+                var outDirectory = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "ctl", Path.GetRandomFileName());
+                try
+                {
+                    var (mainXml, _) = await CtlTools.ExtractAsync(ctl, outDirectory, timeoutSeconds, ct);
+                    if (mainXml is not null)
+                        members = CtlTools.Describe(System.Xml.Linq.XDocument.Load(mainXml).Root!, ctl)["fields"]
+                            is JsonArray { Count: 1 } top ? top[0]?["members"] as JsonArray : null;
+                }
+                finally
+                {
+                    try { Directory.Delete(outDirectory, recursive: true); } catch { /* best effort */ }
+                }
+            }
+            foreach (var argument in wanted)
+            {
+                var member = members?.OfType<JsonObject>().FirstOrDefault(m =>
+                    string.Equals(m["label"]?.GetValue<string>(), argument.Name, StringComparison.Ordinal));
+                var linkedTo = member?["typedef"]?.GetValue<string>();
+                result.Add(new JsonObject
+                {
+                    ["name"] = argument.Name,
+                    ["typedef"] = argument.Typedef,
+                    ["cluster"] = ctl is null ? null : Path.GetFileName(ctl),
+                    ["linkedInCluster"] = linkedTo is not null && string.Equals(linkedTo,
+                        Path.GetFileName(argument.Typedef!), StringComparison.OrdinalIgnoreCase),
+                    ["clusterElementTypedef"] = linkedTo,
+                });
+            }
+        }
+        return result;
+    }
 
     /// <summary>
     /// The field and format string for a broadcast's tester frame: the FIRST argument Format Into

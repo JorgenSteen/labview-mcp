@@ -653,6 +653,15 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         return sb.Append("</Array>").ToString();
     }
 
+    /// <summary>A Boolean array the typed run helper accepts: LabVIEW's own XML for it.</summary>
+    internal static string BoolArrayXml(string name, IReadOnlyCollection<bool> values)
+    {
+        var sb = new StringBuilder($"<Array><Name>{SecurityElement.Escape(name)}</Name><Dimsize>{values.Count}</Dimsize>");
+        foreach (var v in values)
+            sb.Append($"<Boolean><Name></Name><Val>{(v ? 1 : 0)}</Val></Boolean>");
+        return sb.Append("</Array>").ToString();
+    }
+
     private static void AddArray(Dictionary<string, string> inputs, string name, IEnumerable<string> values)
     {
         var list = values.ToList();

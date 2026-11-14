@@ -84,7 +84,8 @@ internal sealed class DqmhTools(LvaiConnection connection)
         string eventName,
         [Description("""
             Arguments, the event's public contract: [{"name":"Channel","type":"string"},
-            {"name":"Gain","type":"double"}]; AIXML type names; [] for none.
+            {"name":"Gain","type":"double"}]; AIXML type names; [] for none. A typedef argument:
+            {"name":"Mode","typedef":"C:\\p\\Pump Mode.ctl"} (`typedefArguments` reports the link).
             """)]
         string argumentsJson,
         [Description("Event type: Request, Broadcast, Request and Wait for Reply, or Round Trip")]
@@ -140,6 +141,9 @@ internal sealed class DqmhTools(LvaiConnection connection)
                     "argumentsJson must be a JSON array of {\"name\":…,\"type\":…} objects.",
                     new { argumentsJson });
 
+            if (TypedefProblem(arguments) is { } typedefProblem)
+                return Json.Error("badArguments", typedefProblem);
+
             if (arguments.FirstOrDefault(a => a.Name.Contains('\n') || a.Name.Contains('\r'))
                 is { Name.Length: > 0 } broken)
                 return Json.Error("badArguments",
@@ -149,6 +153,9 @@ internal sealed class DqmhTools(LvaiConnection connection)
                 return Json.Error("badArguments",
                     "replyArgumentsJson must be a JSON array of {\"name\":…,\"type\":…} objects.",
                     new { replyArgumentsJson });
+
+            if (TypedefProblem(replyArguments) is { } replyTypedefProblem)
+                return Json.Error("badArguments", replyTypedefProblem);
 
             if (replyArguments.FirstOrDefault(a => a.Name.Contains('\n') || a.Name.Contains('\r'))
                 is { Name.Length: > 0 } brokenReply)
@@ -209,7 +216,17 @@ internal sealed class DqmhTools(LvaiConnection connection)
 
     // ------------------------------------------------------------------ the arguments carrier
 
-    internal readonly record struct Argument(string Name, string Type);
+    /// <summary>An event argument; <c>Typedef</c> is a .ctl the argument is an instance of (field
+    /// report D5) - its <c>Type</c> is then only the carrier's placeholder.</summary>
+    internal readonly record struct Argument(string Name, string Type, string? Typedef = null);
+
+    /// <summary>A named typedef that is no .ctl file on disk - refused before LabVIEW.</summary>
+    internal static string? TypedefProblem(IEnumerable<Argument> arguments) =>
+        arguments.FirstOrDefault(a => a.Typedef is { } t
+                && (!t.EndsWith(".ctl", StringComparison.OrdinalIgnoreCase) || !File.Exists(t)))
+            is { Typedef: { } bad } arg
+            ? $"Argument '{arg.Name}' names typedef '{bad}', which is not a .ctl file on disk."
+            : null;
 
     internal static List<Argument>? ParseArguments(string? json)
     {
@@ -222,9 +239,11 @@ internal sealed class DqmhTools(LvaiConnection connection)
             {
                 if (item is not JsonObject o) return null;
                 var name = o["name"]?.GetValue<string>();
-                var type = o["type"]?.GetValue<string>();
+                var typedef = o["typedef"]?.GetValue<string>();
+                // with a typedef the type is only the carrier's placeholder, so it may be left out
+                var type = o["type"]?.GetValue<string>() ?? (string.IsNullOrWhiteSpace(typedef) ? null : "string");
                 if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(type)) return null;
-                result.Add(new Argument(name, type));
+                result.Add(new Argument(name, type, string.IsNullOrWhiteSpace(typedef) ? null : typedef.Trim()));
             }
             return result;
         }
