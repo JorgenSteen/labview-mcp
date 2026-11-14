@@ -109,3 +109,22 @@ PRIVATE. Existing code is not moved into or out of a library unasked.
 - **Folders** come from `lvai_move_to_folder`, which handles a plain `.lvlib` and creates the folder
   at the root - `lvai_add_to_library`'s `folder` refuses one that does not exist yet.
 - After both, `lvai_exec_state` over the members: membership changes every member's qualified name.
+
+## 6. Regenerating a member keeps its membership (pylabview, 2026-11-14)
+
+A VI regenerated with `lvai_generate_vi` (or converted) over a path a `.lvlib` or `.lvclass` lists
+came out LOOSE when its AIXML `_name` was bare: the composer writes the membership (the VI's own
+`LIBN`) only for a qualified name, `Lib.lvlib:VI.vi`. The library still listed the file, and a
+field project's callers of a private member broke on every regeneration.
+
+On the pylabview backend the composer now looks for the owner first
+(`AixmlComposer.QualifyForOwner`): exactly one `.lvlib`/`.lvclass` in the VI's folder or up to
+`ProjectMembership.LevelsUp` above that LISTS the target path. If there is one and the `_name` is
+bare, the document is composed from a copy whose `_name` carries the owner's qualified name (a class
+inside a library: `Lib.lvlib:Class.lvclass`, from `NI.Lib.ContainingLib`). The answer says so in
+`libraryMember` (and `composerReport`). A qualified `_name` is left alone; two owners listing one
+path are reported, never guessed. Pinned by composing a real document beside the housekeeping
+fixture's `Weather Monitor Views.lvlib` and reading the file's `LIBN`, with the same document
+composed loose as the control.
+
+NI's gRPC converter is unchanged: it writes no membership for a bare name.

@@ -167,13 +167,100 @@ internal static class AixmlComposer
         var targetRelease = TargetRelease(inUse, parts);
         var (pinnedRelease, pinNote) = PinnedTarget(viPath, targetRelease ?? parts);
         if (pinnedRelease is { } pinned) targetRelease = pinned;
-        var result = await ComposeCoreAsync(setup, aixmlPath, viPath, searchFolders, targetRelease,
-                                            context, timeoutSeconds, ct);
-        return result with
+        var member = QualifyForOwner(aixmlPath, viPath);
+        try
         {
-            Warning = Join(WarningForOlderLabView(inUse, parts), pinNote),
-            Report = [.. ContextReport(context), .. result.Report],
-        };
+            var result = await ComposeCoreAsync(setup, member.AixmlPath, viPath, searchFolders, targetRelease,
+                                                context, timeoutSeconds, ct, projectsOf: aixmlPath);
+            return result with
+            {
+                Warning = Join(WarningForOlderLabView(inUse, parts), pinNote),
+                Report = [.. ContextReport(context), .. member.Report, .. result.Report],
+            };
+        }
+        finally
+        {
+            if (member.TempCopy is { } copy) try { File.Delete(copy); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>What <see cref="QualifyForOwner"/> decided.</summary>
+    /// <param name="AixmlPath">The document to compose: the caller's, or the qualified copy.</param>
+    /// <param name="TempCopy">The qualified copy to delete afterwards, when one was written.</param>
+    internal sealed record MemberQualification(string AixmlPath, string? TempCopy, string[] Report);
+
+    /// <summary>
+    /// A VI written over a path a library or class LISTS stays its member. The composer writes the
+    /// membership (LIBN) only when the AIXML's `_name` is qualified - `Lib.lvlib:VI.vi` - and an
+    /// agent regenerating a member writes the bare name, so the regenerated VI came out LOOSE while
+    /// the .lvlib still listed it: a field project lost membership on every regeneration and broke
+    /// the callers of a private member (2026-11). So when exactly ONE owner in the VI's folder or
+    /// above lists the target (<see cref="IconOwners.OwnersListing"/>) and the `_name` is bare, the
+    /// document is composed from a copy whose `_name` carries that owner's qualified name. A name
+    /// already qualified is left alone; two owners listing one path is reported, never guessed.
+    /// </summary>
+    internal static MemberQualification QualifyForOwner(string aixmlPath, string viPath)
+    {
+        IReadOnlyList<string> owners;
+        try { owners = IconOwners.OwnersListing(viPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { owners = []; }
+        if (owners.Count == 0) return new(aixmlPath, null, []);
+        if (owners.Count > 1)
+            return new(aixmlPath, null,
+                [$"NOTE: {Path.GetFileName(viPath)} is listed by more than one owner ({string.Join(", ", owners.Select(Path.GetFileName))}) - composed with the document's own _name"]);
+
+        string text;
+        byte[] bytes;
+        try { bytes = File.ReadAllBytes(aixmlPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(aixmlPath, null, []); }
+        var bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+        text = new System.Text.UTF8Encoding(false).GetString(bytes, bom ? 3 : 0, bytes.Length - (bom ? 3 : 0));
+
+        var tag = System.Text.RegularExpressions.Regex.Match(text, @"<VI\b[^>]*>");
+        var name = tag.Success ? System.Text.RegularExpressions.Regex.Match(tag.Value, @"\b_name=""([^""]*)""") : null;
+        if (name is null || !name.Success) return new(aixmlPath, null, []);
+        var given = name.Groups[1].Value;
+        if (given.Contains(':') || given.Contains(@"\3A", StringComparison.OrdinalIgnoreCase))
+            return new(aixmlPath, null, []);
+
+        var qualifier = OwnerQualifier(owners[0]);
+        var qualified = qualifier.Replace(":", @"\3A") + @"\3A" + given;
+        var newTag = tag.Value[..name.Index] + $"_name=\"{qualified}\"" + tag.Value[(name.Index + name.Length)..];
+        var copy = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(aixmlPath))!,
+                                Path.GetFileNameWithoutExtension(aixmlPath) + ".member-qualified.xml");
+        try
+        {
+            var output = new System.Text.UTF8Encoding(bom).GetPreamble()
+                .Concat(new System.Text.UTF8Encoding(false).GetBytes(text[..tag.Index] + newTag + text[(tag.Index + tag.Length)..]))
+                .ToArray();
+            File.WriteAllBytes(copy, output);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new(aixmlPath, null,
+                [$"NOTE: {Path.GetFileName(viPath)} is listed by {Path.GetFileName(owners[0])}, but the qualified copy could not be written ({e.Message}) - composed as a loose VI"]);
+        }
+        return new(copy, copy,
+            [$"NOTE: {Path.GetFileName(viPath)} is listed by {Path.GetFileName(owners[0])} - composed as its member {qualifier}:{given.Replace(@"\3A", ":")} to keep the membership"]);
+    }
+
+    /// <summary>
+    /// An owner's qualified name: the file name, after its containing library when the file names
+    /// one (`NI.Lib.ContainingLib`, as a class inside a library carries it): `Lib.lvlib:Class.lvclass`.
+    /// </summary>
+    internal static string OwnerQualifier(string ownerPath)
+    {
+        var own = Path.GetFileName(ownerPath);
+        try
+        {
+            var containing = System.Xml.Linq.XDocument.Load(ownerPath).Root?
+                .Elements("Property").FirstOrDefault(p => (string?)p.Attribute("Name") == "NI.Lib.ContainingLib")?.Value;
+            return string.IsNullOrWhiteSpace(containing) ? own : containing.Trim() + ":" + own;
+        }
+        catch (Exception e) when (e is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+        {
+            return own;
+        }
     }
 
     /// <summary>
@@ -190,7 +277,8 @@ internal static class AixmlComposer
     private static async Task<Result> ComposeCoreAsync(Setup setup, string aixmlPath, string viPath,
                                                        IReadOnlyList<string> searchFolders,
                                                        int? targetRelease, LabViewContext context,
-                                                       int timeoutSeconds, CancellationToken ct)
+                                                       int timeoutSeconds, CancellationToken ct,
+                                                       string? projectsOf = null)
     {
         var target = Path.GetFullPath(viPath);
         if (Path.GetDirectoryName(target) is { Length: > 0 } folder) Directory.CreateDirectory(folder);
@@ -224,7 +312,7 @@ internal static class AixmlComposer
         // repository could not call its own module's class, nor the parent class in a sibling
         // repository (session-7 report M2, 2026-11-03). Bare-name Calls never use these.
         // the AIXML's too: validation composes into a scratch VI, which belongs to no project
-        foreach (var lvproj in NearestProjects(target).Concat(NearestProjects(aixmlPath))
+        foreach (var lvproj in NearestProjects(target).Concat(NearestProjects(projectsOf ?? aixmlPath))
                      .Distinct(StringComparer.OrdinalIgnoreCase))
         {
             args.Add("--project");

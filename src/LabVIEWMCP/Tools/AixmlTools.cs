@@ -937,6 +937,9 @@ internal sealed class AixmlTools(LvaiConnection connection)
         foreach (var (key, value) in facts) o[key] = value;
         if (result.Report.Length > 0)
             o["composerReport"] = new JsonArray([.. result.Report.Select(r => (JsonNode)r)]);
+        // a VI written over a path a library or class lists, kept its member (AixmlComposer.QualifyForOwner)
+        if (result.Report.FirstOrDefault(r => r.Contains(" is listed by ", StringComparison.Ordinal)) is { } member)
+            o["libraryMember"] = member;
         if (result.Warning is { } warning) o["versionWarning"] = warning;
         o["elapsedMs"] = result.ElapsedMs;
         return o.ToJsonString(Indented);

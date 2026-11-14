@@ -1152,6 +1152,8 @@ internal sealed class BulkTools(LvaiConnection connection)
             if (execStep["measured"] is JsonValue m && m.TryGetValue<bool>(out var measured) && !measured)
                 compact["execStateMeasured"] = false;
         }
+        if (convertAnswer?["libraryMember"] is { } libraryMember)
+            compact["libraryMember"] = libraryMember.DeepClone();
         if (convertAnswer?["executable"] is JsonValue executable)
             compact["executable"] = executable.DeepClone();
         else if (execStep?["execState"] is JsonValue stateNode && stateNode.TryGetValue<int>(out var state)
