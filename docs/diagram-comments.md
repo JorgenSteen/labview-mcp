@@ -240,3 +240,27 @@ correctly from one it did not (in the first measurement LabVIEW's own box clippe
 caption, so its sizing is not evidence either). The practical rule: **a `WARNING` means place that
 comment or don't, but decide by looking** — an unplaced comment keeps LabVIEW's arbitrary position,
 which is wrong-but-tidy, while a warned one is right-but-crowded.
+
+## Which PNG shows which frame - `frames` and `frameFilter` (2026-11-14)
+
+`lvai_render_diagrams` writes `<base>d.png` (the top-level diagram, each structure showing its
+VISIBLE frame) and `<base>d1..dN.png`, one per hidden frame, named only by a number. On a large VI
+that was thousands of pictures nobody could map to a frame (a field project's main VI: about 2 700
+in three minutes). The answer now captions each PNG under `frames`
+(`Case Structure "Init" > Event Structure "Stop": Value Change`), and `frameFilter` (`|`-separated
+texts, any case) keeps the top-level diagram and the frames whose caption matches.
+
+THE ORDER LabVIEW writes them in, measured on LabVIEW 2026 with composed probes whose every frame
+carried a subdiagram label naming it: depth first - a diagram's structures in its heap `nodeList`
+order, each structure's frames in frame order, every frame that is not the visible one written,
+and the structures inside each frame (visible or not) walked where that frame stands. A case S1
+(frames A shown, B) holding a case S2 (p shown, q) in A, then a case S3 (m, n) printed d1 S2 q,
+d2 S1 B, d3 S3 n; a stacked sequence (0, 1, 2) with a case in frame 1 printed d1 frame 1, d2 that
+case's Default, d3 frame 2. Checked against NI's examples the same day - event frames inside a
+While Loop, the Conditional and Diagram Disable structures (the latter showing its frame 1) and a
+12-frame case example: every PNG showed the frame its caption named.
+
+The walk and each structure's visible frame (`dIdx`) come from the block diagram heap; the names
+from the AIXML reader (`scripts/aixml-pylabview/frames.py`). A VI the reader refuses is captioned by
+frame index; a frame count that does not match the PNGs is reported (`captions: not paired`) and
+never paired up by guess. The captions cost one read of the VI - `captionFrames: false` skips it.

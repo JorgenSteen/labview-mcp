@@ -44,7 +44,9 @@ internal sealed class RenderTools(LvaiConnection connection)
         and list the image files per VI - then READ them. Several VIs in ONE call. The only check
         that sees a clipped comment, a comment on the wrong node, or a dynamic event wire not drawn.
         The verdict is `rendered` per VI (from the PNGs that appeared), NOT errorCode - a good render
-        can report 91. `diagrams`: the top-level diagram first, then one per Case frame.
+        can report 91. `diagrams`: the top-level diagram first, then one per HIDDEN frame of a case,
+        event, stacked-sequence or disable structure; `frames` captions each one ("Case Structure
+        "Init" > Event Structure "Stop": Value Change"), and frameFilter keeps the ones you name.
         It LOADS each VI into LabVIEW: do any pylabview edit (pylv_apply) BEFORE rendering, never
         after, or LabVIEW keeps serving the copy it loaded.
         """)]
@@ -70,17 +72,28 @@ internal sealed class RenderTools(LvaiConnection connection)
              On pylabview the helper arguments are unused and LabVIEW must already be running.
             """)]
         string? backend = null,
+        [Description("""
+            Caption every frame PNG with the structure frame it shows (`frames`), read from the VI's
+            file (default: true). Costs a read of the VI; a large VI takes as long as its render.
+            """)]
+        bool captionFrames = true,
+        [Description("""
+            Keep only the frames whose caption contains one of these texts (`|`-separated, any case),
+            e.g. 'Initialize|"Stop"'; the top-level diagram is always kept. Needs captionFrames.
+            """)]
+        string? frameFilter = null,
         CancellationToken ct = default)
     {
         if (!AixmlBackend.TryResolve(backend, "lvai_render_diagrams", out var choice, out var badBackend))
             return AixmlBackend.Refusal(badBackend);
         return AixmlBackend.Named(await RenderDiagramsCoreAsync(viPaths, outputDirectory, helperViPath,
-            helperAixmlPath, regenerateHelper, timeoutSeconds, choice, ct), choice);
+            helperAixmlPath, regenerateHelper, timeoutSeconds, choice, captionFrames, frameFilter, ct), choice);
     }
 
     private async Task<string> RenderDiagramsCoreAsync(
         string viPaths, string? outputDirectory, string? helperViPath, string? helperAixmlPath,
-        bool regenerateHelper, int timeoutSeconds, AixmlBackend.Choice choice, CancellationToken ct)
+        bool regenerateHelper, int timeoutSeconds, AixmlBackend.Choice choice, bool captionFrames,
+        string? frameFilter, CancellationToken ct)
     {
         var targets = viPaths
             .Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
@@ -101,7 +114,7 @@ internal sealed class RenderTools(LvaiConnection connection)
         {
             var renders = Path.GetFullPath(outputDirectory ?? DefaultOutputDirectory());
             Directory.CreateDirectory(renders);
-            return await RenderOverComAllAsync(targets, renders, timeoutSeconds, ct);
+            return await RenderOverComAllAsync(targets, renders, timeoutSeconds, captionFrames, frameFilter, ct);
         }
 
         var aixml = helperAixmlPath ?? DefaultHelperAixmlPath()
@@ -167,6 +180,11 @@ internal sealed class RenderTools(LvaiConnection connection)
                 ["diagramCount"] = diagrams.Count,
                 ["helperErrorCode"] = response.ErrorCode,
             };
+            if (captionFrames && diagrams.Count > 1)
+            {
+                var (frames, _, problem) = await FrameCaptions.ReadAsync(viPath, timeoutSeconds, ct);
+                FrameCaptions.Apply(entry, diagrams, frames, problem, frameFilter);
+            }
 
             if (!rendered)
                 entry["hint"] =
@@ -263,7 +281,7 @@ internal sealed class RenderTools(LvaiConnection connection)
         try
         {
             var answer = await RenderDiagramsAsync(viPath, outputDirectory: folder,
-                                                   timeoutSeconds: timeoutSeconds, ct: ct);
+                                                   timeoutSeconds: timeoutSeconds, captionFrames: false, ct: ct);
             var png = (JsonNode.Parse(answer)?["results"]?[0]?["diagrams"]?[0])?.GetValue<string>();
             return png is null ? (null, null) : (DiagramSize.PngSize(png), png);
         }
@@ -330,7 +348,8 @@ internal sealed class RenderTools(LvaiConnection connection)
     /// differs is named. LabVIEW must already be running: this route never starts it.
     /// </summary>
     private async Task<string> RenderOverComAllAsync(
-        string[] targets, string outputs, int timeoutSeconds, CancellationToken ct)
+        string[] targets, string outputs, int timeoutSeconds, bool captionFrames, string? frameFilter,
+        CancellationToken ct)
     {
         if ((ComNotReady ?? LabViewCom.NotReady)() is { } notReady)
             return Json.Error("labviewNotRunning", notReady, new { requested = targets.Length });
@@ -360,6 +379,11 @@ internal sealed class RenderTools(LvaiConnection connection)
                 ["diagrams"] = new JsonArray([.. diagrams.Select(d => JsonValue.Create(d))]),
                 ["diagramCount"] = diagrams.Count,
             };
+            if (captionFrames && diagrams.Count > 1)
+            {
+                var (frames, _, problem) = await FrameCaptions.ReadAsync(viPath, timeoutSeconds, ct);
+                FrameCaptions.Apply(entry, diagrams, frames, problem, frameFilter);
+            }
             if (failure is not null)
             {
                 entry["errorKind"] = failure.Kind;
