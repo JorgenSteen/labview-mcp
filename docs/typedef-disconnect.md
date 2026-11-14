@@ -1220,7 +1220,12 @@ so this was a silent no-op the old check caught too - but it was the DEFAULT rou
 the pylabview default the tool runs its helper through NI's service whenever it answers (`backend`
 grpc, `routeNote`); a call naming `backend` gets that backend, and with NI's service down the ActiveX
 run stays and `routeNote` says what to expect. Why the ActiveX route binds nothing - the helper opens
-the VI through the active project's own application, as on grpc - is not measured.
+the VI through the active project's own application, as on grpc - is not measured. The CONSTANT
+bind does not share it: `lvai_bind_typedef_constants` over ActiveX on a caller passing an enum
+constant into `Set Mode.vi`'s typedef `Mode` answered `replaced: 1`, and the saved caller carried a
+`TypeDef To CustCtl` link for `Mode.ctl` in its diagram links - the same document freshly composed, the
+control, carried none. (No coercion dot either way: an enum with the typedef's own items is not
+coerced, so `coercedAfter` could not tell; the link record did.)
 
 ### 13c. A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY - 2026-09-18
 
