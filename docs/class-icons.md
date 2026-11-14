@@ -285,3 +285,20 @@ told apart from the file. A flattened template is reported (`templateLayerReplac
 set afterwards with `lvai_set_owner_icon applyToMembers`.
 Helpers and carriers (`measureDiagram: false`) get no icon. Measured only in unit tests so far; a
 live build is the acceptance test.
+
+## 9. `lvai_set_vi_icon` asks the SAVED file (2026-11-14)
+
+The helper's read-back (`Save VI Icon to File`, written last) comes from LabVIEW's MEMORY after its
+save, so it says what LabVIEW holds, not what reached the disk. A field project asked for "verified"
+to mean read back from disk. Since 2026-11-14 the tool also reads the `icl8` resource of the saved
+`.vi` straight from its resource map (`RsrcMap`, milliseconds, no pylabview, no LabVIEW) and decodes
+it through LabVIEW's 256-colour palette (`IconTools.IconPalette`, pylabview's table with index 0
+white). Pinned in a unit test against pylabview's own `_icl8.png` of the same VI.
+
+| `savedFileIcon` | meaning | `verified` | `ok` |
+|---|---|---|---|
+| `matches` | the file holds the icon LabVIEW reports | true | true |
+| `differs` | LabVIEW holds the new icon, the file does not (read-only, locked library) | false | false |
+| `unreadable` | no 32x32 `icl8` could be read | null | true |
+
+`savedFileIconPixelsDiffer` counts the pixels that differ, and a warning says what to check.

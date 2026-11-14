@@ -295,6 +295,7 @@ internal sealed class FakeLvaiService : LVAI.LVAIBase
         RunVIAsTopLevelRequest request, ServerCallContext context) =>
         Unary(nameof(RunVIAsTopLevel), request, () =>
         {
+            OnRunVIAsTopLevel?.Invoke(request);
             var response = new RunVIAsTopLevelResponse
             {
                 ErrorCode = CodeFor(nameof(RunVIAsTopLevel)),
@@ -303,6 +304,12 @@ internal sealed class FakeLvaiService : LVAI.LVAIBase
             foreach (var (key, value) in Outputs) response.Outputs[key] = value;
             return response;
         });
+
+    /// <summary>
+    /// Runs inside RunVIAsTopLevel before it answers - for a test that plays the helper's side
+    /// effects on disk (a saved VI, a read-back file), which a tool then judges from the files.
+    /// </summary>
+    public Action<RunVIAsTopLevelRequest>? OnRunVIAsTopLevel { get; set; }
 
     public override Task<BuildFromBuildSpecificationResponse> BuildFromBuildSpecification(
         BuildFromBuildSpecificationRequest request, ServerCallContext context) =>

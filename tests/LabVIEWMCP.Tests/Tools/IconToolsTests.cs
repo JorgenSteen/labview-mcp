@@ -61,11 +61,111 @@ public sealed class IconToolsTests : IDisposable
         Assert.Null(IconTools.StoredColourChanges(given, At("missing.png")));
     }
 
+    /// <summary>A REAL VI - the housekeeping fixture's Write Drink Type.vi - since the verdict reads its saved icon.</summary>
     private string WriteVi(string name = "Target.vi")
     {
         var path = At(name);
-        File.WriteAllText(path, "not really a VI, but a real file");
+        File.Copy(LabVIEWMcp.Tests.Infra.OwnerHousekeepingTests.Fixture("Write Drink Type.vi"), path, overwrite: true);
         return path;
+    }
+
+    /// <summary>
+    /// Plays the helper on disk, as LabVIEW does: the icon file's pixels mapped onto the icon
+    /// palette are stored in the VI's icl8 (only when <paramref name="save"/>), and that stored
+    /// icon is written out as the read-back. A file the fake cannot decode leaves the icon as it was.
+    /// </summary>
+    private static void ActAsIconHelper(LvaiTestServer server, bool save = true) =>
+        server.Service.OnRunVIAsTopLevel = request =>
+        {
+            var vi = request.Inputs["VI Path"];
+            var stored = IconTools.SavedIconRgb(vi)!;
+            try
+            {
+                var given = LabVIEWMcp.Infra.PngPixels.Decode(request.Inputs["Icon File Path"]);
+                if (given.Width == 32 && given.Height == 32)
+                    stored = [.. given.Pixels.Select(p => Nearest((p.R << 16) | (p.G << 8) | p.B))];
+            }
+            catch (LabVIEWMcp.Infra.PngPixels.PngException) { }
+            if (save) StoreIcon(vi, stored);
+            var bytes = stored.SelectMany(c => new[] { (byte)(c >> 16), (byte)(c >> 8), (byte)c }).ToArray();
+            File.WriteAllBytes(request.Inputs["Read Back Path"], LabVIEWMcp.Infra.WindowShot.EncodePng(
+                new LabVIEWMcp.Infra.WindowImage(32, 32, bytes)));
+        };
+
+    private static int Nearest(int rgb) =>
+        IconTools.IconPalette.MinBy(c => Math.Abs((c >> 16) - (rgb >> 16)) + Math.Abs(((c >> 8) & 0xFF) - ((rgb >> 8) & 0xFF)) +
+                                         Math.Abs((c & 0xFF) - (rgb & 0xFF)));
+
+    /// <summary>Overwrite the VI's icl8 block in place with these colours' palette indices.</summary>
+    private static void StoreIcon(string vi, int[] rgb)
+    {
+        var file = File.ReadAllBytes(vi);
+        var old = LabVIEWMcp.Infra.RsrcMap.Blocks(file, "icl8")[0];
+        var at = file.AsSpan().IndexOf(old);
+        Assert.True(at > 0 && file.AsSpan(at + 1).IndexOf(old) < 0, "the icl8 block is not unique in the file");
+        rgb.Select(c => (byte)Array.IndexOf(IconTools.IconPalette, c)).ToArray().CopyTo(file, at);
+        File.WriteAllBytes(vi, file);
+    }
+
+    // ---------------------------------------------------------------- the SAVED file
+
+    /// <summary>
+    /// The palette and the block reader against pylabview's own decode of the same VI's icl8 (its
+    /// extract's _icl8.png) - a real artefact, not a palette copied into the test.
+    /// </summary>
+    [Fact]
+    public async Task The_saved_icon_reads_as_pylabview_decodes_it()
+    {
+        if (LabVIEWMcp.Infra.PyLabview.Locate() is null) return;
+        var vi = WriteVi();
+        var outDirectory = At("extract");
+        var (_, failure) = await CtlTools.ExtractAsync(vi, outDirectory, 120, default);
+        Assert.Null(failure);
+        var png = LabVIEWMcp.Infra.PngPixels.Decode(Directory.GetFiles(outDirectory, "*_icl8.png").Single());
+
+        var saved = IconTools.SavedIconRgb(vi)!;
+
+        Assert.Equal(256, IconTools.IconPalette.Length);
+        Assert.Equal(1024, saved.Length);
+        Assert.Equal(png.Pixels.Select(p => (p.R << 16) | (p.G << 8) | p.B), saved);
+        Assert.True(saved.Distinct().Count() > 2, "a blank icon would prove nothing");
+    }
+
+    /// <summary>
+    /// THE CASE THE FIELD PROJECT ASKED FOR: LabVIEW holds the new icon (the read-back says so) but
+    /// the save never reached the disk. Until 2026-11-14 the read-back alone made this verified.
+    /// </summary>
+    [Fact]
+    public async Task A_read_back_whose_icon_never_reached_the_file_is_not_verified()
+    {
+        await using var server = await LvaiTestServer.StartAsync();
+        server.Service.ViFileContent = "generated helper";
+        ActAsIconHelper(server, save: false);
+
+        var result = await new IconTools(server.Connection).SetViIconAsync(
+            WriteVi(), iconImagePath: null, readBackPath: At("readback.png"), helperViPath: At("helper.vi"),
+            helperAixmlPath: ShippedHelperAixml(), line1: "DAQ");
+
+        Assert.False(Res.Bool(result, "verified"));
+        Assert.False(Res.Bool(result, "ok"));
+        Assert.Equal("differs", Res.Str(result, "savedFileIcon"));
+        Assert.Contains("did not write it to disk", Warnings(result));
+    }
+
+    /// <summary>The control arm: the same call with the save landing is verified from the file.</summary>
+    [Fact]
+    public async Task A_read_back_equal_to_the_saved_icon_is_verified()
+    {
+        await using var server = await LvaiTestServer.StartAsync();
+        server.Service.ViFileContent = "generated helper";
+        ActAsIconHelper(server);
+
+        var result = await new IconTools(server.Connection).SetViIconAsync(
+            WriteVi(), iconImagePath: null, readBackPath: At("readback.png"), helperViPath: At("helper.vi"),
+            helperAixmlPath: ShippedHelperAixml(), line1: "DAQ");
+
+        Assert.True(Res.Bool(result, "verified"));
+        Assert.Equal("matches", Res.Str(result, "savedFileIcon"));
     }
 
     /// <summary>
@@ -197,7 +297,8 @@ public sealed class IconToolsTests : IDisposable
         await using var server = await LvaiTestServer.StartAsync();
         server.Service.ViFileContent = "generated helper";
         server.Service.ErrorCodeByMethod["RunVIAsTopLevel"] = 91;   // the success-looking failure
-        var readBack = PlantReadBack();
+        ActAsIconHelper(server);
+        var readBack = At("readback.png");
 
         var result = await new IconTools(server.Connection).SetViIconAsync(
             WriteVi(), WritePng("icon.png"), readBack, At("helper.vi"), ShippedHelperAixml());
@@ -428,10 +529,11 @@ public sealed class IconToolsTests : IDisposable
     {
         await using var server = await LvaiTestServer.StartAsync();
         server.Service.ViFileContent = "generated helper";
+        ActAsIconHelper(server);
         var vi = WriteVi();
 
         var result = await new IconTools(server.Connection).SetViIconAsync(
-            vi, iconImagePath: null, readBackPath: PlantReadBack(), helperViPath: At("helper.vi"),
+            vi, iconImagePath: null, readBackPath: At("readback.png"), helperViPath: At("helper.vi"),
             helperAixmlPath: ShippedHelperAixml(), line1: "DAQ", line2: "3AI", line3: "TDMS");
 
         var drawn = Res.Str(result, "iconImagePath")!;
@@ -536,9 +638,10 @@ public sealed class IconToolsTests : IDisposable
     {
         await using var server = await LvaiTestServer.StartAsync();
         server.Service.ViFileContent = "generated helper";
+        ActAsIconHelper(server);
 
         var result = await new IconTools(server.Connection).SetViIconAsync(
-            WriteVi(), iconImagePath: null, readBackPath: PlantReadBack(),
+            WriteVi(), iconImagePath: null, readBackPath: At("readback.png"),
             helperViPath: At("helper.vi"), helperAixmlPath: ShippedHelperAixml(), line1: "DAQ");
 
         Assert.Equal("", Warnings(result));

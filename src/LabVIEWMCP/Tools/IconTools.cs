@@ -32,8 +32,10 @@ internal sealed class IconTools(LvaiConnection connection)
         own 32x32 PNG.
         CALL IT LAST: regenerating a VI from AIXML destroys its icon, so re-apply after every
         regeneration. Setting an icon leaves nothing in memory.
-        `ok` is `verified` (the icon read back out of the VI); errorCode 91 on success is dropped,
-        an unexpected runner code is kept under `runnerErrorCode`.
+        `verified`: LabVIEW's read-back of the icon AND the icon in the SAVED file equal to it
+        (`savedFileIcon` matches); `differs` means LabVIEW holds it but did not save it (verified
+        false, ok false); an unreadable file leaves verified null. errorCode 91 on success is
+        dropped, an unexpected runner code is kept under `runnerErrorCode`.
         It FLATTENS the icon editor's layers into pixels. To refresh only the class/library
         TEMPLATE while keeping the VI's own layer, pass keepOwnLayer instead of an image.
         Several VIs in one call: iconsJson; the answer carries `failed` and every VI's answer under
@@ -214,7 +216,7 @@ internal sealed class IconTools(LvaiConnection connection)
             // Save:Instrument, so a file written during this call is the one honest signal
             // that all three steps ran. The VI's own bytes are NOT that signal: an icon
             // identical to the one already there leaves the VI unmodified and unsaved.
-            var verified = readBackAfter.Exists
+            var readBackWritten = readBackAfter.Exists
                         && readBackAfter.WriteUtc >= runStartedUtc.AddSeconds(-2);
 
             var warnings = new JsonArray();
@@ -225,11 +227,15 @@ internal sealed class IconTools(LvaiConnection connection)
             else if (iconSize != "32x32")
                 warnings.Add($"The icon image is {iconSize}, not 32x32. LabVIEW icons are 32x32; " +
                              "whether it scales or crops has not been measured.");
-            if (!verified)
+            if (!readBackWritten)
                 warnings.Add("No read-back file was written, so the icon was probably NOT applied. " +
                              "Check errorMessage, and that the VI is not read-only or locked by a library.");
             var colourCheck = new List<(string, JsonNode?)>();
-            AddColourCheck((k, v) => colourCheck.Add((k, v)), warnings, iconImagePath, readBack, verified);
+            AddColourCheck((k, v) => colourCheck.Add((k, v)), warnings, iconImagePath, readBack, readBackWritten);
+            // ASK THE FILE: the read-back is LabVIEW's memory after its save, not the disk.
+            var savedState = AddSavedFileCheck((k, v) => colourCheck.Add((k, v)), warnings, viPath, readBack,
+                                               readBackWritten);
+            var verified = VerifiedFromFile(readBackWritten, savedState);
 
             return Verdict(Json.Message(response, [
                 ("verified", JsonValue.Create(verified)),
@@ -248,11 +254,13 @@ internal sealed class IconTools(LvaiConnection connection)
                 .. colourCheck,
                 ("warnings", warnings),
                 ("note", JsonValue.Create(
-                    "Judged by `verified` - a read-back file written during this call - and not by " +
-                    "RunVIAsTopLevel, which cannot read this helper's indicators back and answers " +
-                    "91 on success; on a verified run that 91 is dropped, and any other runner " +
-                    "code is kept under runnerErrorCode. Open readBackPath to see the icon now " +
-                    "stored in the VI; pixelsChanged compares it with the image you gave."))]), verified);
+                    "Judged by `verified` - a read-back file written during this call AND the icon " +
+                    "in the saved file equal to it (savedFileIcon) - and not by RunVIAsTopLevel, " +
+                    "which cannot read this helper's indicators back and answers 91 on success; on " +
+                    "a run that is ok that 91 is dropped, and any other runner code is kept under " +
+                    "runnerErrorCode. Open readBackPath to see the icon now stored in the VI; " +
+                    "pixelsChanged compares it with the image you gave."))]),
+                readBackWritten && savedState != "differs");
         });
 
     /// <summary>One VI of an iconsJson batch, after the fallbacks to the call's own parameters.</summary>
@@ -348,9 +356,10 @@ internal sealed class IconTools(LvaiConnection connection)
             items.Add((entry.ViPath, answer));
         }
         var batch = BatchAnswer.Aggregate(items, n => n["ok"]?.GetValue<bool>() == true);
-        batch["note"] = "One answer for several VIs, set one after another. `ok` means every icon was " +
-                        "VERIFIED by its read-back file; `failed` names the VIs whose were not. Each " +
-                        "VI's full single answer, read-back path included, is under `results`.";
+        batch["note"] = "One answer for several VIs, set one after another. `ok` means every icon has " +
+                        "a read-back file and no saved file that differs from it (savedFileIcon); " +
+                        "`failed` names the VIs that do not. Each VI's full single answer, read-back " +
+                        "path included, is under `results`.";
         return Json.Document(batch);
     }
 
@@ -383,17 +392,17 @@ internal sealed class IconTools(LvaiConnection connection)
             }.ToJsonString(), timeoutSeconds: timeoutSeconds, backend: AixmlBackend.PyLabview, ct: ct);
         var viAfter = Snapshot(viPath);
         var readBackAfter = Snapshot(readBack);
-        var verified = readBackAfter.Exists && readBackAfter.WriteUtc >= started.AddSeconds(-2);
+        var readBackWritten = readBackAfter.Exists && readBackAfter.WriteUtc >= started.AddSeconds(-2);
 
         var warnings = new JsonArray();
         foreach (var note in imageNotes) warnings.Add(note);
-        if (!verified)
+        if (!readBackWritten)
             warnings.Add("No read-back file was written, so the icon was probably NOT applied. " +
                          "Read `run` for the helper's own answer.");
         var answer = new JsonObject
         {
-            ["ok"] = verified,
-            ["verified"] = verified,
+            ["ok"] = readBackWritten,
+            ["verified"] = readBackWritten,
             ["via"] = "ActiveX",
             ["helperViPath"] = helper,
             ["viBytesBefore"] = viBefore.Bytes,
@@ -405,12 +414,16 @@ internal sealed class IconTools(LvaiConnection connection)
             ["iconImagePath"] = iconImagePath,
             ["iconRendered"] = iconRendered,
             ["warnings"] = warnings,
-            ["run"] = verified ? null : JsonNode.Parse(run),
-            ["note"] = "Judged by `verified` - a read-back file written during this call. Open " +
-                       "readBackPath to see the icon now stored in the VI; pixelsChanged compares it " +
-                       "with the image you gave.",
+            ["run"] = readBackWritten ? null : JsonNode.Parse(run),
+            ["note"] = "Judged by `verified` - a read-back file written during this call AND the icon " +
+                       "in the saved file equal to it (savedFileIcon). Open readBackPath to see the " +
+                       "icon now stored in the VI; pixelsChanged compares it with the image you gave.",
         };
-        AddColourCheck((k, v) => answer[k] = v, warnings, iconImagePath, readBack, verified);
+        AddColourCheck((k, v) => answer[k] = v, warnings, iconImagePath, readBack, readBackWritten);
+        // ASK THE FILE: the read-back is LabVIEW's memory after its save, not the disk.
+        var savedState = AddSavedFileCheck((k, v) => answer[k] = v, warnings, viPath, readBack, readBackWritten);
+        answer["verified"] = VerifiedFromFile(readBackWritten, savedState);
+        answer["ok"] = readBackWritten && savedState != "differs";
         return Json.Document(answer);
     }
 
@@ -456,6 +469,102 @@ internal sealed class IconTools(LvaiConnection connection)
             changes.Add(new JsonObject { ["from"] = from, ["to"] = to, ["pixels"] = count });
         return (changed, changes);
     }
+
+    /// <summary>
+    /// LabVIEW's 256-colour icon palette, as pylabview computes it (LVmisc.get_labview_color_palette_256,
+    /// with the patch that gives index 0 white): white, the 6x6x6 cube from FFFFFF down without its
+    /// two ends, 40 ramps of red, green, blue and grey, black. Measured 2026-11-13 on LabVIEW 2020: it
+    /// is LabVIEW's own table entry for entry once index 0 is white.
+    /// </summary>
+    internal static readonly int[] IconPalette = BuildIconPalette();
+
+    private static int[] BuildIconPalette()
+    {
+        var cubeSteps = Enumerable.Range(0, 6).Select(i => 0xFF - 0x33 * i).ToArray();
+        var cube = (from r in cubeSteps from g in cubeSteps from b in cubeSteps select (r << 16) | (g << 8) | b).ToArray();
+        var rampSteps = Enumerable.Range(0, 16).Where(i => i % 3 != 0).Select(i => 0xFF - 0x11 * i).ToArray();
+        var ramps = from rgb in new[] { (1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 1) }
+                    from s in rampSteps
+                    select ((rgb.Item1 * s) << 16) | ((rgb.Item2 * s) << 8) | (rgb.Item3 * s);
+        return [0xFFFFFF, .. cube[1..^1], .. ramps, 0x000000];
+    }
+
+    /// <summary>
+    /// The 32x32 colour icon stored IN THE FILE (its `icl8` resource, one palette index per pixel)
+    /// as RGB, or null when the file has no readable one. Read straight from the resource map, no
+    /// pylabview and no LabVIEW, so it costs milliseconds even on a 7 MB VI.
+    /// </summary>
+    internal static int[]? SavedIconRgb(string viPath)
+    {
+        try
+        {
+            var block = RsrcMap.Blocks(File.ReadAllBytes(viPath), "icl8").FirstOrDefault();
+            return block is { Length: 1024 } ? [.. block.Select(i => IconPalette[i])] : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException
+                                      or OverflowException or ArgumentOutOfRangeException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The icon IN THE SAVED FILE against LabVIEW's read-back: `matches`, `differs` (with the pixel
+    /// count), or `unreadable`. The read-back is written from LabVIEW's MEMORY after its save, so it
+    /// says what LabVIEW holds, not what reached the disk - a save refused (read-only file, a member
+    /// of a locked library) leaves the two apart, and only the file tells. A field project asked for
+    /// exactly this: "verified" means read back from disk (2026-11).
+    /// </summary>
+    internal static (string State, int? PixelsDiffer) SavedIconAgainstReadBack(string viPath, string readBackPng)
+    {
+        if (SavedIconRgb(viPath) is not { } saved) return ("unreadable", null);
+        PngPixels.Image readBack;
+        try { readBack = PngPixels.Decode(readBackPng); }
+        catch (Exception e) when (e is PngPixels.PngException or IOException or UnauthorizedAccessException)
+        {
+            return ("unreadable", null);
+        }
+        if (readBack.Width != 32 || readBack.Height != 32) return ("unreadable", null);
+        var differ = 0;
+        for (var i = 0; i < 1024; i++)
+        {
+            var p = readBack.Pixels[i];
+            if (((p.R << 16) | (p.G << 8) | p.B) != saved[i]) differ++;
+        }
+        return (differ == 0 ? "matches" : "differs", differ);
+    }
+
+    /// <summary>
+    /// The saved-file check added to an answer: `savedFileIcon` and, when the two differ, a warning.
+    /// Returns the state; the caller decides `verified` from it.
+    /// </summary>
+    private static string AddSavedFileCheck(Action<string, JsonNode?> add, JsonArray warnings,
+                                            string viPath, string readBack, bool readBackWritten)
+    {
+        if (!readBackWritten) return "notChecked";
+        var (state, differ) = SavedIconAgainstReadBack(viPath, readBack);
+        add("savedFileIcon", JsonValue.Create(state));
+        if (state == "differs")
+        {
+            add("savedFileIconPixelsDiffer", JsonValue.Create(differ));
+            warnings.Add($"The icon in the SAVED file differs from LabVIEW's read-back in {differ} pixel(s): " +
+                         "LabVIEW holds the new icon in memory but did not write it to disk. Check that " +
+                         "the VI is not read-only and not a member of a locked library, then save it.");
+        }
+        else if (state == "unreadable")
+            warnings.Add("The saved file's icon could not be read (no 32x32 icl8 resource), so the " +
+                         "disk was not checked - `verified` is null; the read-back says what LabVIEW holds.");
+        return state;
+    }
+
+    /// <summary>`verified` from the read-back and the saved-file check: true only when the file matches.</summary>
+    internal static bool? VerifiedFromFile(bool readBackWritten, string savedFileState) =>
+        !readBackWritten ? false : savedFileState switch
+        {
+            "matches" => true,
+            "differs" => false,
+            _ => null,
+        };
 
     /// <summary>The read-back compared with the input, added to an answer as `pixelsChanged` / `colourChanges`.</summary>
     private static void AddColourCheck(Action<string, JsonNode?> add, JsonArray warnings, string inputPng,
