@@ -70,11 +70,12 @@ internal sealed class DqmhTools(LvaiConnection connection)
         duplicate argument labels, an event name already used - is refused here by name first. The
         answer lists the files written with each VI's exec state and whether Main.vi is still
         executable. Works with DQMH 5/6 and 7.x (`dqmhGeneration`). What Delacor leaves for a person
-        is in `completionNeeded` - a frame's #CodeNeeded code (lvai_dqmh_place_handler), and on 7.x a
-        Broadcast's tester status string. The call Delacor drops LOOSE on Main.vi for a Broadcast
-        (or a 7.x private request) is removed by default so Main.vi stays executable (`looseCall`;
-        keepLooseCall keeps it) - the module then does not fire it until you place the event VI.
-        docs/dqmh-scripting.md section 9c.
+        is in `completionNeeded` - a frame's #CodeNeeded code (lvai_dqmh_place_handler). The call
+        Delacor drops LOOSE on Main.vi for a Broadcast (or a 7.x private request) is removed by
+        default so Main.vi stays executable (`looseCall`; keepLooseCall keeps it) - the module then
+        does not fire it until you place the event VI. A Broadcast's tester frame gets its first
+        formattable argument (else the event time) wired into its status string, so the tester
+        stays executable (`testerBroadcast`). docs/dqmh-scripting.md section 9c.
         """)]
     public async Task<string> NewEvent(
         [Description("Module, e.g. 'Heater' or 'Heater.lvlib', matched case-insensitively")]

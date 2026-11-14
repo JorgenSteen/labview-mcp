@@ -173,4 +173,52 @@ public class DqmhHeadlessEventTests
 
         Assert.Equal(opened.Order(), called.Order());
     }
+
+    // The tester's broadcast frame (docs/dqmh-scripting.md 9c-a): the first argument Format Into
+    // String takes is wired, with the specifier its type needs - a double breaks under %s.
+    [Theory]
+    [InlineData("double", "%g")]
+    [InlineData("single", "%g")]
+    [InlineData("int32", "%d")]
+    [InlineData("uint16{Off,On}", "%d")]
+    [InlineData("string", "%s")]
+    [InlineData("bool", "%s")]
+    [InlineData("path", "%s")]
+    public void A_broadcast_argument_gets_the_specifier_its_type_needs(string type, string specifier)
+    {
+        var format = DqmhHeadless.TesterBroadcastFormat([new DqmhTools.Argument("Speed", type)]);
+
+        Assert.Equal(("Speed", $"Response Received - Speed: {specifier}"), format);
+    }
+
+    [Fact]
+    public void The_first_argument_Format_Into_String_takes_is_chosen()
+    {
+        var format = DqmhHeadless.TesterBroadcastFormat([
+            new DqmhTools.Argument("Samples", "array{double}"),
+            new DqmhTools.Argument("Setup", "cluster{double.Gain}"),
+            new DqmhTools.Argument("Value", "double"),
+            new DqmhTools.Argument("Unit", "string")]);
+
+        Assert.Equal("Value", format.Field);
+    }
+
+    // An argument-less broadcast gets a placeholder Event Data Node field 'Boolean' (measured
+    // 2026-11-14); every frame has 'Time', so that is what the status string shows then.
+    [Fact]
+    public void No_formattable_argument_shows_the_event_time()
+    {
+        var expected = ("Time", "Response Received at %<%H:%M:%S>T");
+        Assert.Equal(expected, DqmhHeadless.TesterBroadcastFormat([]));
+        Assert.Equal(expected, DqmhHeadless.TesterBroadcastFormat([new DqmhTools.Argument("Samples", "array{double}")]));
+    }
+
+    [Fact]
+    public void Format_codes_in_an_argument_name_are_escaped()
+    {
+        var format = DqmhHeadless.TesterBroadcastFormat([new DqmhTools.Argument(@"Load % a\b", "double")]);
+
+        Assert.Equal(@"Load % a\b", format.Field);
+        Assert.Equal(@"Response Received - Load %% a\\b: %g", format.Format);
+    }
 }

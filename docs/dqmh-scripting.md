@@ -1210,11 +1210,37 @@ ANCHORED label is not a free `Text` object until its node is gone (the label pas
 second run), so the label pass runs after the call pass; and closing a deleted object's reference
 answers 1055 - which, chained, skipped the save, leaving the fix in memory only.
 
-The TESTER is not fixed yet: its broadcast frame's inner `Format Into String` keeps
-`'Response Received - %s'` with `input 1` unwired. Measured: a format with no specifier and an unwired
-`input 1` is still broken; a double needs `%g` (`%s` broken), a Boolean or string takes `%s`. Wiring
-the Event Data Node's argument there needs the specifier chosen per type and the node grown per
-argument - open.
+The TESTER breaks the same way: its broadcast frame's inner `Format Into String` keeps
+`'Response Received - %s'` with `input 1` unwired - five broadcasts, five copies of `Format Into
+String: Contains unwired or bad terminal`. Measured: a format with no specifier and an unwired
+`input 1` is still broken; a double needs `%g` (`%s` broken), a Boolean or string takes `%s`.
+
+### 9c-b. The tester's broadcast frame is wired by default (2026-11-14)
+
+`lvai_dqmh_new_event` runs `scripts/lvdqmh_wire_tester_broadcast.xml` after every Broadcast (and a
+Round Trip's broadcast half, whose payload is the reply). The tool picks ONE field and the format
+string; the helper finds every `Format Into String` (class `FormatScanString`) whose `input 1` is
+unwired, looks in that terminal's own `Diagram` for a SOURCE terminal named after the field - the
+Event Data Node's, which VI Server reports as class `NamedUnbundler` - wires it with `Connect Wire`,
+writes the format string into the constant at the other end of the `format string` wire, and saves
+the tester only when it wired something. `Dry Run` lists, per format node, `-1` (not a candidate) or
+how many sources matched.
+
+- The field is the FIRST argument Format Into String takes: `%g` for a floating-point number, `%d`
+  for an integer or enum, `%s` for a string, Boolean or path. Further arguments stay on the Event
+  Data Node, unwired; the format node is not grown (`testerBroadcast.note` says so).
+- An argument-less broadcast gets a placeholder Event Data Node field `Boolean` from Delacor, and a
+  payload of only clusters or arrays has nothing Format Into String takes: then the frame's `Time`
+  field is shown, `Response Received at %<%H:%M:%S>T`.
+- A candidate is any unwired `input 1` with a source of that name in its diagram, so a frame an
+  earlier call left broken with the same field name is repaired as well.
+
+Measured on DQMH 7.1.2 in LabVIEW 2026, module `Pump2`, the helper alone: broadcasts with a double,
+a string, a Boolean and a double+string payload, tester errors 5 -> 4 -> 3 -> 2 -> 1 (the argument-
+less one left), a repeat run `Frames Wired` 0, every repair on disk in the next export.
+Then through the tool, four more broadcasts - a double, none, an `array{double}`, an int32 + string:
+the tester read 1 after each, `testerBroadcast` named `Flow`/`%g`, `Time` twice and `Count`/`%d`,
+11-13.5 s per call, Main.vi 1 throughout.
 
 ### 9d. Remove, rename, convert and validate with no dialog - measured 2026-10-06
 

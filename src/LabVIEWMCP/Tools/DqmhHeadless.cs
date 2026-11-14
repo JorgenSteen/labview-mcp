@@ -742,6 +742,52 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
                 };
         }
 
+        // THE TESTER'S BROADCAST FRAME. DQMH 7.x gives every broadcast a tester frame whose inner
+        // Format Into String reads 'Response Received - %s' with input 1 UNWIRED, which leaves the
+        // tester broken (docs/dqmh-scripting.md 9c-a, a field project's gap D2). The first argument
+        // Format Into String can take is wired there from the Event Data Node, with the specifier
+        // its type needs - a double breaks under %s, measured.
+        JsonObject? testerBroadcast = null;
+        var broadcastPayload = typeIndex == 1 ? arguments : typeIndex == 3 ? replyArguments : null;
+        if (broadcastPayload is not null && File.Exists(tester))
+        {
+            var format = TesterBroadcastFormat(broadcastPayload);
+            var failure = File.Exists(Path.Combine(scripts, TesterBroadcastHelper + ".xml"))
+                ? await EnsureWrapperAsync(scripts, TesterBroadcastHelper, [], projectPath, steps,
+                    timeoutSeconds, ct)
+                : $"{TesterBroadcastHelper}.xml is missing from the scripts folder";
+            var wired = failure is null
+                ? await dqmh.RunAsync(scripts, TesterBroadcastHelper, new()
+                {
+                    ["Tester VI Path"] = tester,
+                    ["Field Name"] = format.Field,
+                    ["Format String"] = format.Format,
+                    ["Dry Run"] = "false",
+                }, timeoutSeconds, ct)
+                : null;
+            testerBroadcast = wired is null
+                ? new JsonObject
+                {
+                    ["ran"] = false,
+                    ["reason"] = failure ?? $"{TesterBroadcastHelper} could not be run",
+                }
+                : new JsonObject
+                {
+                    ["ran"] = true,
+                    ["field"] = format.Field,
+                    ["formatString"] = format.Format,
+                    ["framesWired"] = int.TryParse(DqmhTools.Scalar(wired, "Frames Wired"), out var n) ? n : null,
+                    ["error"] = DqmhTools.Failed(wired),
+                };
+            if (wired is not null && format.Field == EventTimeField && broadcastPayload.Count > 0)
+                testerBroadcast["note"] = "No argument is of a type Format Into String takes " +
+                                          "(numeric, string, Boolean, path); the tester's status " +
+                                          "string shows the event's time instead.";
+            else if (wired is not null && broadcastPayload.Count > 1)
+                testerBroadcast["note"] = $"The tester's status string shows {format.Field} only; " +
+                                          "the other arguments are on its Event Data Node, unwired.";
+        }
+
         // Nothing in the project was unsaved before this call - it refuses otherwise - so
         // whatever is unsaved now is the scripting's own work: module members, the tester, its
         // unit tests. Save it, as a person would after Delacor's dialog.
@@ -791,6 +837,7 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
             ["testerExecStateBefore"] = testerExecBefore,
             ["testerExecState"] = testerExec,
             ["testerWiring"] = testerWiring,
+            ["testerBroadcast"] = testerBroadcast,
             ["looseCall"] = looseCall,
             ["savedMembers"] = Array(saved),
             ["unsavedMembers"] = Array(unsaved),
@@ -930,6 +977,45 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
 
     private const string TesterHelper = "lvdqmh_wire_tester_event";
     private const string LooseCallHelper = "lvdqmh_remove_loose_call";
+    private const string TesterBroadcastHelper = "lvdqmh_wire_tester_broadcast";
+
+    /// <summary>
+    /// The field and format string for a broadcast's tester frame: the FIRST argument Format Into
+    /// String takes, with the specifier its type needs - %g for a floating-point number (%s
+    /// breaks a double, measured 2026-11-14), %d for an integer or enum, %s for a string,
+    /// Boolean or path. When no argument qualifies (none - Delacor then gives the Event Data Node a
+    /// placeholder field `Boolean`, measured - or only clusters, arrays, references, timestamps,
+    /// variants) the frame's Event Data Node `Time` is shown instead, so the frame still compiles.
+    /// A % or backslash in the name is escaped, because both are codes in a format string.
+    /// </summary>
+    internal static (string Field, string Format) TesterBroadcastFormat(
+        IReadOnlyList<DqmhTools.Argument> arguments)
+    {
+        foreach (var argument in arguments)
+        {
+            if (FormatSpecifier(argument.Type) is not { } specifier) continue;
+            var label = argument.Name.Replace("\\", "\\\\").Replace("%", "%%");
+            return (argument.Name, $"Response Received - {label}: {specifier}");
+        }
+        return (EventTimeField, "Response Received at %<%H:%M:%S>T");
+    }
+
+    /// <summary>The Event Data Node field every user-event frame has: the event's timestamp.</summary>
+    internal const string EventTimeField = "Time";
+
+    private static string? FormatSpecifier(string type)
+    {
+        var t = type.Trim().ToLowerInvariant();
+        if (t.StartsWith("array") || t.StartsWith("cluster") || t.StartsWith("ref")) return null;
+        var scalar = t.Split('{')[0];
+        return scalar switch
+        {
+            "double" or "single" or "float" or "float32" or "float64" or "ext" or "extended" => "%g",
+            "int8" or "int16" or "int32" or "int64" or "uint8" or "uint16" or "uint32" or "uint64" => "%d",
+            "string" or "bool" or "boolean" or "path" => "%s",
+            _ => null,
+        };
+    }
     private const string FillHelper = "lvbd_fill_unwired_inputs";
 
     /// <summary>
