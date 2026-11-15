@@ -186,3 +186,13 @@ The gate does not reach the grpc route (6c), which goes through NI's service and
 call that times out releases the gate while its worker may still sit in a COM call, so a hung LabVIEW
 does not lock the server for ever. The next call then runs beside the stuck one, as every call did
 before.
+
+### 6f. 1026 on executable VIs, after the gate (2026-11-15)
+
+The end-to-end run of 2026-11-14 (DQMH modules and events built through Delacor's scripting) still
+answered `Get Errors answered error 1026` repeatedly - on EXECUTABLE VIs, with `execState` right
+each time. The competing operation is not ours to gate: Delacor's scripting works on the module's
+VIs inside LabVIEW. So the retry (`NeedsErrorsRetry`) now fires on `1026` whatever the state, as
+well as on any refusal for a broken VI; `1073` on a running VI is still not retried. When the lines
+are still missing on an executable VI, `errorsNotReadBecause` says so and adds that it is harmless:
+an executable VI has no error line to miss.

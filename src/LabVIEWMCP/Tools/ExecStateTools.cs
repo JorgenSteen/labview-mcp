@@ -520,11 +520,15 @@ internal sealed class ExecStateTools(LvaiConnection connection)
                 new System.Text.Json.Nodes.JsonObject { ["error"] = e.Error, ["detail"] = e.Detail }).ToArray());
 
     /// <summary>
-    /// A broken reading whose Error List lines Get Errors refused with a code of its own - the one
-    /// case worth running the helper a second time for. Pure.
+    /// A reading whose Error List lines Get Errors refused - worth running the helper a second time
+    /// for: a BROKEN VI on any code, and any VI on 1026 (VI Reference is invalid), the parallel miss
+    /// of docs/error-list.md §6. The 2026-11-14 end-to-end run answered 1026 repeatedly on
+    /// EXECUTABLE VIs, where the retry did not fire. 1073 (the VI is running) is not retried on an
+    /// executable VI: a second read answers the same. Pure.
     /// </summary>
     internal static bool NeedsErrorsRetry(ExecStateReading? r) =>
-        r is { Broken: true, Errors: null, GetErrorsCode: not null and not 0 };
+        r is { Errors: null, GetErrorsCode: 1026 } and { CouldNotOpen: false }
+        || r is { Broken: true, Errors: null, GetErrorsCode: not null and not 0 };
 
     /// <summary>Get Errors' own error code, or null when the helper has no such indicator.</summary>
     internal static int? GetErrorsCodeOf(Func<string, string?> read) =>
@@ -536,6 +540,7 @@ internal sealed class ExecStateTools(LvaiConnection connection)
         r.Errors is not null ? null
         : r.GetErrorsCode is { } code and not 0
             ? $"Get Errors answered error {code} instead of the Error List's lines"
+              + (r.State > 0 ? " - harmless here: the VI is executable, so no error line is missing" : "")
             : r.GetErrorsCode is null
                 ? "the helper that ran has no Get Errors step (built before 2026-10-14, or the direct ActiveX fallback)"
                 : "the lines could not be parsed";
