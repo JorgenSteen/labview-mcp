@@ -94,7 +94,7 @@ internal sealed class BulkTools(LvaiConnection connection)
         bool measureDiagram = true,
         [Description(AixmlBackend.ParameterDescription + """
              On pylabview the validate step is skipped and executability is read instead (the
-            composer does not type-check wiring); every step then needs a RUNNING LabVIEW over
+            composer checks only part of the wiring); every step then needs a RUNNING LabVIEW over
             ActiveX, never NI's service.
             """)]
         string? backend = null,
@@ -508,7 +508,8 @@ internal sealed class BulkTools(LvaiConnection connection)
                         ? $" - its Error List says: {lines[0]?["error"]}" +
                           (lines.Count > 1 ? $" (and {lines.Count - 1} more)" : "")
                         : "") +
-                    ". The composer does not type-check wiring the way NI's validation does: " +
+                    ". The composer checks only part of the wiring NI's validation checks (subVI inputs and " +
+                    "indicators, never primitives): " +
                     (Parsed(convert)?["errors"] is JsonArray
                         ? "`errors` in the convert step holds the Error List's lines with their " +
                           "explanation - fix those, or generate the same document with backend grpc."

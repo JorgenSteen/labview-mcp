@@ -1107,7 +1107,9 @@ internal sealed class AixmlTools(LvaiConnection connection)
              ("executableNote", execNote is null ? null : JsonValue.Create(execNote)),
              ("warning", broken
                  ? JsonValue.Create("The VI was WRITTEN but is BROKEN (execState 0). The composer " +
-                     "does not type-check wiring; `errors` holds the lines LabVIEW's Error List " +
+                     "checks only a subVI input's type and required inputs and an indicator's " +
+                     "source (its WARNING lines in `composerReport`), never a primitive's wiring; " +
+                     "`errors` holds the lines LabVIEW's Error List " +
                      "shows for it, each with its explanation" + (errors is null
                          ? " - not read this time, so compare with the grpc backend, whose " +
                            "validation names the node."
