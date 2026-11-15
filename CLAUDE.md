@@ -471,6 +471,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Read or write AIXML | `docs/aixml-reference.md` | `lvai_aixml_reference` |
 | What validation does NOT catch; lint with no LabVIEW | `docs/aixml-reference.md`, `docs/aixml-lint.md` | `lvai_check_aixml`, `scripts/aixml_lint.py` |
 | AIXML without NI's service; which LabVIEW and INI the server uses | `docs/aixml-backends.md` | `backend`, `lvai_list_labview_installations` |
+| What the non-gRPC setup still lacks (a tracking list - re-check a row against the code first) | `docs/non-grpc-gaps.md` | — |
 | A multi-VI build by several agents | `docs/build-contract.md` | `lvai_check_build_contract` |
 | Where tokens and time go | `docs/token-economy.md`, `docs/workflow-economics.md`, `docs/ideen-schneller-und-weniger-tokens.md` | — |
 | Tool descriptions before shortening; this file before the rewrite | `docs/tool-descriptions-archive.md`, `docs/claude-md-archive.md` | — |

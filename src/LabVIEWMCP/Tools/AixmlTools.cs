@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -1006,7 +1006,7 @@ internal sealed class AixmlTools(LvaiConnection connection)
         {
             var result = await AixmlComposer.ComposeAsync(setup, symbolic.PathForLabview,
                 Path.Combine(scratch, Path.GetFileNameWithoutExtension(aixmlPath) + ".vi"),
-                SearchFolders(aixmlPath), timeoutSeconds, ct);
+                SearchFolders(aixmlPath), timeoutSeconds, ct, validate: true);
             return ComposerAnswer(result, choice,
                 [.. SymbolicFacts(symbolic),
                  ("validatedBy", JsonValue.Create("composer")),
@@ -1014,8 +1014,10 @@ internal sealed class AixmlTools(LvaiConnection connection)
                      "The pylabview backend has no separate validation: this COMPOSED the VI into a " +
                      "scratch folder and deleted it. errorCode 0 means the composer can build the " +
                      "document; it refuses by name what it cannot (errorKind composerRefused). It " +
-                     "does NOT type-check wiring the way NI's ValidateAIXML does, so a document that " +
-                     "composes can still load broken - convert it and read executable.")),
+                     "checks only part of the wiring NI's ValidateAIXML checks - an unwired required subVI " +
+                     "input, and a string, boolean, path or numeric wire into a terminal of another of " +
+                     "those (primitives and clusters are not judged) - so a document that composes can " +
+                     "still load broken: convert it and read executable.")),
                  ("preCheck", PreCheckIfInteresting(aixmlPath))]);
         }
         finally

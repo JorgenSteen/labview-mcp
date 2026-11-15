@@ -606,6 +606,22 @@ def binary_link_records(data):
     return out
 
 
+def channel_template_name(name, path):
+    """A call into a CHANNEL wire's endpoint, named as NI's export names it. LabVIEW makes one
+    library per channel type under `<extravilib>\\ChannelInstances` - `Tag-bool.lvlib`,
+    `Stream-a[.](wfm(dbl)).lvlib`, `Messenger-class'MyMessage'.lvlib` - and the link record
+    names that instance, while NI's export names the TEMPLATE it was cloned from (`Tag.lvlib:
+    Write.vi`): 452 of the 459 call targets the reader got wrong over 2011 cached NI exports
+    (2026-10-30). The template is the instance's name up to its first hyphen; none of the
+    eleven templates under resource\\Channels has one in its name."""
+    if not path or "ChannelInstances" not in path[1]:
+        return name
+    parts = name.split(":")
+    if len(parts) > 1 and parts[0].lower().endswith(".lvlib") and "-" in parts[0]:
+        parts[0] = parts[0].split("-", 1)[0] + ".lvlib"
+    return ":".join(parts)
+
+
 def _path_components(b):
     """A flattened PTH0 path -> (type, [components]): type 0 absolute (an anchor such as `<vilib>`
     first), 1 relative to the caller FILE with "" for each level up. None if it is not one."""
@@ -949,6 +965,7 @@ class Reader:
         self.anchored = {}       # anchored comments: object uid -> text, set as comment= in read()
         self.ordered_inputs = {}   # element -> its inputs in TERMINAL order, unwired ones listed
         self.ordered_ports = []    # (element, attr, [(term uid, name)]) rewritten after wiring
+        self.full_ports = []       # the same, written even when nothing is wired (a CLF node)
         self.term_net = {}
 
     # ---- helpers ---------------------------------------------------------------------------
@@ -970,7 +987,7 @@ class Reader:
             # a call into a CLASS (LUnit's Test Case.lvclass:Pass If.vi) was "?" for that
             data = open(os.path.join(self.b.dir, sec.get("File")), "rb").read()
             for off, tag, name, flag, path in binary_link_records(data):
-                name = ":".join(self._relative_to_caller(name.split(":"), str(flag)))
+                name = channel_template_name(":".join(self._relative_to_caller(name.split(":"), str(flag))), path)
                 out.setdefault(str(off), {})[tag] = name
                 if path and (tag == "IUVI" or str(off) not in self.call_paths):
                     self.call_paths[str(off)] = path
@@ -988,9 +1005,9 @@ class Reader:
                 qual = [lib[-1]] + qual
             else:
                 qual = self._relative_to_caller(qual, rec.get("LinkSaveFlag"))
-            name = ":".join(qual)
             pref = rec.find("LinkSavePathRef")
             path = (int(pref.get("TpVal") or 0), [s.text or "" for s in pref.findall("String")]) if pref is not None else None
+            name = channel_template_name(":".join(qual), path)
             # a class link record (DyOM, FPPI, DDPI) keeps its uids in APILinkCacheList - read
             # once pylabview parses the link cache's tail (patches.json, class-link-tail)
             for off in rec.findall("LinkOffsetList/Offset") + rec.findall("APILinkCacheList/Offset"):
@@ -1031,10 +1048,13 @@ class Reader:
         3 - to its OUTERMOST library only: Send Normal Stop.vi (Actor Framework.lvlib, Stop
             Msg.lvclass) calls `Message Enqueuer.lvclass:Enqueue.vi`, NI exports `Actor
             Framework.lvlib:Message Enqueuer.lvclass:Enqueue.vi` - Message Maker's the same.
-        The flag is per record: Pry.vi's calls into vi.lib carry 0."""
+        The flag is per record: Pry.vi's calls into vi.lib carry 0. Flag 2 holds for a name of
+        several parts too: DQMH's Start Module.vi (Device Under Test_Cloneable_DQMH.lvlib) calls
+        `Clone Registration.lvlib:Init.vi`, a library NESTED in its own, and NI exports `Device
+        Under Test_Cloneable_DQMH.lvlib:Clone Registration.lvlib:Init.vi` (2026-10-30)."""
         if not self.caller_libs or not qual:
             return qual
-        if flag == "2" and len(qual) == 1:
+        if flag == "2" and qual[0] != self.caller_libs[0]:
             return self.caller_libs + qual
         if flag == "2":
             # a NESTED library or class of the caller's chain: DQMH's Close Module.vi (in Device
@@ -1450,6 +1470,8 @@ class Reader:
                 el.set(attr, ",".join("%s:%s" % (escape(nm), self.term_net.get(u, "")) for u, nm in order))
             elif attr in el.attrib:
                 del el.attrib[attr]
+        for el, attr, order in self.full_ports:
+            el.set(attr, ",".join("%s:%s" % (escape(nm), self.term_net.get(u, "")) for u, nm in order))
         # an UNWIRED terminal still carries its attribute with an empty net, as NI writes it on
         # every one of its 404 unwired controls and 79 indicators - 0 of ~5 500 omit it - and as
         # the schema requires (CLAUDE.md, cold-build-shakerrig.md section 2)

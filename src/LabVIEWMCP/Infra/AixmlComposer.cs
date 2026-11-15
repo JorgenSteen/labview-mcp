@@ -157,7 +157,8 @@ internal static class AixmlComposer
     /// </summary>
     public static async Task<Result> ComposeAsync(Setup setup, string aixmlPath, string viPath,
                                                   IReadOnlyList<string> searchFolders,
-                                                  int timeoutSeconds, CancellationToken ct)
+                                                  int timeoutSeconds, CancellationToken ct,
+                                                  bool validate = false)
     {
         // the LabVIEW this VI is FOR: the one whose installation and add-ons resolve its calls, and
         // the release it is stamped as - the running one, by its -pref INI (issue #99)
@@ -171,7 +172,8 @@ internal static class AixmlComposer
         try
         {
             var result = await ComposeCoreAsync(setup, member.AixmlPath, viPath, searchFolders, targetRelease,
-                                                context, timeoutSeconds, ct, projectsOf: aixmlPath);
+                                                context, timeoutSeconds, ct, projectsOf: aixmlPath,
+                                                validate: validate);
             return result with
             {
                 Warning = Join(WarningForOlderLabView(inUse, parts), pinNote),
@@ -278,7 +280,8 @@ internal static class AixmlComposer
                                                        IReadOnlyList<string> searchFolders,
                                                        int? targetRelease, LabViewContext context,
                                                        int timeoutSeconds, CancellationToken ct,
-                                                       string? projectsOf = null)
+                                                       string? projectsOf = null,
+                                                       bool validate = false)
     {
         var target = Path.GetFullPath(viPath);
         if (Path.GetDirectoryName(target) is { Length: > 0 } folder) Directory.CreateDirectory(folder);
@@ -294,6 +297,9 @@ internal static class AixmlComposer
         }
         if (targetRelease is { } release) { args.Add("--lv-version"); args.Add((release - 2000).ToString(System.Globalization.CultureInfo.InvariantCulture)); }
         foreach (var search in searchFolders) { args.Add("--search"); args.Add(search); }
+        // a validation refuses a wire LabVIEW would load broken; a conversion writes it and warns,
+        // as NI's ValidateAIXML and ConvertAIXMLToVI split it
+        if (validate) args.Add("--validate");
         // LabVIEW's project\ folder LAST: vendor toolkits install their scriptable VIs there -
         // Delacor's DQMH libraries among them, three levels down - and NI's converter resolves
         // those only once they are loaded, while the composer resolves by file. Measured in

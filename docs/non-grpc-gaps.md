@@ -1,0 +1,136 @@
+# What the non-gRPC setup still lacks
+
+A tracking list of what the MCP cannot do on the `pylabview` backend (our composer and reader, with
+ActiveX into a running LabVIEW), and whether a tool could close each gap. It matters most where
+NI's gRPC service does not exist at all - LabVIEW 2020 to 2024.
+
+Started 2026-10-29 from `docs/aixml-backends.md` and the `Unsupported(...)` refusals in
+`scripts/aixml-pylabview/aixml2vi.py`. **The composer and the reader change weekly**: re-check a row
+against the code, or a probe, before working on it, and tick it here when it closes.
+
+Feasibility: **yes** = the route is known and the pattern exists in the repo; **likely** = a route
+is plausible but unmeasured; **no** = the capability is NI's own.
+
+## 1. Tools with no non-gRPC route
+
+| | tool | feasible? | idea |
+|---|---|---|---|
+| [ ] | `pylv_route` | yes | Ask "does the READER + COMPOSER round-trip this VI" instead of "does NI's converter": read, recompose to scratch, compare facts (`compare_full.py`), report unread constructs |
+| [ ] | `lvai_find_palette_item` | yes | `lvai_palette_index` already answers offline; route the tool onto it |
+| [ ] | `lvai_drop_palette_item` | likely | Compose a one-node `Call` and paste it, or VI Server scripting (`New VI Object`) over ActiveX |
+| [ ] | `lvai_status` service check | yes | Report the ActiveX/composer readiness instead (`pylv_status` already has most of it) |
+| — | `lvai_discuss_file`, `_build_from_build_specification`, `_get_application_configuration`, `_log_usage_data`, info-cache, `_filter_*`, `_monitor_*` | no | NI's assistant features. Build specifications could get their own route (`{LV.Project}` build methods over ActiveX) - likely |
+
+## 2. Composer gaps (AIXML -> VI), refused by name
+
+| | gap | feasible? |
+|---|---|---|
+| [ ] | tunnel modes other than plain, `index` and `concat` (output), and `cond=` other than on an indexing output | yes. **Indexing tunnels DO compose** (`t67_for_indexing`) - the first version of this list said they did not, from a stale docstring in `add_loop` |
+| [ ] | structures beyond While, For, Case, Event, Flat Sequence, Disable, Conditional Disable, In Place pairs, Formula Node | yes per structure (donor + measurement); Timed Loop and Stacked Sequence are the candidates |
+| [ ] | types without a harvested part (further tag refnums, some refnum classes, FixedConst, rings of some types, some front-panel objects) | yes, but see 4a |
+| [ ] | some `In Place ...` variants | yes |
+| [ ] | `Array To Cluster` in some modes | yes |
+| [ ] | some Compound Arithmetic operations | yes |
+| [ ] | Invoke Node methods with several outputs | yes |
+| [ ] | XNode calls (Express VIs) | likely - hard; XNodes carry their own state |
+| [ ] | Index Array on some input types | yes |
+| [ ] | string ranges in a Case Structure | yes |
+| [ ] | enum/ring items containing a quote | yes - an escaping question |
+| [ ] | some events, class-dependent event data, some Event Data Nodes | yes per event (scan LabVIEW's own VIs, as the key events were) |
+| [ ] | Conditional Disable operators beyond the supported ones | yes |
+| [ ] | channel wires (`Tag.lvlib:Write.vi` and the other channel endpoints) - nothing in the composer knows `ChannelInstances` | likely - LabVIEW clones a typed library per channel; the composer would have to make or find that clone |
+
+## 3. Reader gaps (VI -> AIXML, used by every edit)
+
+Measured 2026-10-30 over **2011 VIs** against NI's own export of each (`compare_full.py`; the
+reference set rebuilt that day - 1498 examples, the `Application Control` folder left out, and 600
+random `vi.lib` VIs, exported through LabVIEW 2026). **1437 match in every fact**, 1376 before the
+call-target fix below; elements 99.0 %, attributes 97.5 %, values 99.3 %, edges 96.7 %. After the
+Call Library Function reader the same day: **1499 of 2014** (three exports more in the cache),
+elements 99.1 %, attributes 97.5 %, values 99.3 %, edges 97.2 %. Each unread construct is named in
+a comment.
+
+| | gap | feasible? |
+|---|---|---|
+| [x] | call targets: a CHANNEL endpoint named after its typed clone (`Tag-bool.lvlib`) where NI names the template (`Tag.lvlib`), and a library nested in the caller's own missing the outer one - 459 targets, all of them | done 2026-10-30, `ReaderChannelAndNestedLibraryCallTests` |
+| [x] | In Place Element structure | read; 14 pairs of unusual kinds are still named as not read |
+| [x] | Call Library Function - 85 nodes in 80 VIs, the largest unread node; its 109 lost edges were the largest edge gap | done 2026-10-30: read as NI writes it - every terminal neither hidden nor Void, wired or not; 67 of 67 nodes in the cached exports match by name, order and wiring (`ReaderCallLibraryFunctionTests`). The library, function and calling convention are not in NI's format either, so neither backend can compose one |
+| [ ] | `attr fields` 147, `selector` 111, `cond` 109 differ | yes - not yet looked at |
+| [ ] | Shared Variable 21, `xDataNode` 20, data value reference In Place 12, Merge Signals 11, Python Node 11 | likely, per node |
+| [ ] | Stacked Sequence 10, Timed Loop 9 | yes - Timed Loop configuration is not in NI's export either |
+| [ ] | .NET constructor 7, Express VIs / XNodes | likely - hard |
+| [ ] | class constants (192 values of type `UDClassInst` not decoded) | likely |
+| [ ] | terminal descriptions; units, sets/maps, strictly typed VI refnums | yes |
+| — | LabVIEW 9.0 constants, variants holding data | no / low value - values live in compiled code |
+
+The reference set lives in the export cache (`%USERPROFILE%\.labviewmcp\cache\aixml`). It held
+874 exports on 2026-10-15 and only 58 on 2026-10-30 - cleared in between, cause not known - so
+before a reader measurement, count the cache's entries; rebuilding it is a `lvai_convert_vis_to_aixml`
+batch on a LabVIEW nobody else is using. Exporting NI's `Application Control` examples raised
+LabVIEW's quit dialog once (`Abort Running VIs` naming `VI Save Instrument [Multiple].vi.ProxyCaller`);
+it is not established that they caused it, and they were left out after.
+
+## 4. Infrastructure
+
+| | gap | feasible? | idea |
+|---|---|---|---|
+| [ ] | **4a. New parts need NI's converter** to build the donor - impossible on a 2020-only station | likely | Build the donor with VI Server scripting over ActiveX (`New VI`, `New VI Object`, `Save`) in the LabVIEW at hand, then `harvest_parts.py --clean` on it. Also: harvest from LabVIEW's own saved VIs (`resource\`, `vi.lib`), already done for some parts |
+| [~] | **4b. No wiring validation** - a fault only shows as `execState 0` | partly done | See "4b, first step" below. Left: PRIMITIVES (polymorphic, typed from their donor) and clusters - the Error List over ActiveX names those after the fact (`errors` in every executability answer), but not the AIXML `uid` |
+| [ ] | **4c. Connector pane orientation not measured** (rotated panes, pattern 4815) | yes | Compose the probe that reads `Terminal Bounds[]` and run it over ActiveX, as other helpers already are |
+| — | ActiveX needs a running LabVIEW, Windows only | no | By design: COM-started LabVIEW quits and leaves an invisible dialog. `lvai_ensure_labview` starts the process |
+
+## 5. Not measured
+
+| | what |
+|---|---|
+| [ ] | A COMPOSED VI calling DAQmx actually run against a device |
+| [ ] | Clean Up Diagram answering error 2 on LabVIEW 2020 f1 (2026-10-13; predates our own layout engine) |
+| [ ] | Broad coverage on LabVIEW 2020 - most measurements are on 2026 |
+
+## 4b, first step: the composer refuses a broken wire (2026-10-29)
+
+**The symptom.** On `pylabview` a "validation" is a scratch compose, and the composer wrote these
+three faults into a VI without a word, where NI's `ValidateAIXML` refuses each before anything is
+written - measured on one-fault probes beside clean controls:
+
+| probe | before | now |
+|---|---|---|
+| a subVI input the callee marks `required`, unwired | written | `UNSUPPORTED: wiring: Call 'Callee.vi': required input 'n' is not wired` |
+| a `string` constant into a `double` subVI input | written | `... input 'n': a string wire (net ...) cannot feed a numeric terminal` |
+| a `string` control into a `double` indicator | written | `Indicator 'sum': a string wire ... cannot feed a numeric terminal` |
+| an `int32` into a `double` input (a coercion dot) | written | written - not a fault |
+| a misspelt terminal (`yy` on `Add`) | refused already | refused |
+| `Add` with `y` unwired, or a string into `Add` | written | **still written** - primitives are not judged |
+
+The refusal is the composer's ordinary `Unsupported`, so the server answers `composerRefused` with
+the fault named.
+
+**Only a VALIDATION refuses, since 2026-10-30** (`aixml2vi.py --validate`, passed by
+`lvai_validate_aixml` on `pylabview`). The first version refused on CONVERT as well, and the full
+test run showed what that broke: `PylabviewLlbContainerTests` composes a `DAQmx Clear Task.vi` call
+with its required input open on purpose, to test linking through an `.llb`. NI splits it the same
+way - `ValidateAIXML` refuses, `ConvertAIXMLToVI` writes the broken VI, and routes depend on that
+(`lvai_add_class_method` converts unvalidated and repairs afterwards). A conversion now writes the VI
+and puts each fault in its report as `WARNING: wiring: ... - LabVIEW will load this VI broken`. `Composer.check_wiring` runs after `wire()`, when every net's
+type is known.
+
+**Classes compared**: numeric (an enum included), boolean, string, path, and an array by its
+element class. A cluster, refnum, variant or waveform on either side is not judged, so an unknown
+type is never a fault.
+
+**Only a wire from an EXACT source is judged** - a Control, a Constant, a subVI Call's output.
+The first version judged every net and refused **six working documents**: `t136`, `t184` and four
+helpers in `scripts\` (`lvai_add_class_method`, `lvai_cleanup_panel`, `lvai_set_vi_description`,
+`lvlu_add_test_method`), all an `Equal?`/`Not Equal?`/`And` feeding a boolean indicator. A
+primitive's output is typed from its DONOR part, and those donors were in array mode where the
+VIs compare aggregates. Swept after the fix: all 279 documents (the composer suite, `scripts\*.xml`,
+the skeletons) - **253 composed before and 253 after, 0 wiring refusals**; the 26 others refuse
+for setup reasons (`{stamp}` callees, DQMH/LMock/LUnit not installed here) the same way without
+the check.
+
+`PylabviewWiringCheckTests` pins four faults and four controls, the aggregate compare among them;
+run against the composer without the check, exactly the four faults fail.
+
+**NOT measured in LabVIEW yet**: that each refused probe really loads broken and each control
+loads executable. LabVIEW 2026 was in use and LabVIEW 2020 shares its COM registration (both
+32-bit), so ActiveX could not be aimed at 2020. Do it with only one LabVIEW running.
