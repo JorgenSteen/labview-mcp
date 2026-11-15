@@ -154,8 +154,46 @@ internal static class AixmlCheck
         CheckMalleableName(root, findings);
         CheckViServerNames(root, findings);
         CheckClassPropertyNode(root, findings);
+        CheckPrimitiveTerminalNames(root, findings);
 
         return findings;
+    }
+
+    /// <summary>
+    /// A WIRED terminal of a primitive <c>Node</c> that is a slip of a name the composer's tables
+    /// know - <c>.not. x</c> for Not's <c>.not. x?</c> (field report, 2026-11-14: the check passed
+    /// it, the composer refused it, one round trip). Only the same name with <c>?</c>, <c>.</c>,
+    /// brackets, spaces or case changed is reported: the tables are harvested and incomplete.
+    /// Measured over 1 500 cached NI exports (scripts/aixml_lint.py, the same rule): 0 findings;
+    /// an edit-distance rule fired 7 times, each a REAL terminal the tables lack.
+    /// </summary>
+    private static void CheckPrimitiveTerminalNames(XElement root, List<Finding> findings)
+    {
+        foreach (var node in root.Descendants("Node"))
+        {
+            if (node.Attribute("type") is not null) continue;
+            if ((string?)node.Attribute("_name") is not { } name
+                || PrimitiveTerminalNames.Of(UnescapeAixml(name)) is not { } known) continue;
+            foreach (var attribute in new[] { "inputs", "outputs" })
+            {
+                foreach (var entry in (((string?)node.Attribute(attribute)) ?? "").Split(','))
+                {
+                    var colon = entry.LastIndexOf(':');
+                    if (colon <= 0 || entry[(colon + 1)..].Trim().Length == 0) continue;
+                    var term = UnescapeAixml(entry[..colon]);
+                    if (term.StartsWith("?parm", StringComparison.Ordinal)
+                        || known.Any(k => string.Equals(k, term, StringComparison.OrdinalIgnoreCase))) continue;
+                    var near = known.Where(k => PrimitiveTerminalNames.Squash(k) == PrimitiveTerminalNames.Squash(term))
+                                    .Order(StringComparer.Ordinal).FirstOrDefault();
+                    if (near is null) continue;
+                    findings.Add(new Finding(Severity.Warning, "primitiveTerminalNearMiss",
+                        $"\"{term}\" is not a terminal of {UnescapeAixml(name)}; did you mean \"{near}\"? "
+                        + $"Terminal names are literal (known: {string.Join(", ", known.Order(StringComparer.Ordinal))}). "
+                        + "The pylabview composer refuses the node, NI's converter answers `Object terminal not found`.",
+                        (string?)node.Attribute("uid")));
+                }
+            }
+        }
     }
 
     internal static bool IsClassNodeType(string type) => type.Replace(" ", "") == "{UDClassInst}";

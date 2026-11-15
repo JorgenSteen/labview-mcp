@@ -252,7 +252,7 @@ public sealed class ViServerNameCheckTests
 
         var findings = AixmlCheck.Check(xml);
 
-        Assert.Empty(findings.Where(f => NameCodes.Contains(f.Code)));
+        Assert.DoesNotContain(findings, f => NameCodes.Contains(f.Code));
         var finding = Assert.Single(findings, f => f.Code == "classPropertyNodeNotComposable");
         Assert.Equal(AixmlCheck.Severity.Warning, finding.Severity);
         Assert.Equal("4202", finding.Uid);

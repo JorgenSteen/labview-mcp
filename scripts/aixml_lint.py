@@ -1127,6 +1127,86 @@ def check_class_property_node(elements: list[_El]) -> list[Finding]:
     return findings
 
 
+def _load_primitive_terminals() -> dict[str, set[str]]:
+    """Primitive name -> every terminal name the composer's tables know for it - the SAME
+    tables aixml2vi.load_names reads: primitive-names.tsv / terminal-names.tsv (a checkout's
+    experiments/pylabview, else the pylabview bundle's app folder beside the server) plus the
+    supplements in scripts/aixml-pylabview. Absent tables give an empty map, which judges nothing."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tables = next((d for d in (os.path.join(here, os.pardir, "experiments", "pylabview"),
+                               os.path.join(here, os.pardir, "pylabview", "app"))
+                   if os.path.exists(os.path.join(d, "primitive-names.tsv"))), None)
+    if tables is None:
+        return {}
+
+    def rows(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    if line.strip() and not line.startswith("#"):
+                        yield line.rstrip("\r\n").split("\t")
+        except OSError:
+            return
+
+    import html
+    rid_of: dict[str, tuple[str, int]] = {}
+    for path in (os.path.join(tables, "primitive-names.tsv"),
+                 os.path.join(here, "aixml-pylabview", "primitive-names-extra.tsv")):
+        for r in rows(path):
+            if len(r) < 2 or not r[0].isdigit():
+                continue
+            name = unescape(html.unescape(r[1]))
+            seen = int(r[2]) if len(r) > 2 and r[2].isdigit() else 0
+            if name not in rid_of or seen > rid_of[name][1]:
+                rid_of[name] = (r[0], seen)
+    by_rid: dict[str, set[str]] = {}
+    for path in (os.path.join(tables, "terminal-names.tsv"),
+                 os.path.join(here, "aixml-pylabview", "terminal-names-learned.tsv"),
+                 os.path.join(here, "aixml-pylabview", "terminal-names-extra.tsv")):
+        for r in rows(path):
+            if len(r) >= 4 and r[0].isdigit():
+                by_rid.setdefault(r[0], set()).add(unescape(html.unescape(r[3])))
+    return {name: by_rid[rid] for name, (rid, _) in rid_of.items() if rid in by_rid}
+
+
+_PRIM_TERMS = _load_primitive_terminals()
+
+
+def _squash_term(name: str) -> str:
+    return re.sub(r"[\s?.()]", "", name).lower()
+
+
+def check_primitive_terminal_names(elements: list[_El]) -> list[Finding]:
+    """A WIRED terminal of a primitive Node that is a near miss of a name the composer's tables
+    know - `.not. x` for Not's `.not. x?` (field report, 2026-11-14: the lint passed it, the
+    composer refused it, one round trip). Only the same name with `?`, `.`, brackets, spaces or
+    case changed is reported, because the tables are harvested and incomplete. Measured over 1 500
+    cached NI exports: that rule fires 0 times; an edit-distance rule (<= 2) fired 7 times, every
+    one a REAL terminal the tables lack (TDMS Get Properties' `property names`, Swap Values' `x`).
+    `?parmN` placeholders are the composer's own spelling and pass."""
+    findings: list[Finding] = []
+    if not _PRIM_TERMS:
+        return findings
+    for e in elements:
+        if e.tag != "Node" or e.el.get("type") or e.name not in _PRIM_TERMS:
+            continue
+        known = _PRIM_TERMS[e.name]
+        folded = {k.lower() for k in known}
+        for attr in ("inputs", "outputs"):
+            for term, net in parse_terminal_list(e.el.get(attr) or ""):
+                if not net or term.lower() in folded or term.startswith("?parm"):
+                    continue
+                near = sorted(k for k in known if _squash_term(k) == _squash_term(term))
+                if near:
+                    findings.append(Finding(
+                        "warning", "primitive-terminal-near-miss", e.uid, e.label(), e.path,
+                        f'"{term}" is not a terminal of {e.name}; did you mean "{near[0]}"? '
+                        f'Terminal names are literal (known: {", ".join(sorted(known))}). The '
+                        f"pylabview composer refuses the node, NI's converter answers "
+                        f"`Object terminal not found`."))
+    return findings
+
+
 def check_net_attributes(elements: list[_El]) -> list[Finding]:
     """A Control or Constant must carry `outputs`, an Indicator `inputs` - WIRED OR NOT.
 
@@ -1926,6 +2006,7 @@ def lint_file(path: str, new_vi: bool = False) -> list[Finding]:
     findings += check_property_nodes(elements)
     findings += check_vi_server_names(elements)
     findings += check_class_property_node(elements)
+    findings += check_primitive_terminal_names(elements)
     findings += check_terminal_lists(elements)
     findings += check_net_attributes(elements)
     findings += check_types(elements)
