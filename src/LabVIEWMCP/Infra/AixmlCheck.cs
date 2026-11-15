@@ -153,8 +153,41 @@ internal static class AixmlCheck
         CheckReservedRange(elements, findings);
         CheckMalleableName(root, findings);
         CheckViServerNames(root, findings);
+        CheckClassPropertyNode(root, findings);
 
         return findings;
+    }
+
+    internal static bool IsClassNodeType(string type) => type.Replace(" ", "") == "{UDClassInst}";
+
+    /// <summary>
+    /// A Property Node on a LabVIEW CLASS - <c>type="{UDClassInst}"</c>, NI's export spelling (17 of
+    /// NI's DQMH examples, `Module ID`). The pylabview composer, the default backend, refuses it:
+    /// LabVIEW builds such a node from the class's accessors marked "available through property
+    /// nodes", and no part for it is harvested (docs/aixml-backends.md, the census's "classes"
+    /// row). Each field IS one accessor call, so the working route is a <c>Call</c> of the accessor
+    /// per field with the class and error wires chained through. A WARNING: NI's converter on grpc
+    /// was never measured on it.
+    /// </summary>
+    private static void CheckClassPropertyNode(XElement root, List<Finding> findings)
+    {
+        foreach (var node in root.Descendants("Node"))
+        {
+            if ((string?)node.Attribute("_name") != "Property Node") continue;
+            if ((string?)node.Attribute("type") is not { } type || !IsClassNodeType(type)) continue;
+            var calls = (((string?)node.Attribute("fields")) ?? "").Split(',')
+                .Select(f => f.Split('+', 2))
+                .Where(p => p.Length == 2 && p[1].Trim().Length > 0)
+                .Select(p => $"`<Class>.lvclass:{(p[0].Trim() == "write" ? "Write" : "Read")} {UnescapeAixml(p[1].Trim())}.vi`")
+                .ToList();
+            findings.Add(new Finding(Severity.Warning, "classPropertyNodeNotComposable",
+                "A Property Node on a LabVIEW class ({UDClassInst}) is refused by the pylabview "
+                + "composer, the default backend. Call the class's accessor instead, one Call per field"
+                + (calls.Count > 0 ? $" ({string.Join(", ", calls)} by NI's default naming)" : "")
+                + ", with the class wire and the error wire chained through them; "
+                + "lvai_describe_class lists the accessors the class really has.",
+                (string?)node.Attribute("uid")));
+        }
     }
 
     /// <summary>The finding that KILLS LabVIEW inside ConvertAIXMLToVI; the RPC tools refuse it.</summary>
@@ -193,6 +226,9 @@ internal static class AixmlCheck
             var kind = (string?)node.Attribute("_name");
             if (kind is not ("Property Node" or "Invoke Node")) continue;
             if ((string?)node.Attribute("type") is not { Length: > 2 } cls || !cls.StartsWith('{')) continue;
+            // a node on a LabVIEW CLASS names the class's own accessors - no list knows them
+            // (CheckClassPropertyNode says what to do instead)
+            if (IsClassNodeType(cls)) continue;
             var uid = (string?)node.Attribute("uid");
 
             if (!ViServerVocabulary.IsKnownClass(cls))

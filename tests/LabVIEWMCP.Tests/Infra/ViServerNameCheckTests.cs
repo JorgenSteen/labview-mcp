@@ -187,6 +187,7 @@ public sealed class ViServerNameCheckTests
                                       "vi-server-classes.tsv", "vi-server-aixml-names.tsv" })
             Assert.Contains(table, lint);
         Assert.Contains("property-name-unknown", lint);
+        Assert.Contains("class-property-node-not-composable", lint);
     }
 
     // ------------------------------------------------- the RPC tools refuse BEFORE the RPC
@@ -230,5 +231,32 @@ public sealed class ViServerNameCheckTests
         await new AixmlTools(server.Connection).ConvertAixmlToViAsync(xml, server.TempPath("ok.vi"), checkExecutable: false);
 
         Assert.Equal(1, server.Service.CountOf("ConvertAIXMLToVI"));
+    }
+
+    /// <summary>
+    /// A Property Node on a LabVIEW CLASS ({UDClassInst}, NI's export spelling - DQMH's `Module ID`)
+    /// names the class's own accessors, which no list knows: no name warning, but one finding that
+    /// says the default backend refuses the node and which accessor Calls do the same work
+    /// (field-report item H10, 2026-11-15).
+    /// </summary>
+    [Fact]
+    public void A_class_property_node_points_at_the_accessor_calls_and_not_at_its_names()
+    {
+        const string xml = """
+            <VI _name="t.vi" description="d">
+              <Control _name="Module in" type="ref{UDClassInst}" uid="4201" uid_parent="root" value="" outputs="value:4201.value"/>
+              <Node _name="Property Node" fields="read+Module ID,write+Display\3AName" inputs="reference:4201.value" outputs="Module ID:4202.id" type="{UDClassInst}" uid="4202" uid_parent="root"/>
+              <Indicator _name="ID" type="int32" uid="4300" uid_parent="root" value="0" inputs="value:4202.id"/>
+            </VI>
+            """;
+
+        var findings = AixmlCheck.Check(xml);
+
+        Assert.Empty(findings.Where(f => NameCodes.Contains(f.Code)));
+        var finding = Assert.Single(findings, f => f.Code == "classPropertyNodeNotComposable");
+        Assert.Equal(AixmlCheck.Severity.Warning, finding.Severity);
+        Assert.Equal("4202", finding.Uid);
+        Assert.Contains("`<Class>.lvclass:Read Module ID.vi`", finding.Message);
+        Assert.Contains("`<Class>.lvclass:Write Display:Name.vi`", finding.Message);
     }
 }

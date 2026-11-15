@@ -4118,6 +4118,29 @@ class Composer:
                     out[r] = t
         return out
 
+    def _refuse_class_property_node(self, el):
+        """A Property Node on a LabVIEW CLASS (type="{UDClassInst}", NI's export spelling) is not
+        composed: LabVIEW builds one from the class's accessors marked 'available through property
+        nodes', and no such part is harvested. NI's DQMH examples carry 17 (Module ID, Name). Each
+        field IS one accessor call, so the refusal names the accessor - the class read off the wired
+        refnum where the reader named it - instead of `class '{UDClassInst}' is not composable`."""
+        net = dict(pairs(el.get("inputs"))).get("reference")
+        wired = self.net_type.get(net) if net else None
+        qual = [i.get("Text") for i in wired.findall("Item")] if wired is not None else []
+        cls = ":".join(qual) if qual else "<Class>.lvclass"
+        calls = []
+        for f in split_top(el.get("fields") or ""):
+            mode, _, name = unescape(f).partition("+")
+            if name:
+                calls.append("%s:%s %s.vi" % (cls, "Write" if mode == "write" else "Read", name))
+        raise Unsupported(
+            "Property Node %s: a property node on a LabVIEW class ({UDClassInst}%s) is not composable "
+            "on the pylabview backend - call the class's accessor VI%s instead (%s; NI's default "
+            "accessor names - lvai_describe_class lists the real ones), chaining the class wire and "
+            "the error wire through them"
+            % (el.get("uid"), ", class %s" % cls if qual else "",
+               "s" if len(calls) > 1 else "", ", ".join(calls) or "Read/Write <field>.vi"))
+
     def add_property_node(self, el):
         """A Property Node on a VI Server class (type="{LV.VI}"), composed from one harvested
         propNode: the four fixed terminals (reference, reference out, error in, error out) are
@@ -4126,6 +4149,8 @@ class Composer:
         type twice (typeDesc labelled with the short name, dataTypeDesc bare) and the declaring
         class as VoidBlock{refnum} (omidTypeDesc) - measured on an AIXML-generated probe."""
         self.check_attrs(el, ("fields", "type", "link"))
+        if (el.get("type") or "").replace(" ", "") == "{UDClassInst}":
+            self._refuse_class_property_node(el)
         cls = self._vi_server_class(el)
         # an IVI session is a class named by its refnum too, and composed the same way
         tag = cls.startswith(("GenClassTag.", "IVI."))

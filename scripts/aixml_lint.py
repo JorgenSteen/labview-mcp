@@ -1045,7 +1045,8 @@ def check_vi_server_names(elements: list[_El]) -> list[Finding]:
         if e.tag != "Node" or e.name not in ("Property Node", "Invoke Node"):
             continue
         cls = e.el.get("type") or ""
-        if not cls.startswith("{"):
+        if not cls.startswith("{") or _is_class_node_type(cls):
+            # a node on a LabVIEW CLASS names the class's own accessors - no list knows them
             continue
         if cls.startswith("{LV.") and cls[4:-1] not in _VOCAB_CLASSES \
                 and cls not in _VOCAB_PROPS and cls not in _VOCAB_METHODS:
@@ -1094,6 +1095,35 @@ def check_vi_server_names(elements: list[_El]) -> list[Finding]:
                 f'method "{name}" on {cls} is in neither the catalogue nor any AIXML known to work'
                 + (f'; nearest: "{near}"' if near else "")
                 + ". ValidateAIXML answers `Invalid method` for an invented one."))
+    return findings
+
+
+def _is_class_node_type(cls: str) -> bool:
+    return cls.replace(" ", "") == "{UDClassInst}"
+
+
+def check_class_property_node(elements: list[_El]) -> list[Finding]:
+    """A Property Node on a LabVIEW CLASS (type="{UDClassInst}", NI's export spelling) -
+    AixmlCheck.CheckClassPropertyNode. The pylabview composer, the default backend, refuses it
+    (no part harvested; 17 of NI's DQMH examples). Each field IS one accessor call, so the
+    route is a Call of the accessor per field. A WARNING: grpc was never measured on it."""
+    findings: list[Finding] = []
+    for e in elements:
+        if e.tag != "Node" or e.name != "Property Node" or not _is_class_node_type(e.el.get("type") or ""):
+            continue
+        calls = []
+        for entry in (e.el.get("fields") or "").split(","):
+            mode, plus, name = entry.partition("+")
+            if plus and name.strip():
+                calls.append("`<Class>.lvclass:%s %s.vi`"
+                             % ("Write" if mode.strip() == "write" else "Read", unescape(name.strip())))
+        findings.append(Finding(
+            "warning", "class-property-node-not-composable", e.uid, e.label(), e.path,
+            "A Property Node on a LabVIEW class ({UDClassInst}) is refused by the pylabview composer, "
+            "the default backend. Call the class's accessor instead, one Call per field"
+            + (" (%s by NI's default naming)" % ", ".join(calls) if calls else "")
+            + ", with the class wire and the error wire chained through them; lvai_describe_class "
+            "lists the accessors the class really has."))
     return findings
 
 
@@ -1895,6 +1925,7 @@ def lint_file(path: str, new_vi: bool = False) -> list[Finding]:
     findings += check_type_grammar(elements)
     findings += check_property_nodes(elements)
     findings += check_vi_server_names(elements)
+    findings += check_class_property_node(elements)
     findings += check_terminal_lists(elements)
     findings += check_net_attributes(elements)
     findings += check_types(elements)
