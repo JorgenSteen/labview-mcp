@@ -625,6 +625,27 @@ public sealed class AixmlBackendTests
     }
 
     /// <summary>
+    /// helperGenerated on pylabview: a call that COMPOSED the helper says so, one that reused it does
+    /// not. Every pylabview route answered false until 2026-11-15, also right after recomposing a
+    /// stale helper (field-report side finding). A missing stamp is what makes a helper stale.
+    /// </summary>
+    [Fact]
+    public async Task A_composing_call_reports_it_and_a_reusing_one_does_not()
+    {
+        if (!ComposerHere()) return;
+
+        var (vi, problem, _) = await ComposedHelpers.EnsureReportingAsync("lvai_active_project.xml", 120, default);
+        Assert.True(vi is not null, problem);
+        File.Delete(vi! + ".parts");
+
+        var (_, _, recomposed) = await ComposedHelpers.EnsureReportingAsync("lvai_active_project.xml", 120, default);
+        var (_, _, reused) = await ComposedHelpers.EnsureReportingAsync("lvai_active_project.xml", 120, default);
+
+        Assert.True(recomposed);
+        Assert.False(reused);
+    }
+
+    /// <summary>
     /// On pylabview lvai_open_file opens a VI over ActiveX since 2026-10-16 - refused until then,
     /// which sent every caller needing a VI loaded to NI's service. A VI that is not there is still
     /// refused by name before LabVIEW is asked, and NI's OpenFile is never called.

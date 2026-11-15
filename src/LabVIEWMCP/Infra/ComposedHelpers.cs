@@ -26,10 +26,22 @@ internal static class ComposedHelpers
     public static async Task<(string? Vi, string? Problem)> EnsureAsync(
         string aixmlFileName, int timeoutSeconds, CancellationToken ct)
     {
+        var (vi, problem, _) = await EnsureReportingAsync(aixmlFileName, timeoutSeconds, ct);
+        return (vi, problem);
+    }
+
+    /// <summary>
+    /// <see cref="EnsureAsync"/>, also saying whether THIS call composed the helper - what a tool
+    /// answers as <c>helperGenerated</c>. Every pylabview route answered false until 2026-11-15,
+    /// also when it had just recomposed a stale helper.
+    /// </summary>
+    public static async Task<(string? Vi, string? Problem, bool Composed)> EnsureReportingAsync(
+        string aixmlFileName, int timeoutSeconds, CancellationToken ct)
+    {
         if (StatusTools.ScriptsDirectory() is not { } scripts
             || !File.Exists(Path.Combine(scripts, aixmlFileName)))
-            return (null, $"{aixmlFileName} was not found in the scripts folder beside the server.");
-        return await EnsurePathAsync(Path.Combine(scripts, aixmlFileName), null, timeoutSeconds, ct);
+            return (null, $"{aixmlFileName} was not found in the scripts folder beside the server.", false);
+        return await EnsurePathReportingAsync(Path.Combine(scripts, aixmlFileName), null, timeoutSeconds, ct);
     }
 
     /// <summary>
@@ -40,10 +52,18 @@ internal static class ComposedHelpers
     public static async Task<(string? Vi, string? Problem)> EnsurePathAsync(
         string aixmlPath, string? viName, int timeoutSeconds, CancellationToken ct)
     {
+        var (vi, problem, _) = await EnsurePathReportingAsync(aixmlPath, viName, timeoutSeconds, ct);
+        return (vi, problem);
+    }
+
+    /// <summary><see cref="EnsurePathAsync"/>, also saying whether this call composed the helper.</summary>
+    public static async Task<(string? Vi, string? Problem, bool Composed)> EnsurePathReportingAsync(
+        string aixmlPath, string? viName, int timeoutSeconds, CancellationToken ct)
+    {
         var aixml = Path.GetFullPath(aixmlPath);
-        if (!File.Exists(aixml)) return (null, $"No helper AIXML at '{aixml}'.");
+        if (!File.Exists(aixml)) return (null, $"No helper AIXML at '{aixml}'.", false);
         if (AixmlComposer.Locate(out var missing) is not { } setup)
-            return (null, missing);
+            return (null, missing, false);
         var scripts = StatusTools.ScriptsDirectory() ?? Path.GetDirectoryName(aixml)!;
 
         // in an ActiveX lane (lvai_layout_diagrams' workers) the helper is the lane's own copy: one
@@ -58,16 +78,16 @@ internal static class ComposedHelpers
                                        AixmlComposer.TargetRelease(AixmlBackend.LabViewInUse(),
                                                                    AixmlComposer.PartsRelease(setup.PartsDirectory)),
                                        aixml);
-        if (!IsStale(aixml, vi, stamp, partsInUse)) return (vi, null);
+        if (!IsStale(aixml, vi, stamp, partsInUse)) return (vi, null, false);
 
         Directory.CreateDirectory(Folder);
         var composed = await AixmlComposer.ComposeAsync(setup, aixml, vi, [Folder, scripts],
                                                         timeoutSeconds, ct);
         if (!composed.Written)
             return (null, $"the pylabview composer {(composed.Refused ? "refuses" : "failed on")} " +
-                          $"{Path.GetFileName(aixml)}: {composed.Message}");
+                          $"{Path.GetFileName(aixml)}: {composed.Message}", false);
         await File.WriteAllTextAsync(stamp, partsInUse, ct);
-        return (vi, null);
+        return (vi, null, true);
     }
 
     /// <summary>

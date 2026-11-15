@@ -1203,9 +1203,10 @@ internal sealed class OwnerIconTools(LvaiConnection connection)
         // backend), so no icon tool needs NI's service there.
         if (DqmhTools.OnPyLabview)
         {
-            var (composed, problem) = await ComposedHelpers.EnsureAsync(name + ".xml", timeoutSeconds, ct);
+            var (composed, problem, generated) = await ComposedHelpers.EnsureReportingAsync(
+                name + ".xml", timeoutSeconds, ct);
             return composed is not null
-                ? (composed, false, null)
+                ? (composed, generated, null)
                 : ("", false, Json.Error("helperNotComposable",
                     $"The helper {name}.xml could not be composed for the pylabview backend: {problem}",
                     new { aiXmlPath = aixml }));

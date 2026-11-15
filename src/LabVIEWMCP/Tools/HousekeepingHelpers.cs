@@ -52,9 +52,10 @@ internal sealed class HousekeepingHelpers(LvaiConnection connection)
         // (RunAsync below routes the same way) - so none of these tools needs NI's service there.
         if (DqmhTools.OnPyLabview)
         {
-            var (composed, problem) = await ComposedHelpers.EnsureAsync(helperName + ".xml", timeoutSeconds, ct);
+            var (composed, problem, generated) = await ComposedHelpers.EnsureReportingAsync(
+                helperName + ".xml", timeoutSeconds, ct);
             return composed is not null
-                ? (composed, false, null)
+                ? (composed, generated, null)
                 : (null, false, Json.Error("helperNotComposable",
                     $"The helper {helperName}.xml could not be composed for the pylabview backend: {problem}",
                     new { aiXmlPath = aixml }));

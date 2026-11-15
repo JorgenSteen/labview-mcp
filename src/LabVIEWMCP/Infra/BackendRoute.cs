@@ -85,8 +85,11 @@ internal static class BackendRoute
         int timeoutSeconds, CancellationToken ct)
     {
         if (OnPyLabview)
-            return (await ComposedHelperAsync(aixml, timeoutSeconds, ct,
-                                              Path.GetFileName(niVi)), null, false);
+        {
+            var (vi, problem, composed) = await ComposedHelpers.EnsurePathReportingAsync(
+                aixml, Path.GetFileName(niVi), timeoutSeconds, ct);
+            return (vi ?? throw new RouteException("helperNotComposable", problem!), null, composed);
+        }
         if (!regenerate && !HelperCache.NeedsRebuild(aixml, niVi)) return (niVi, null, false);
         if (Path.GetDirectoryName(niVi) is { Length: > 0 } folder) Directory.CreateDirectory(folder);
         return await generateOnGrpc() is { } failure ? (niVi, failure, false) : (niVi, null, true);

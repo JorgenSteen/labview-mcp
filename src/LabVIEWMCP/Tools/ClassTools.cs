@@ -1968,10 +1968,11 @@ internal sealed class ClassTools(LvaiConnection connection)
             if (choice.Name == AixmlBackend.PyLabview)
             {
                 // COMPOSED and run over ActiveX - NI's accessor wizard is the same VI either way
-                var (composed, problem) = await ComposedHelpers.EnsureAsync(
+                var (composed, problem, generated) = await ComposedHelpers.EnsureReportingAsync(
                     AccessorHelperAixmlFileName, timeoutSeconds, ct);
                 if (composed is null) return Json.Error("helperNotComposable", problem!);
                 helperVi = composed;
+                helperGenerated = generated;
             }
             else if (regenerateHelper || HelperNeedsRebuild(aixml, helperVi))
             {

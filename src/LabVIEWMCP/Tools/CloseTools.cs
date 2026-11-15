@@ -179,10 +179,11 @@ internal sealed class CloseTools(LvaiConnection connection)
             if (overCom)
             {
                 // The COMPOSED helper, in its own folder - NI's helper above is not touched.
-                var (composed, problem) = await ComposedHelpers.EnsureAsync(
+                var (composed, problem, generated) = await ComposedHelpers.EnsureReportingAsync(
                     ProjectHelperAixmlFileName, timeoutSeconds, ct);
                 if (composed is null) return Json.Error("helperNotComposable", problem!);
                 helperVi = composed;
+                helperGenerated = generated;
             }
             else if (regenerateHelper || HelperCache.NeedsRebuild(aixml, helperVi))
             {
