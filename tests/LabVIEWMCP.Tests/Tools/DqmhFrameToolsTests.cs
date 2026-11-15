@@ -231,4 +231,29 @@ public class DqmhFrameToolsTests
         Assert.Contains("Source Node:4526.value,Sink Node:4526.value", aixml);
         Assert.DoesNotContain("Source Node:4524.value,Sink Node:4526.value", aixml);
     }
+
+    /// <summary>
+    /// A frame has reply fields only when its event replies - Delacor's `&lt;Event&gt; (Reply
+    /// Payload)--cluster.ctl` in the module. The 2026-11-14 dry run on Initialize listed the module
+    /// data bundle's `Status` as a reply field; Initialize has no such typedef, a Request and Wait
+    /// for Reply does, in a subfolder too.
+    /// </summary>
+    [Fact]
+    public void Only_an_event_with_a_reply_payload_typedef_has_reply_fields()
+    {
+        var module = Path.Combine(Path.GetTempPath(), "replypayload-" + Guid.NewGuid().ToString("n")[..8]);
+        Directory.CreateDirectory(Path.Combine(module, "Requests"));
+        try
+        {
+            File.WriteAllText(Path.Combine(module, "Module Data--cluster.ctl"), "");
+            File.WriteAllText(Path.Combine(module, "Set Limit Argument--cluster.ctl"), "");
+            File.WriteAllText(Path.Combine(module, "Requests", "Get Level (Reply Payload)--cluster.ctl"), "");
+
+            Assert.True(DqmhFrameTools.HasReplyPayload(module, "Get Level"));
+            Assert.False(DqmhFrameTools.HasReplyPayload(module, "Initialize"));
+            Assert.False(DqmhFrameTools.HasReplyPayload(module, "Set Limit"));
+            Assert.False(DqmhFrameTools.HasReplyPayload(Path.Combine(module, "gone"), "Get Level"));
+        }
+        finally { Directory.Delete(module, true); }
+    }
 }

@@ -1656,6 +1656,11 @@ Measured on module `Pump2` with a handler that sets `Pressure` (`Module Data in/
 handler. `Synchronize Caller Events` gets the handler's `error out`, and `Bundle By Name` its
 `Module Data out`. The frame's two `#DQMH_CodeNeeded` labels are left as they are.
 
+The dry run on Initialize listed the module-data bundle's `Status` as a REPLY field: the place
+helper takes a frame's first `Bundle By Name` as the reply. Since 2026-11-15 a frame has reply fields
+only when the module holds `<Event> (Reply Payload)--cluster.ctl` (Request and Wait for Reply, Round
+Trip); otherwise the bundle's fields are dropped from the plan and `replySinkIgnored` says why.
+
 ### 9i. Every DQMH tool on the pylabview backend - no NI service, measured 2026-10-13
 
 The user asked for a DQMH demo with NO gRPC, and every `lvai_dqmh_*` tool but the reference takes

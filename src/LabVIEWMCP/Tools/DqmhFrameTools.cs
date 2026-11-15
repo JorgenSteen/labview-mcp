@@ -178,6 +178,16 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             // `Module ID` comes from the module's own Accessors:Module ID property, and asking the
             // handler for it refused every Request and Wait for Reply frame (2026-10-30)
             var (replyTerminals, replyAlreadyFed) = SplitReplySinks(DqmhHeadless.Listed(dry, "Reply Sink Terminals"));
+            // A FRAME WITHOUT A REPLY PAYLOAD HAS NO REPLY FIELDS: the helper takes the frame's
+            // first Bundle By Name as the reply, and in Initialize that is the MODULE DATA bundle
+            // (2026-11-14: the dry run listed `Status` as a reply field the handler had to feed)
+            string? replySinkIgnored = null;
+            if (!HasReplyPayload(folder, eventBare) && (replyTerminals.Count > 0 || replyAlreadyFed.Count > 0))
+            {
+                replySinkIgnored = $"The frame's Bundle By Name ({string.Join(", ", replyTerminals.Concat(replyAlreadyFed))}) " +
+                                   $"is not a reply: the module has no \"{eventBare} (Reply Payload)--cluster.ctl\".";
+                (replyTerminals, replyAlreadyFed) = ([], []);
+            }
             var texts = DqmhHeadless.Listed(dry, "Decoration Texts");
             var moduleData = ModuleDataPlan(inputs, outputs, dataIn, dataOut);
             var plan = Plan(eventBare, inputs, outputs, argTerminals, replyTerminals,
@@ -190,6 +200,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["arguments"] = DqmhHeadless.Array(argTerminals.Except(PlumbingTerminals)),
                 ["replyFields"] = DqmhHeadless.Array(replyTerminals.Except(PlumbingTerminals)),
                 ["replyFieldsAlreadyFed"] = DqmhHeadless.Array(replyAlreadyFed),
+                ["replySinkIgnored"] = replySinkIgnored,
                 ["handlerInputs"] = DqmhHeadless.Array(inputs),
                 ["handlerOutputs"] = DqmhHeadless.Array(outputs),
                 ["plan"] = plan.ToJson(),
@@ -597,6 +608,16 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
     /// </summary>
     internal static bool PlacedInside(string? placement) =>
         placement is not null && placement.StartsWith("inside;", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether the event behind a frame replies: Delacor writes `&lt;Event&gt; (Reply Payload)--cluster.ctl`
+    /// into the module for a Request and Wait for Reply and a Round Trip (docs/dqmh-patterns.md), and
+    /// for nothing else - Initialize, a plain Request, a Broadcast.
+    /// </summary>
+    internal static bool HasReplyPayload(string moduleFolder, string eventName) =>
+        Directory.Exists(moduleFolder)
+        && Directory.EnumerateFiles(moduleFolder, $"{eventName} (Reply Payload)--cluster.ctl",
+                                    SearchOption.AllDirectories).Any();
 
     /// <summary>
     /// The reply bundler's terminals split into those the handler must feed and the fields
