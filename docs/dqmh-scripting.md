@@ -1661,6 +1661,13 @@ helper takes a frame's first `Bundle By Name` as the reply. Since 2026-11-15 a f
 only when the module holds `<Event> (Reply Payload)--cluster.ctl` (Request and Wait for Reply, Round
 Trip); otherwise the bundle's fields are dropped from the plan and `replySinkIgnored` says why.
 
+**`PropTypesIssues=1` on Main.vi and the tester is NI's normal state, not a defect** (measured
+2026-11-15). After a typedef event a tester VI read `PropTypesIssues=1` in its LVSR execution flags
+(pylabview: "PropTypes warnings other than SE warnings"). NI's shipped example *DQMH Fundamentals -
+Thermal Chamber* carries the same bit on its `Main.vi` and on `Test Thermal Chamber Controller_DQMH
+API.vi`, both `State=1`, `BadDDO=0`; the other 93 VIs of that module and of our fixture module read 0.
+Read `Execution:State` (`lvai_exec_state`), never this bit, to judge a DQMH VI.
+
 ### 9i. Every DQMH tool on the pylabview backend - no NI service, measured 2026-10-13
 
 The user asked for a DQMH demo with NO gRPC, and every `lvai_dqmh_*` tool but the reference takes
