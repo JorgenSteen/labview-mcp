@@ -246,7 +246,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             if (nodeClasses.Contains("SubVI"))
                 return await PlaceAtEntryAsync(headless, dqmh, scripts, projectPath, mainVi, frameName,
                     handler, inputs, outputs, moduleData, texts, nodeClasses, detail, steps, dryRun,
-                    stopwatch, timeoutSeconds, ct);
+                    cleanUpDiagram, stopwatch, timeoutSeconds, ct);
             if (plan.Problems.Count > 0)
                 return Json.Error("namesDoNotMatch",
                     "The handler's terminals do not match the frame's fields - " +
@@ -492,7 +492,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         string projectPath, string mainVi, string frameName, string handler, List<string> inputs,
         List<string> outputs, ModuleData moduleData, List<string> texts, List<string> nodeClasses,
         JsonObject detail, JsonArray steps,
-        bool dryRun, Stopwatch stopwatch, int timeoutSeconds, CancellationToken ct)
+        bool dryRun, bool cleanUpDiagram, Stopwatch stopwatch, int timeoutSeconds, CancellationToken ct)
     {
         var chains = new List<(string Name, string In, string Out, string Sink)>();
         if (inputs.Contains("error in") && outputs.Contains("error out"))
@@ -583,12 +583,26 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ["error"] = runError ?? (run is null ? null : DqmhTools.Failed(run)),
             };
         }
+        // SCRIPTED WIRES ARE FOLLOWED BY A LAYOUT, and Main.vi is made source only - as on the
+        // message-frame route (upstream's rule of 2026-11-12, applied to this route at the merge)
+        var cleanUp = cleanUpDiagram
+            ? await new DiagramCleanup(connection).RunAsync(mainVi, DqmhTools.OnPyLabview
+                ? AixmlBackend.PyLabview : AixmlBackend.Grpc, timeoutSeconds, ct, includeDqmhMain: true)
+            : null;
+        if (cleanUp is not null) steps.Add(cleanUp.DeepClone());
+        var sourceOnly = await new DiagramCleanup(connection).SourceOnlyInProjectAsync(mainVi, projectPath, timeoutSeconds, ct);
+        steps.Add(sourceOnly.DeepClone());
+        DiagramCleanup.NoteStripped(cleanUp, sourceOnly);
         var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
         var visible = PlacedInside(placement);
         var answer = new JsonObject
         {
-            ["ok"] = allSpliced && visible && mainAfter is not 0,
+            ["ok"] = allSpliced && visible && mainAfter is not 0
+                     && cleanUp?["ok"]?.GetValue<bool>() != false
+                     && sourceOnly["ok"]?.GetValue<bool>() != false,
             ["route"] = "frameEntry",
+            ["cleanUpDiagram"] = cleanUp,
+            ["sourceOnly"] = sourceOnly,
             ["placement"] = placement,
             ["handlerVisible"] = visible,
             ["handler"] = handler,

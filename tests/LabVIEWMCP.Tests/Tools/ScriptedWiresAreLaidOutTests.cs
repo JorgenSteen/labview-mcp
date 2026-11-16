@@ -14,7 +14,9 @@ public class ScriptedWiresAreLaidOutTests
     /// <summary>The scripts that call {LV.Terminal} Connect Wire, and the tools that run them.</summary>
     private static readonly string[] WiringTools =
     [
-        "DqmhFrameTools.cs",      // lvbd_connect_by_names, lvbd_splice_by_names, lvdqmh_wire_module_data
+        "DqmhFrameTools.cs",      // lvbd_connect_by_names, lvbd_splice_by_names, lvdqmh_wire_module_data,
+                                  // lvdqmh_splice_module_data, lvdqmh_splice_frame_entry
+        "DqmhHeadless.cs",        // lvdqmh_wire_tester_broadcast (new_event, the tester's broadcast frame)
         "AfOverrideTools.cs",     // lvai_af_add_hook, lvai_af_remove_hook
         "GraftTools.cs",          // lvbd_graft_rewire
         "BindReferenceTools.cs",  // lvbd_bind_control_refs
@@ -36,6 +38,21 @@ public class ScriptedWiresAreLaidOutTests
     {
         var source = File.ReadAllText(RepoTree.Path("src", "LabVIEWMCP", "Tools", "DqmhFrameTools.cs"));
         Assert.Contains("includeDqmhMain: true", source);
+    }
+
+    /// <summary>
+    /// The fork's frame-ENTRY route (allowExistingCode) scripts wires into Main.vi too: it lays the
+    /// whole Main.vi out and makes it source only, as the message-frame route does (merge of
+    /// 2026-11-16).
+    /// </summary>
+    [Fact]
+    public void The_frame_entry_route_lays_out_and_strips_Main()
+    {
+        var source = File.ReadAllText(RepoTree.Path("src", "LabVIEWMCP", "Tools", "DqmhFrameTools.cs"));
+        var entry = source[source.IndexOf("private async Task<string> PlaceAtEntryAsync(", StringComparison.Ordinal)..];
+        entry = entry[..entry.IndexOf("internal sealed record Wire(", StringComparison.Ordinal)];
+        Assert.Contains("includeDqmhMain: true", entry);
+        Assert.Contains("SourceOnlyInProjectAsync(", entry);
     }
 
     /// <summary>
@@ -63,7 +80,8 @@ public class ScriptedWiresAreLaidOutTests
         [
             "lvai_af_add_hook.xml", "lvai_af_remove_hook.xml", "lvai_wire_dyn_events.xml",
             "lvbd_bind_control_refs.xml", "lvbd_connect_by_names.xml", "lvbd_graft_rewire.xml",
-            "lvbd_splice_by_names.xml", "lvdqmh_wire_module_data.xml",
+            "lvbd_splice_by_names.xml", "lvdqmh_splice_frame_entry.xml", "lvdqmh_splice_module_data.xml",
+            "lvdqmh_wire_module_data.xml", "lvdqmh_wire_tester_broadcast.xml",
         ], wiring);
     }
 }

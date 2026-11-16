@@ -821,6 +821,16 @@ internal sealed class DqmhHeadless(LvaiConnection connection)
                     ["framesWired"] = int.TryParse(DqmhTools.Scalar(wired, "Frames Wired"), out var n) ? n : null,
                     ["error"] = DqmhTools.Failed(wired),
                 };
+            // SCRIPTED WIRES ARE FOLLOWED BY A LAYOUT (upstream's rule of 2026-11-12, applied to the
+            // tester at the merge): the new Format Into String wire lands where the helper drew it
+            if (wired is not null && DqmhTools.Failed(wired) is null
+                && testerBroadcast["framesWired"]?.GetValue<int>() is > 0)
+            {
+                var layout = await new DiagramCleanup(connection).RunAsync(tester, DqmhTools.OnPyLabview
+                    ? AixmlBackend.PyLabview : AixmlBackend.Grpc, timeoutSeconds, ct);
+                steps.Add(layout.DeepClone());
+                testerBroadcast["cleanUpDiagram"] = layout;
+            }
             if (wired is not null && format.Field == EventTimeField && broadcastPayload.Count > 0)
                 testerBroadcast["note"] = "No argument is of a type Format Into String takes " +
                                           "(numeric, string, Boolean, path); the tester's status " +
