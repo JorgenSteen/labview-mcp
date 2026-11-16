@@ -289,6 +289,9 @@ generation skips it.
 every `.vi` under it. On pylabview it lays out with `parallel` workers (default 4) in the server's
 own process - measured over 76 VIs, 35 s against 78 s one after the other. Read `failed`,
 `landedOff` and each failed row's `errorKind`; render a few representative VIs, not all of them.
+A batch that outlives `answerWithinSeconds` (default 45) answers `stillRunning` with `progress`;
+the layout goes on in the server, so call AGAIN with the SAME arguments to collect the whole
+answer, and start no other LabVIEW work meanwhile.
 
 ### Phase 1 — What exactly changes?
 
@@ -434,11 +437,11 @@ kin, an error cluster goes straight into `Not`/`And`/`Or` and a `stop` terminal,
 constant (`lvai_check_aixml` warns `primitiveForConstant` / `errorStatusUnbundled`). What you
 KEEP stays as it was.
 
-**The qualifier trap.** The index prints the bare file name, which for a library-owned VI is not
-the target. `Draw Image from File__ogtk.vi` is refused;
-`openg_picture.lvlib\3ADraw Image from File__ogtk.vi` validates and runs — the same VI. Settle
-it with both spellings as two `Call`s in one throwaway `lvai_validate_aixml`: `Unsupported
-SubVI` names the one that did not resolve.
+**The qualifier trap.** The index prints the `Call` target, qualified where it knows the owner
+(`NI_AALPro.lvlib:FFT.vi`; `:` is `\3A` in AIXML) - copy it. A BARE hit refused as
+`Unsupported SubVI` is still a library member: settle it with both spellings as two `Call`s in
+one throwaway `lvai_validate_aixml`, never by rebuilding the VI. A polymorphic VI (FFT) needs
+`instance` and `adapt` from `lvai_vi_terminals`.
 
 For a template, `lvai_convert_vi_to_aixml` the palette VI or example (`returnContent: false`) and
 copy the exact node and terminal spellings. **A mode attribute can change a node's output type

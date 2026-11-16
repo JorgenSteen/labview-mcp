@@ -383,7 +383,10 @@ the last one LabVIEW logged `{sub}` insanity and then crashed.
 terminals in DIAGRAM coordinates, the diagram objFlags `+0x200`. Inside a loop it is still
 broken and refused.
 **Flat Sequence**: the `flatSequence` is defined in the parent's z list, its frames referenced
-in the parent's `nodeList`; a `seqTun` on a border two frames share sits on the bottom edge.
+in the parent's `nodeList`; a `seqTun` (a tunnel to the OUTSIDE) on a border two frames share
+sits on the bottom edge. Data from frame k to frame k+1 is NOT two `seqTun`s - this section said
+nothing else until 2026-11-12, and every such wire ran out under frame k and back in under frame
+k+1 (user feedback). It is a `flatSeqTun` pair, see "Frame-to-frame tunnels" below.
 **Diagram and Conditional Disable** (`commentNode`): `activeDiag`/`defaultDiag` name the Enabled
 frame; a condition is a prefix tree (`==` → operator `TreeElt` with `activePlot FD`). NI's own
 converter ran the *Disabled* frame of a generated Diagram Disable Structure - our composed one
@@ -3214,3 +3217,61 @@ unrelated reason - an XControl served from memory by an earlier run under `--no-
 PASSes on a fresh LabVIEW (`Degrees Fahrenheit=212`), which the suite starts by itself without
 `--no-restart`.
 
+
+### Frame-to-frame tunnels of a Flat Sequence (2026-11-12)
+
+User feedback: in a generated Flat Sequence every wire from one frame to the next left the frame
+at the BOTTOM and came back in through the bottom of the next one; asked to wire through the
+divider instead, the agent could not. Reproduced with `t86_flat_sequence` on both backends - NI's
+converter draws it the same way, and the composer had copied NI's converter's output (the
+`seqtun` parts come from `pseq.xml`, an AIXML-generated VI).
+
+**LabVIEW's own object is a `flatSeqTun` pair** (NI's `VI Execution Properties.vi`): the out half
+on frame k (dco objFlags 2049, term 64), the in half on frame k+1 (dco objFlags 0x200800, term
+32832), each naming the other in `<mate uid=...>`, neither carrying `dsw`/`dcoFiller`. Both sit on
+the SAME spot across the shared border - out half (161, 49, 170, 58) on a frame 56 wide, in half
+(161, -2, 170, 7) on the next frame, which starts 5 px before the first ends - and a wire of no
+length (`compressedWireTable` `01`) joins them on the parent diagram. NI's export writes it as an
+Out tunnel on frame k whose net feeds an In tunnel on frame k+1, which is all AIXML can say.
+
+**The composer** now recognises exactly that (`pair_flat_seq_tunnels`): the two `seqTun`s it
+composed become a `flatSeqTun` pair placed across the border, one slot per pair, both halves on
+one y below the taller of the two frames' subdiagram labels. A net from frame i to frame j > i+1 is
+threaded through every frame in between (`thread_flat_seq_skips`, an In and an Out tunnel per
+middle frame, as LabVIEW does when a wire is dragged across), so every hop is such a pair. A value
+a middle frame hands to the OUTSIDE is threaded to the LAST frame and leaves through its right edge:
+left as a tunnel on the middle frame it sat on the bottom edge and ran under every later frame
+(the test project `C:	emp\FlatSequence`, Mean and Max out of the third of four frames). The
+pair's joining wire gets NI's table `01`: a routed table between the two coincident ends was
+"Wiring insanity found and fixed" four times per load of t86, and none after. `t210_flat_sequence_frame_tunnels`
+(three frames, two pairs on one border, a value that skips the middle frame, one that leaves the
+middle frame) composes, loads with no `Insane` line, computes `mid=5, result=9`, renders with every
+hop on a divider, and round-trips through the reader.
+
+NI's gRPC converter still draws a frame-to-frame wire under the frames; that route is NI's.
+
+
+### The three live cases, and the suite's verdicts on noise (2026-11-13)
+
+A full run of the suite read 175 PASS, `t133`, `t136`, `t138` FAIL and six `PASS dwarn:1`. None of
+it was the composer:
+
+- **`t133` and `t138` pass alone**, on the changed composer and on the committed one alike; in the
+  long run they lose the desktop's active window to the run before. A LIVE case (one with `post`)
+  now gets one retry - a second failure is still a failure.
+- **`t136` could not run for an hour, then ran.** `lv-com.ps1` answered `post activate to 0 panel
+  window(s)`, and a probe of nothing else - a VI that opens its own panel with `Front Panel
+  Window:Open`, waits 3 s, closes it - ran without error while no window of that name existed,
+  after a restart through `lv-restart.ps1` too; later the same afternoon, with the person at the
+  machine working in other windows, t136 PASSED twice in a row. A live case whose post finds no
+  panel is now `NOENV`, listed as NOT TESTED, and does not fail the run; a case that finds its
+  panel and still misses its expectation is a FAIL as before.
+- **The live cases follow the desktop, run by run.** On ONE composed t133, posted four ways in a
+  row: `char;sysclose` at 600 ms gave `Char=97` and at 1200 ms `Char=0`; with `activate` first,
+  both timings gave `Last Frame=0` - while ten minutes before, `activate` first was the only way
+  that worked. t138 passed without `activate` and failed with it (the activation hands the key
+  focus to the string `Typed`). No post sequence was stable while the desktop was in use, so the
+  cases were left as they were: they are a check for an IDLE desktop, not of the composer.
+- **`DestroyPlatformEvent failed with MgErr 42`** is LabVIEW's teardown (recorded as benign since
+  2026-09), and five of the six `dwarn:1` cases were clean when rerun alone; `t162` shows 2-4 of
+  them on the committed composer as on the changed one. It joins `EXPECTED_DWARNS`.

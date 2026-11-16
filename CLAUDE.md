@@ -45,6 +45,13 @@ orchestrator does it after the last wave: `lvai_create_library` with the API VIs
 function folder (never flat), then `lvai_exec_state` over the members. The VI agents search the
 PROJECT's own VIs before the palette. `docs/orchestrator-brief.md`.
 
+**LOGIC INSIDE A DQMH MODULE KEEPS ITS STATE IN THE MODULE'S DATA CLUSTER, NEVER IN AN FGV**
+(user feedback of 2026-11-12, the Hampel Soft DQMH conventions). Fields are added with
+`lvai_dqmh_add_module_data` (in place - an overwritten `.ctl` leaves the library and breaks
+Main.vi); a handler reads `<field> in` and writes `<field> out`, and `lvai_dqmh_place_handler`
+wires both on the shift-register wire. A reply's error goes to the requester only.
+`docs/dqmh-patterns.md` §12.
+
 **ONE AGENT, ONE OUTPUT DIRECTORY.** Two agents in one folder overwrite each other's files. Give
 each its own folder (`<project>\Tests\<ClassName>\`) and say so in its prompt.
 
@@ -97,8 +104,13 @@ report as information and call it.
 - A plain VI in `vi.lib`, `user.lib`, `instr.lib` or an LVAddon resolves by its bare name, with
   or without a palette entry.
 - A library member needs its qualifier, `openg_picture.lvlib\3ADraw Image from File__ogtk.vi`.
-  The qualifier is FLAT (no library folders), and it is not derivable from the index: get it from
-  an export of a VI that calls it, or settle both spellings in one throwaway validate.
+  The qualifier is FLAT (no library folders). `lvai_palette_index` prints it where the `.mnu`'s
+  containers or a library name the owner (`NI_AALPro.lvlib:FFT.vi`, since 2026-11-13); a BARE hit
+  refused as `Unsupported SubVI` is still a library member - get the qualifier from an export of a
+  VI that calls it, or settle both spellings in one throwaway validate. Never rebuild it.
+- NI Vision's `.llb` members carry NO extension: `target="IMAQ Create"`. An IMAQ Image
+  (`ref{GenClassTagFlatten.IMAQImage.IMAQImage}`) composes only on the pylabview backend - NI's
+  converter builds it as `Generic Tag Thing` and breaks the VI. `docs/imaq-support.md`.
 - **A VI inside an `.llb` is not a reason to give up** - search for it and try the call.
 - **A path never resolves**, in any spelling.
 - **Project-local code resolves by bare name once it is LOADED** (`lvai_open_file`, through its
@@ -229,6 +241,14 @@ and an unwired `reference`. `docs/control-reference-binding.md`.
 travels WITH the command, read in the producer's event frame - never a control terminal read
 beside a `Dequeue` (`controlReadBeforeWait`). Typing counts as activity where a spec has an
 inactivity timeout (`Value Change` + `Update While Typing?`). `docs/cold-build-atm-agents-7.md`.
+
+**SCRIPTED WIRES ARE ALWAYS FOLLOWED BY A LAYOUT** (the user's rule of 2026-11-12): a tool that
+connects wires by VI Server scripting ends with `lvai_layout_diagram` over the VI it wired
+(`cleanUpDiagram` in its answer) - `lvai_dqmh_place_handler` lays out the WHOLE Main.vi, the one
+exception to the automatic clean-up leaving a DQMH Main.vi alone; the AF hook tools, graft,
+bind-references, swap, dynamic events and class methods likewise. `docs/diagram-layout.md` §6s.
+`place_handler` and the AF hook tools then make the VI SOURCE ONLY (`sourceOnly`: Delacor's and
+NI's providers write compiled code; the project is closed for the pylabview strip and reopened).
 
 **A regeneration costs the whole swap cycle** (sockets back, icon gone), so batch documentation
 changes into a regeneration you make anyway.
@@ -509,6 +529,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | pylabview route and edits | `docs/pylabview-controls.md`, `docs/connector-pane-repair.md` | `pylv_route`, `pylv_apply` |
 | Stale compiled code | `docs/pylabview-stale-compiled-code.md` | `pylv_apply` |
 | Network streams; tag refnums; IVI on pylabview | `docs/network-streams.md`, `docs/aixml-backends.md` | — |
+| NI-IMAQdx and NI Vision (IMAQ) | `docs/imaq-support.md` | — |
 | What cold builds found | `docs/cold-build-*.md` | — |
 | Why a tool call failed with no detail | `docs/tool-argument-errors.md` | — |
 | Test a branch build against LabVIEW before a client restart | `scripts/mcp_drive.py` (its header) | `python -I scripts/mcp_drive.py <exe> <calls.json> [<private TEMP>]` |

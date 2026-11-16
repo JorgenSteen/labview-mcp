@@ -29,7 +29,7 @@ public sealed class DqmhModuleDataTests
         var moduleData = DqmhFrameTools.ModuleDataPlan(inputs, outputs,
             DqmhFrameTools.DefaultModuleDataIn, DqmhFrameTools.DefaultModuleDataOut);
 
-        var plan = DqmhFrameTools.Plan("Configure Instrument Address", inputs, outputs, Args, [], moduleData.Names);
+        var plan = DqmhFrameTools.Plan("Configure Instrument Address", inputs, outputs, Args, [], moduleData: moduleData.Names);
 
         Assert.True(moduleData.Splice);
         Assert.Empty(plan.Problems);

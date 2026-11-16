@@ -85,6 +85,8 @@ SCALARS = {
 # type key (lvheap.type_key) -> the front-panel class of its object
 DDO_OF_KEY = {v[0]: v[1] for v in SCALARS.values()}
 DDO_OF_KEY.update({"Refnum.LVObjCtl": "stdRefNum", "Refnum.VisaRef": "stdRefNum", "Refnum.UsrDefndTag": "stdRefNum",
+                   # NI Vision's IMAQ Image (a tag FLATTEN refnum): the same refnum object (2026-11-13)
+                   "Refnum.UsrDefTagFlt": "stdRefNum",
                    "Refnum.IVIRef": "stdRefNum",
                    "Refnum.Queue": "stdRefNum",
                    # a MENU refnum in a cluster (MGI's Event Cluster) and an event registration
@@ -551,6 +553,20 @@ def refnum_type(inner, plain_class=False):
                 cls, flags, nested = (row + [""])[:3]
                 _REF_CLASSES[cls] = (flags, nested)
     inner = inner.strip()
+    mf = re.fullmatch(r"GenClassTagFlatten\.([^.]+)\.(.+)", inner)
+    if mf:
+        # a user-defined tag FLATTEN refnum - NI Vision's IMAQ Image: Ident and TypeName the
+        # class (IMAQImage), no client, a void variant. NI's own converter builds this type as
+        # `Generic Tag Thing` and the VI breaks on its first wire ("IMAQ Image.ctl" against
+        # "Generic Tag Thing"), so the class comes from NI's examples; the examples' client - a
+        # Tag with an empty ident - is left out, as NI's converter leaves it out. MEASURED
+        # 2026-11-13: IMAQ Create -> an Image indicator of this type -> Imaq Dispose composes
+        # executable and RUNS (image "probe" created and disposed, no error); NI's build of the
+        # probe with only the class changed loads executable too.
+        el = ET.Element("TypeDesc", {"Type": "Refnum", "RefType": "UsrDefTagFlt", "Ident": mf.group(1),
+                                     "FirstClient": "0", "TypeName": mf.group(2), "Format": "inline"})
+        el.append(_void_variant())
+        return el
     m = re.fullmatch(r"GenClassTag\.([^.]+)\.(.+)", inner)
     if m:
         # a user-defined tag refnum (NI System Configuration, DataFinder, DAQmx task ...): a
@@ -806,7 +822,7 @@ def unverified_wire_type(tree):
         if tree.get("RefType") in ("DataValueRef", "DataLog") and not fields(tree):
             # only the CONTAINER form is measured; a bare one stays refused
             return "Refnum.%s (no element type)" % tree.get("RefType")
-        if tree.get("RefType") not in ("LVObjCtl", "VisaRef", "IVIRef", "UsrDefndTag", "TDMSFile", "UDClassInst",
+        if tree.get("RefType") not in ("LVObjCtl", "VisaRef", "IVIRef", "UsrDefndTag", "UsrDefTagFlt", "TDMSFile", "UDClassInst",
                                        "UserEvent", "EventReg", "Menu", "Queue", "ByteStream", "NotifierRef",
                                        "DataValueRef", "DataLog"):
             # UsrDefined is a family of unrelated classes; only NI-TClk's session reference is
@@ -1156,7 +1172,10 @@ def tag_class(tree, node_name=None):
     and is named by the NODE: `GenClassTag.DAQmx Timing.NIDAQ` (learn_node_classes.py over 21 VIs,
     98 nodes, 2026-10-21; issue #96). An IVI instrument session is named by its driver,
     `IVI.niRFSA`, as NI's export writes `type="{IVI.niRFSA}"` (2026-10-30). None for any other
-    refnum."""
+    refnum. A TYPEDEF'd refnum is read through: an IMAQdx session is the driver's `IMAQdx
+    Session` typedef around `GenClassTag.IMAQdx.IMAQdx` (2026-11-13)."""
+    while tree is not None and tree.get("Type") == "TypeDef":
+        tree = next((c for c in tree if c.tag == "TypeDesc"), None)
     if tree is not None and tree.get("RefType") == "IVIRef" and tree.get("Ident"):
         return "IVI.%s" % tree.get("Ident")
     if tree is None or tree.get("RefType") != "UsrDefndTag" or not tree.get("TypeName"):
@@ -1595,6 +1614,14 @@ def _const_value(tree, value):
                 cb = lvheap.value_bytes(c)
                 body += struct.pack(">B", len(cb)) + cb
         return (b"PTH0" + struct.pack(">I", len(body)) + body).hex().upper()
+    if t == "Refnum" and tree.get("RefType") == "UsrDefTagFlt":
+        # NI Vision's IMAQ Image, the null one: NI's converter writes 20 bytes for it -
+        # 00000000 00000000 00000000 00000001 00000000 (its build of probes/ptypes-imaq.xml,
+        # 2026-11-13) - and the composer's 4-byte null refnum broke the VI on its own (a lone
+        # image constant, execState 0, while a control wired to an indicator ran)
+        if (value or "").strip():
+            raise Unsupported("an IMAQ Image constant has no literal value (%r)" % value)
+        return "0000000000000000000000000000000100000000"
     if t == "Refnum" and tree.get("RefType") in ("IVIRef", "VisaRef", "UsrDefndTag"):
         # an IVI or VISA session or a DAQmx task holds its NAME, flattened like a string: NI's
         # converter wrote 00000007 53696D52465341 for value="SimRFSA" (probes/pivi-sim.xml),
@@ -2310,7 +2337,7 @@ class Composer:
                 next(iter(cands), None)
         if key is None and ddo_class == "listbox":
             key = self._listbox_part(want, tkey)
-        if key is None and tkey == "Refnum.UsrDefndTag" and lvheap.tag_refnum_class(tree):
+        if key is None and tkey in ("Refnum.UsrDefndTag", "Refnum.UsrDefTagFlt") and lvheap.tag_refnum_class(tree):
             # a user-defined tag refnum is class-specific inside (the guard below says why), so a
             # part harvested for THIS class is preferred; the generic key stays the fallback, and
             # a class with no part of its own still reaches that guard's named refusal
@@ -4272,6 +4299,22 @@ class Composer:
         ref_tree = refnum_type(cls, plain_class=True)
         ins0 = dict(pairs(el.get("inputs")))
         wired_ref = self.net_type.get(ins0.get("reference")) if ins0.get("reference") else None
+        if tag:
+            # a TYPEDEF'd session is typed by the refnum INSIDE it: `IMAQdx Open Camera.vi`'s
+            # `Session Out` is the driver's IMAQdx.ctl around ref{GenClassTag.IMAQdx.IMAQdx}, and
+            # with the typedef unread the node fell back to the bare class refnum and the VI did
+            # not LOAD (`Memory is full`, load error code 1) - while a session CONTROL wired in
+            # composed fine. Found 2026-11-13 by the agent building Read Camera Attribute.vi; it
+            # is the cause of the five IMAQdx examples that composed but did not load.
+            # The inner element cannot be taken over as it stands - its client Tag is an index
+            # into the CALLEE's type table ("can't convert negative int to unsigned" on rebuild) -
+            # so the refnum is built afresh from its class, as a session control's is.
+            inner = wired_ref
+            while inner is not None and inner.get("Type") == "TypeDef":
+                inner = next((c for c in inner if c.tag == "TypeDesc"), None)
+            if inner is not None and inner is not wired_ref and inner.get("RefType") == "UsrDefndTag" \
+                    and inner.get("Ident") and inner.get("TypeName"):
+                wired_ref = type_tree("ref{GenClassTag.%s.%s}" % (inner.get("Ident"), inner.get("TypeName")))
         strict = wired_ref is not None and wired_ref.get("Type") == "Refnum" and fields(wired_ref)
         if tag:
             # a TAG refnum's node is typed with the refnum WIRED into it, which carries more than
@@ -9833,7 +9876,118 @@ class Composer:
         outer_end, inner_end = (outer.get("uid"), parent), (inner.get("uid"), fd)
         self.ends[(el.get("uid"), "in")] = outer_end if d == "in" else inner_end
         self.ends[(el.get("uid"), "out")] = inner_end if d == "in" else outer_end
+        self.seq_tuns = getattr(self, "seq_tuns", [])
+        self.seq_tuns.append({"seq": seq, "k": next(i for i, x in enumerate(frames) if x[2] is frame_el),
+                              "d": d, "dco": outer.find("dco"), "src": src_net,
+                              "nets": [n for _, n in pairs(el.get("outputs")) if n]})
         self.report.append("Sequence tunnel %s (%s)" % (el.get("_id"), d))
+
+    @staticmethod
+    def thread_flat_seq_skips(vi):
+        """A value from frame i of a Flat Sequence to frame j > i + 1 is threaded through every
+        frame in between, as LabVIEW draws it when a wire is dragged across them: an In and an Out
+        tunnel per middle frame, joined inside it. AIXML may write it as one Out tunnel on frame
+        i feeding an In tunnel on frame j directly; composed that way the wire ran UNDER the
+        middle frames. Rewritten here, every hop is a frame-to-frame tunnel
+        (pair_flat_seq_tunnels).
+        A value a frame before the LAST hands to the OUTSIDE is threaded the same way to the last
+        frame and leaves through its right edge, where LabVIEW's own outputs leave: as a tunnel on
+        the middle frame it sat on the bottom edge and the wire ran under every later frame (the
+        test project of 2026-11-12, Mean and Max out of the third of four frames)."""
+        uids = [int(u) for u in (e.get("uid") for e in vi.iter()) if u and u.isdigit()]
+        nxt = [max(uids + [4199]) + 1]
+
+        def new_uid():
+            nxt[0] += 1
+            return str(nxt[0] - 1)
+
+        def src_of(t):
+            return [n for _, n in pairs(t.get("inputs"))][:1]
+        for st in [s for s in vi.iter("Structure") if s.get("_name") == "Flat Sequence Frame"]:
+            frames = [d for d in st if d.tag == "Diagram"]
+            if len(frames) < 2:
+                continue
+            tun = lambda f, p: [t for t in f if t.tag == "Tunnel" and t.get("_id", "").startswith(p)]
+            for i, fr in enumerate(frames[:-1]):
+                for out in tun(fr, "Out"):
+                    nets = [n for _, n in pairs(out.get("outputs")) if n]
+                    if not nets:
+                        continue
+                    net = nets[0]
+                    far = [(j, t) for j in range(i + 2, len(frames)) for t in tun(frames[j], "In")
+                           if src_of(t) == [net]]
+                    pat = re.compile(r"(?<=:)%s(?=,|$)" % re.escape(net))
+                    inside = set(st.iter())      # afresh: threading adds tunnels to it
+                    outside = [e for e in vi.iter() if e not in inside and e.get("inputs")
+                               and pat.search(e.get("inputs"))]
+                    if not far and not outside:
+                        continue
+                    last = len(frames) - 1 if outside else max(j for j, _ in far)
+                    hop = net        # the net leaving frame k-1
+                    for k in range(i + 1, last + 1):
+                        mid = frames[k]
+                        if k == last and not outside:
+                            break
+                        # the next frame's own In tunnel of this value, if the document has one,
+                        # is the in half: a second one beside it would be a second pair
+                        own = next((t for t in tun(mid, "In") if src_of(t) == [hop]), None) if k == i + 1 else None
+                        if own is not None:
+                            inner = [n for _, n in pairs(own.get("outputs")) if n][0]
+                        else:
+                            ui = new_uid()
+                            ET.SubElement(mid, "Tunnel", {"_id": "In%d" % (1 + len(tun(mid, "In"))),
+                                                          "inputs": "value:%s" % hop,
+                                                          "outputs": "value:%s.value" % ui, "uid": ui,
+                                                          "uid_parent": mid.get("uid")})
+                            inner = "%s.value" % ui
+                        uo = new_uid()
+                        ET.SubElement(mid, "Tunnel", {"_id": "Out%d" % (1 + len(tun(mid, "Out"))),
+                                                      "inputs": "value:%s" % inner,
+                                                      "outputs": "value:%s.value" % uo, "uid": uo,
+                                                      "uid_parent": mid.get("uid")})
+                        hop = "%s.value" % uo
+                        for j, t in far:
+                            if j == k + 1:
+                                t.set("inputs", "value:%s" % hop)
+                    for e in outside:
+                        e.set("inputs", pat.sub(hop, e.get("inputs")))
+
+    def pair_flat_seq_tunnels(self):
+        """Data from frame k to frame k+1 of a Flat Sequence runs through a FRAME-TO-FRAME
+        tunnel, `flatSeqTun`, not through two tunnels to the outside: its out half on frame k
+        (objFlags 2049), its in half on frame k+1 (0x200800), each naming the other as `mate`,
+        both on the border the two frames share and joined by a wire of no length on the parent
+        diagram (NI's VI Execution Properties.vi). NI's export writes it exactly as two `seqTun`s
+        - an Out tunnel on frame k whose net feeds an In tunnel on frame k+1 - so the pair is
+        recognised here. Composed as two `seqTun`s it had to sit on the BOTTOM edge (a seqTun on a
+        shared border is "Insane Sequence Tunnel {graphics}") and the wire ran out under frame k
+        and back in under frame k+1 (user feedback, 2026-11-12). A net that skips a frame keeps
+        the two outside tunnels: LabVIEW would thread it through the frames in between."""
+        self.flat_pairs = getattr(self, "flat_pairs", {})
+        tuns = getattr(self, "seq_tuns", [])
+        taken = set()
+        for o in [t for t in tuns if t["d"] == "out"]:
+            mate = next((i for i in tuns if i["d"] == "in" and i["seq"] is o["seq"] and i["k"] == o["k"] + 1
+                         and i["src"] in o["nets"] and i["dco"].get("uid") not in taken), None)
+            if mate is None:
+                continue
+            taken.add(mate["dco"].get("uid"))
+            for half, other in ((o, mate), (mate, o)):
+                dco = half["dco"]
+                dco.set("class", "flatSeqTun")
+                for tag in ("dsw", "dcoFiller"):     # NI's flatSeqTun carries neither
+                    x = dco.find(tag)
+                    if x is not None:
+                        dco.remove(x)
+                if half is mate:
+                    dco.find("objFlags").text = str(0x200800)
+                ET.SubElement(dco, "mate", {"uid": other["dco"].get("uid")})
+            # the pair's slot on the shared border, counted per border so both halves get one y
+            border = (id(o["seq"]), o["k"])
+            n = sum(1 for b in self.flat_pairs.values() if b[0] == border and b[2] == "out")
+            self.flat_pairs[o["dco"].get("uid")] = (border, n, "out")
+            self.flat_pairs[mate["dco"].get("uid")] = (border, n, "in")
+            self.report.append("Frame-to-frame tunnel, frame %d -> %d" % (o["k"], mate["k"]))
 
     def add_tunnel(self, el, loop_el):
         d = "in" if el.get("_id", "").startswith("In") else "out"
@@ -10371,6 +10525,7 @@ class Composer:
                 # "Insane Sequence Tunnel {graphics}")
                 first, last = fr is frames[0][0], fr is frames[-1][0]
                 slot = {0: 0, 1: 0, "b0": 0, "b1": 0}
+                fk = next(i for i, x in enumerate(frames) if x[0] is fr)
                 for t in fr.find("termList"):
                     tb = t.find("dco/termBounds")
                     if tb is None:
@@ -10379,6 +10534,18 @@ class Composer:
                     tt, tl_, tbb, tr = lvheap.parse_bounds(tb.text)
                     th, tw = tbb - tt, tr - tl_
                     shared = (out and not last) or (not out and not first)
+                    pair = getattr(self, "flat_pairs", {}).get(t.find("dco").get("uid"))
+                    if pair is not None:
+                        # a frame-to-frame tunnel ACROSS the shared border, both halves on one
+                        # spot: NI's out half (161, 49, 170, 58) on a frame 56 wide, its in half
+                        # (161, -2, 170, 7) on the next, which starts 5 px before the first ends
+                        _, n, d_ = pair
+                        kk = fk if d_ == "out" else fk - 1
+                        lab = max((fd_.sublabel["h"] if fd_.sublabel else 0) for _, fd_, _ in frames[kk:kk + 2])
+                        y = 20 + lab + 24 * n
+                        xx = w - tw + 2 if d_ == "out" else -2
+                        tb.text = lvheap.fmt_bounds((y, xx, y + th, xx + tw))
+                        continue
                     if shared:
                         k = slot["b%d" % out]
                         slot["b%d" % out] += 1
@@ -11046,6 +11213,7 @@ class Composer:
         self.pane_terms = []
         self.con_taken = {}
         self.term_label = {}
+        self.thread_flat_seq_skips(vi)
         elements = []
         labels = []
         for el in self.flatten(vi):
@@ -11269,6 +11437,7 @@ class Composer:
             self.add_event_filter(e)
         self.finish_cases()
         self.finish_events()
+        self.pair_flat_seq_tunnels()
         nets = self.wire(elements)
         self.check_wiring(elements)
         for el in labels:
@@ -11297,6 +11466,7 @@ class Composer:
                 self.bd, self.hotpoints,
                 absolute_owners=[h.get("uid") for h, _ in getattr(self, "fb_pairs", [])])
             self.report.append("wires routed: %d, left generic: %d" % (routed, left))
+        self.flat_pair_wires()
         self.connector_pane()
         # escaped as NI escapes it (\2C, \3A, \0A, a doubled backslash), like a control's below
         self.description = unescape(vi.get("description") or "")
@@ -11341,6 +11511,24 @@ class Composer:
             raise Unsupported("wiring: " + "; ".join(self.wiring_faults))
         for fault in self.wiring_faults:
             self.report.append("WARNING: wiring: %s - LabVIEW will load this VI broken" % fault)
+
+    def flat_pair_wires(self):
+        """The wire joining the two halves of a frame-to-frame tunnel has no length: NI writes its
+        table as `01` (VI Execution Properties.vi). Any routed or generic table between the two
+        coincident ends was "Wiring insanity found and fixed" on every load (t86: 4 lines)."""
+        if not getattr(self, "flat_pairs", None):
+            return
+        terms = {t.get("uid"): t for t in self.bd.iter("SL__arrayElement") if t.get("class") == "term"}
+        for s in self.bd.iter("SL__arrayElement"):
+            tl = s.find("termList") if s.get("class") == "signal" else None
+            if tl is None or len(tl) != 2:
+                continue
+            dcos = [terms.get(x.get("uid")) for x in tl]
+            dcos = [t.find("dco") if t is not None else None for t in dcos]
+            # the OUTER halves only (they carry the full dco); an inner term names its dco by uid,
+            # and two inner ones are a pass-through INSIDE a middle frame, a real wire
+            if all(d is not None and d.get("class") == "flatSeqTun" for d in dcos):
+                s.find("compressedWireTable").text = "01"
 
     def set_array_anchors(self):
         """Give every array constant its nRC/oRC anchor now that every position is final (see
@@ -11728,16 +11916,29 @@ class Composer:
                 blk.append(sec)
         if getattr(self, "images", None):
             # the DSIM block ("Dynamic Size Image") sits before the front-panel heap, as in
-            # LabVIEW's own files; one binary section per image
-            blk = m.find("DSIM")
-            if blk is None:
-                blk = ET.Element("DSIM")
-                m.insert(list(m).index(m.find("FPHb")), blk)
-            for i, hx in sorted(self.images.items()):
-                fn = "%s_DSIM%d.bin" % (base, i)
-                with open(os.path.join(out_dir, fn), "wb") as f:
-                    f.write(bytes.fromhex(hx))
-                ET.SubElement(blk, "Section", {"Index": str(i), "Format": "bin", "File": fn})
+            # LabVIEW's own files; one binary section per image. An image harvested from an MNGI
+            # block (a PNG, `MNGI:` + hex - LabVIEW 2023 and later) goes back into one, after
+            # FPEx as in NI's files: NI-IMAQdx's session control holds such an image, and
+            # without it the panel did not load (2026-11-13)
+            for kind in ("DSIM", "MNGI"):
+                items = [(i, hx) for i, hx in sorted(self.images.items())
+                         if hx.startswith("MNGI:") == (kind == "MNGI")]
+                if not items:
+                    continue
+                blk = m.find(kind)
+                if blk is None:
+                    blk = ET.Element(kind)
+                    at = list(m).index(m.find("FPEx")) + 1 if kind == "MNGI" and m.find("FPEx") is not None \
+                        else list(m).index(m.find("FPHb"))
+                    m.insert(at, blk)
+                for i, hx in items:
+                    png = kind == "MNGI"
+                    fn = "%s_%s%d.%s" % (base, kind, i, "png" if png else "bin")
+                    with open(os.path.join(out_dir, fn), "wb") as f:
+                        f.write(bytes.fromhex(hx[len("MNGI:"):] if png else hx))
+                    attrs = {"Index": str(i), "PaddingLength": "0", "Format": "png", "File": fn} if png \
+                        else {"Index": str(i), "Format": "bin", "File": fn}
+                    ET.SubElement(blk, "Section", attrs)
         # NO COMPILED CODE, EVER - the user's rule of 2026-10-09: a composed VI is source-only,
         # so it carries less data and LabVIEW compiles it in memory on load. Asserted rather
         # than assumed, because a part or skeleton cut from a compiled VI could bring it in.
