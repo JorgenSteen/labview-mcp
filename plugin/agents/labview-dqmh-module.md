@@ -275,6 +275,10 @@ A new field of the module's state goes into `Module Data--cluster.ctl` with
 `lvai_dqmh_add_module_data` (`fieldsJson`): it adds the fields IN PLACE, refuses one already there,
 and saves the typedef and Main.vi, which stays executable. Then a handler reaches the field as
 `<field> in` / `<field> out` (Phase 6b). Report the fields added, then `lvai_exec_state` on Main.vi.
+A handler that already takes the module data WHOLE (`Module Data in`/`out`) carries a PLAIN
+cluster - AIXML cannot bind the typedef - and breaks Main.vi when a field is added (`ok: false`,
+`mainViBroken`, measured 2026-11-17): bind that handler's terminals to `Module Data--cluster.ctl`
+with `lvai_bind_pane_typedef` right after placing it, or regenerate it after the add.
 
 Any OTHER cluster typedef of the module (an argument or reply typedef, a typedef under `Types\`)
 takes `lvai_add_typedef_elements` with `ctlPath`, `fields` as `<type>.<name>` (`double.Flow Rate`)

@@ -124,10 +124,12 @@ internal sealed class DqmhModuleDataTools(LvaiConnection connection)
             var error = DqmhTools.Failed(run);
             var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
             var missing = fields.Select(f => f.Name).Where(n => !after.Contains(n)).ToList();
+            var broke = BrokeMainBecause(mainBefore, mainAfter);
 
             return Json.Document(DqmhHeadless.Merge(new JsonObject
             {
-                ["ok"] = error is null && missing.Count == 0,
+                ["ok"] = error is null && missing.Count == 0 && broke is null,
+                ["mainViBroken"] = broke,
                 ["fieldsAfter"] = DqmhHeadless.Array(after),
                 ["notAdded"] = DqmhHeadless.Array(missing),
                 ["error"] = error,
@@ -142,6 +144,22 @@ internal sealed class DqmhModuleDataTools(LvaiConnection connection)
         }));
 
     // ------------------------------------------------------------------ pure, tested
+
+    /// <summary>
+    /// Why Main.vi went from executable to broken with the add, or null when it did not. MEASURED
+    /// 2026-11-17 at the merge retest: a handler placed with the WHOLE module data (`Module Data
+    /// in`/`out`, lvai_dqmh_place_handler's splice) carries a PLAIN cluster - AIXML cannot bind a
+    /// typedef - so a third field made its wire a type mismatch, Main.vi read 0 and this tool said
+    /// `ok: true` with no reason. Regenerating that handler with the new cluster made Main.vi 1 again.
+    /// </summary>
+    internal static string? BrokeMainBecause(int? before, int? after) =>
+        before is > 0 && after is 0
+            ? "Main.vi was executable before the add and is BROKEN after it. The usual cause: a handler " +
+              "that takes the module data WHOLE (`Module Data in`/`Module Data out`) as a plain cluster, " +
+              "not bound to Module Data--cluster.ctl, so its wire no longer matches. Bind that handler's " +
+              "terminals to the typedef (lvai_bind_pane_typedef) or regenerate it with the new cluster, " +
+              "then read lvai_exec_state on Main.vi."
+            : null;
 
     internal sealed record Field(string Name, string Type);
 

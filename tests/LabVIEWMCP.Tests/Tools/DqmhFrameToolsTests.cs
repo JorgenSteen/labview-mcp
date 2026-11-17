@@ -478,4 +478,25 @@ public class DqmhFrameToolsTests
         Assert.Equal([Path.Combine(module, "Configure.vi")], created);
         Assert.Equal([Path.Combine(module, "Main.vi"), project], modified);
     }
+
+    /// <summary>
+    /// lvai_dqmh_add_module_data answered `ok: true` while Main.vi went from 1 to 0 - a handler
+    /// taking the module data WHOLE as a plain cluster no longer matched (merge retest,
+    /// 2026-11-17). A break the add caused is named and is not ok; a Main.vi broken before, or
+    /// one that stays executable, is not blamed on it.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 0, true)]
+    [InlineData(2, 0, true)]
+    [InlineData(1, 1, false)]
+    [InlineData(0, 0, false)]
+    [InlineData(null, 0, false)]
+    [InlineData(1, null, false)]
+    public void Adding_module_data_names_a_Main_it_broke(int? before, int? after, bool named)
+    {
+        var why = DqmhModuleDataTools.BrokeMainBecause(before, after);
+
+        Assert.Equal(named, why is not null);
+        if (named) Assert.Contains("lvai_bind_pane_typedef", why);
+    }
 }
