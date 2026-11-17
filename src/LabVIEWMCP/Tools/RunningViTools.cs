@@ -480,8 +480,8 @@ internal sealed class RunningViTools
         var slim = new JsonObject { ["step"] = step.Index, ["action"] = step.Kind, ["ok"] = ok };
         // what a scenario reads back; the per-action note only when the step failed
         foreach (var key in new[] { "execState", "values", "problems", "setProblems", "signalled", "failed",
-                                    "errorCode", "aborted", "pressedStop", "latchedSwitched", "releasedAsLatch",
-                                    "revertedLatches", "errorKind", "error" })
+                                    "errorCode", "aborted", "pressedStop", "latchedSwitched", "latchErrorCode", "releasedAsLatch",
+                                    "revertedLatches", "revertErrorCode", "errorKind", "error" })
             if (full[key] is { } v) slim[key] = v.DeepClone();
         if (!ok && full["note"] is { } note) slim["note"] = note.DeepClone();
         return slim;

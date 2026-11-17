@@ -42,9 +42,13 @@ Measured facts that each cost minutes when found at run time. Plan around them f
 - **Check the 1920 x 1080 budget BEFORE generating**: `lvai_check_aixml` `diagramChain`
   (10 stages). Fold a sequential stretch into a subVI while the AIXML is text - one ATM main VI came
   out 5 983 px wide and was regenerated four times. `docs/diagram-size.md` §3-§4.
-- **A latched boolean cannot be driven through `signalsJson`** (`Error 1193`). Cover what it
-  triggers with the handler's unit test and say so; on a grafted VI drive a test copy
-  (Phase 6g, `switchActionControls`). `docs/cold-build-atm-agents-7.md` §4.
+- **A latched boolean is driven with `lvai_running_vi` `latchedAsSwitch: true`** - on the
+  DELIVERED VI, no test copy: the tool switches the latches in memory for the run, a `press`
+  releases them like a latch, and `stop` reverts the VI from disk (the file never changes).
+  Measured 2026-11-17 on a CLD Car Wash: Start and stop driven, md5 of the VI unchanged. Every
+  build of the first CLD benchmark round had grafted a switch-action test copy instead - a graft,
+  a re-bind and its turns each time. `signalsJson` of `lvai_run_vi_and_read_values` still answers
+  `Error 1193` for a latch. `docs/running-vi.md`.
 - **`Format Into String` `%g` prints 50 as `50.000000`**; `%d`, `%.0f` and `%#g` print `50`
   (measured by running, LabVIEW 2026, 2026-11-05). Use `%d`/`%.0f` for whole numbers.
 - **Compound literals on pylabview**: an array or cluster value needs brackets (`[true,false]`,
@@ -595,7 +599,8 @@ impossible.
    report says that this one step was not driven.
    **A SCENARIO IS ONE CALL: `lvai_running_vi` `action: steps`.** For an application with several
    scenarios, write each as a step list - `start`, `set`/`press`/`signal`, `wait`, `read` with
-   `expect`, `stop` - and send it in ONE call; the tool checks the expectations and answers
+   `expect` (a cluster field is `Cluster.Element`), `stop` - with `latchedAsSwitch: true` when a
+   button is latched - and send it in ONE call; the tool checks the expectations and answers
    `expectations` passed/failed and `firstFailure`. Measured in the first CLD benchmark round
    (2026-11-17): drives sent one action per call were 20-49 calls per build, about five seconds of
    model turn each, 2-4 minutes per build.
@@ -834,7 +839,8 @@ supplied subVI panel exists, unless the user explicitly asks to keep that panel.
    unloads the hierarchy, so the convert answers `Error 53` naming the subVI rather than 1357 -
    measured 2026-10-02; the answer's unsupported-subVI list names exactly what to open.
    **Latched buttons a test must signal** (a latched boolean refuses `Value (Signaling)`, Error
-   1193): graft a SECOND, test-only copy for that - same scaffold, `outputViPath=<name> Test.vi`,
+   1193): drive the DELIVERED VI with `lvai_running_vi` `latchedAsSwitch: true` (above) - that is
+   the default since 2026-11-17. Only where that cannot be used: graft a SECOND, test-only copy for that - same scaffold, `outputViPath=<name> Test.vi`,
    `switchActionControls` naming ONLY the buttons your test drives - bind it like the deliverable,
    and drive that copy. The deliverable keeps the supplied mechanical actions. A graft is
    seconds, so the copy is cheap. Put it beside the scaffold with the other by-products, NOT in the

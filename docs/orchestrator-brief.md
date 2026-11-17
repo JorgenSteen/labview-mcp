@@ -65,13 +65,12 @@ verified, because it needs the project:
 
 ## Reuse what the project already holds
 
-Pass the `.lvproj` to every builder. The VI agents look through the project's own VIs before the
-palette and call a fit by name instead of rebuilding it - project VIs are callable once loaded
-through the project.
+Pass the `.lvproj` to every builder. The VI agents search the project's own VIs before the
+palette and call a fit by name (callable once loaded through the project).
 
 ## One agent, one output directory
 
-Two agents writing into one folder overwrite each other's files. Give each agent its own folder,
+Two agents in one folder overwrite each other's files. Give each agent its own folder,
 for example `<project>\Tests\<ClassName>\`, and say so in its prompt.
 
 ## Check the station with `pylv_status`
@@ -100,15 +99,8 @@ Build by dependency: leaf VIs in parallel with no project open, then one agent f
 Restart LabVIEW between two builds of the same application: a same-named VI of the earlier build,
 still in memory, silently captures a bare-name call.
 
-## Drive a finished application as scenarios, one call each
-
-To check an application against its spec, write each scenario as ONE `lvai_running_vi`
-`action: steps` call: `start`, `set`/`press`/`signal`, `wait`, `read` with `expect`, `stop`. The
-tool compares the values and answers `expectations` and `firstFailure`. One action per call was
-the largest repeated cost in the first CLD benchmark round (2026-11-17): 20-49 drive calls per
-build, each a model turn of about five seconds.
-
 ## Do not add work nobody asked for
 
-No negative-control test run unless the user asked for one. Batch lookups: one tool call with a
-comma-separated list beats several, because each round trip is a model turn.
+No negative-control test run unless the user asked for one. Each round trip is a model turn:
+batch lookups in one call; drive an app one scenario per `lvai_running_vi` `steps` call
+(`latchedAsSwitch` for latched buttons).
