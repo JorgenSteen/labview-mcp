@@ -3,6 +3,7 @@
 // composes as a read on the pylabview backend, as the AIXML reference says it reads.
 // =============================================================================
 using LabVIEWMcp.Infra;
+using LabVIEWMcp.Tests.Fakes;
 using LabVIEWMcp.Tests.Support;
 using LabVIEWMcp.Tools;
 using Xunit;

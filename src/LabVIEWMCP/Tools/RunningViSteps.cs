@@ -23,6 +23,9 @@ internal static class RunningViSteps
 {
     internal static readonly string[] Kinds = ["start", "set", "press", "signal", "wait", "read", "stop"];
 
+    /// <summary>A stop step with no stop control: how long it waits before the abort.</summary>
+    internal const int BareStopWaitMs = 500;
+
     /// <summary>The longest single wait a step may ask for.</summary>
     internal const int MaxWaitMs = 120_000;
 
@@ -102,11 +105,13 @@ internal static class RunningViSteps
 
     private static Step StopStep(int index, JsonNode? body, string where) => body switch
     {
-        null => new Step(index, "stop"),
+        // with no stop control nothing ends the VI by itself: wait briefly, then abort (the live
+        // check of 2026-11-17 paid the single action's 5 s default on every bare stop)
+        null => new Step(index, "stop", StopWaitMs: BareStopWaitMs),
         JsonValue v when v.TryGetValue<string>(out var name) => new Step(index, "stop", StopControl: name),
         JsonObject o => new Step(index, "stop",
             StopControl: o["stopControl"]?.GetValue<string>(),
-            StopWaitMs: o["waitMs"] is { } w ? Wait(w, where) : 5000,
+            StopWaitMs: o["waitMs"] is { } w ? Wait(w, where) : o["stopControl"] is null ? BareStopWaitMs : 5000,
             Abort: o["abort"] is not { } a || a.GetValue<bool>()),
         _ => throw new ArgumentException($"{where}: stop takes null, a stop control's name, or {{\"stopControl\":..,\"waitMs\":..,\"abort\":..}}."),
     };
@@ -164,6 +169,57 @@ internal static class RunningViSteps
             return op switch { ">=" => a >= b, "<=" => a <= b, ">" => a > b, _ => a < b };
         }
         return Equal(actual, e);
+    }
+
+    /// <summary>
+    /// The field labels of an AIXML cluster type, in order: `cluster{string.Status,bool.Pilot LED}`
+    /// -> Status, Pilot LED. Null when the type is not a cluster. A field's own type may nest
+    /// braces (`array{double}.Values`); the label is what follows the type's first top-level dot.
+    /// </summary>
+    internal static List<string>? ClusterFields(string type)
+    {
+        if (!type.StartsWith("cluster{", StringComparison.Ordinal) || !type.EndsWith('}')) return null;
+        var fields = new List<string>();
+        foreach (var part in SplitTop(type["cluster{".Length..^1], '{', '}'))
+        {
+            var depth = 0;
+            var dot = -1;
+            for (var i = 0; i < part.Length && dot < 0; i++)
+            {
+                if (part[i] == '{') depth++;
+                else if (part[i] == '}') depth--;
+                else if (part[i] == '.' && depth == 0) dot = i;
+            }
+            fields.Add(dot < 0 ? "" : part[(dot + 1)..]);
+        }
+        return fields;
+    }
+
+    /// <summary>
+    /// One element of a cluster value as the read answers it, `[Lockout,false,0]`: split at the
+    /// top-level commas, and an element's escaped comma `\2C` and backslash `\5C` restored.
+    /// </summary>
+    internal static string? ClusterElement(string value, int index)
+    {
+        var v = value.Trim();
+        if (!v.StartsWith('[') || !v.EndsWith(']')) return null;
+        var items = SplitTop(v[1..^1], '[', ']');
+        return index < items.Count ? items[index].Replace("\\2C", ",").Replace("\\5C", "\\") : null;
+    }
+
+    private static List<string> SplitTop(string text, char open, char close)
+    {
+        var items = new List<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == open) depth++;
+            else if (text[i] == close) depth--;
+            else if (text[i] == ',' && depth == 0) { items.Add(text[start..i]); start = i + 1; }
+        }
+        items.Add(text[start..]);
+        return items;
     }
 
     private static bool Equal(string actual, string expected) =>

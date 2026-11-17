@@ -89,4 +89,29 @@ public sealed class RunningViStepsTests
         }
         finally { File.Delete(path); }
     }
+
+    /// <summary>The CLD Boiler's status cluster, as the panel reader types it and the read answers it.</summary>
+    [Fact]
+    public void A_cluster_element_is_found_by_its_field_label()
+    {
+        var fields = RunningViSteps.ClusterFields(
+            "cluster{string.Status,bool.Primary Fan,array{double}.Trend,cluster{bool.a,int32.b}.Inner,int32.Time Count}");
+        Assert.Equal(["Status", "Primary Fan", "Trend", "Inner", "Time Count"], fields);
+        Assert.Null(RunningViSteps.ClusterFields("string"));
+
+        const string value = "[Pre-Purge,true,[1,2],[false,3],7]";
+        Assert.Equal("Pre-Purge", RunningViSteps.ClusterElement(value, 0));
+        Assert.Equal("[1,2]", RunningViSteps.ClusterElement(value, 2));
+        Assert.Equal("7", RunningViSteps.ClusterElement(value, 4));
+        Assert.Equal("a,b", RunningViSteps.ClusterElement(@"[a\2Cb,x]", 0));   // an escaped comma
+        Assert.Null(RunningViSteps.ClusterElement(value, 9));
+    }
+
+    [Fact]
+    public void A_bare_stop_waits_briefly_and_a_stop_with_a_control_waits_for_it()
+    {
+        var steps = RunningViSteps.Parse("""[{"stop":null},{"stop":{}},{"stop":"stop"},{"stop":{"stopControl":"stop"}}]""");
+        Assert.Equal([RunningViSteps.BareStopWaitMs, RunningViSteps.BareStopWaitMs, 5000, 5000],
+                     steps.Select(s => s.StopWaitMs));
+    }
 }
