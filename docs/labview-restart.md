@@ -42,7 +42,7 @@ asking. A restart does not change ownership: the user's LabVIEW, restarted, is s
 |---|---|---|---|
 | 1 | `processes`: none, or more than one LabVIEW | process list | **no**: which one is meant is the user's call |
 | 2 | `dialog`: a VISIBLE possible dialog (section 4) | window list, before and after the CPU samples, and again right before the close | **no**: the user answers it |
-| 3 | `busy`: a 15 s CPU sample is busy (with `waitForIdleSeconds`: still busy when that wait is up), or the clock cannot be read | `TotalProcessorTime` | **no**: a busy LabVIEW does not take the close message |
+| 3 | `busy`: a 5 s CPU sample is busy (with `waitForIdleSeconds`: still busy when that wait is up), or the clock cannot be read | `TotalProcessorTime` | **no**: a busy LabVIEW does not take the close message |
 | 4 | `unsaved`: a `*` title, including labview-mcp's own scratch VIs (section 4) | window list | yes |
 | 4a | `hiddenWindows`: a HIDDEN titled window no measurement explains (section 4) | window list, also right before the close | yes. The answer names each window it opened (`overriddenHiddenWindows`) |
 | 5 | `autoSave`: files in `LVAutoSave`, except LabVIEW's recovery copies of this session's ACTIVE project (`guards.ownProjectAutoSave`; the close saves it; the user's decision of 2026-10-10, naming from one sample) | the Documents known folder, which may be redirected | yes |
@@ -172,9 +172,12 @@ user's go-ahead the close raises the prompt, and "Don't Save - All" is safe for 
 ## 5. CPU
 
 The skill's threshold, kept: a sample is quiet below 1 CPU second per 30 s of wall clock, scaled to
-the window. The restart needs two quiet 15 s samples in a row. The skill's rule is two samples at
-least 15 s apart, because one idle sample can be stale within minutes (measured: 0 s over 20 s, then
-11.3 s over 15 s a minute later). Idle is not safe: a modal dialog leaves LabVIEW idle. So the
+the window. The restart needs two quiet 5 s samples in a row (15 s until 2026-11-17: two of those
+made every close cost at least 30 s - 38-39 s per close in each CLD benchmark run - and a
+`waitForIdleSeconds` wait outlived the 40 s answer window into repeated `stillRunning` calls).
+The skill's rule is two samples at least 15 s apart, because one idle sample can be stale within
+minutes (measured: 0 s over 20 s, then 11.3 s over 15 s a minute later); two in a row still cover
+10 s, and a close LabVIEW does not take is reported as before. Idle is not safe: a modal dialog leaves LabVIEW idle. So the
 window list is read again after the samples.
 
 By default the first BUSY sample refuses. `waitForIdleSeconds` (up to 300) keeps sampling instead,
@@ -262,7 +265,7 @@ by the skill). A message box after the start is reported with its text and never
 
 ## 9. Resumable, and never twice
 
-The route takes longer than the client's 60 s request ceiling: about 30 s of CPU samples, the
+The route takes longer than the client's 60 s request ceiling: about 10 s of CPU samples (30 s before 2026-11-17), the
 close, then a 32–40 s start. So it runs as a `ResumableCall` job. Each call answers within about
 40 s, and `stillRunning` means: call again with the SAME arguments. The later call attaches to the
 same job. The client should make no other LabVIEW call meanwhile. A collected answer is kept for

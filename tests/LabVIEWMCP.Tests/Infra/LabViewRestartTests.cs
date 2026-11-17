@@ -175,7 +175,7 @@ public class LabViewRestartTests
         Assert.Equal("busy", Str(a, "stoppedBy"));
         var sample = a["guards"]!["cpu"]![0]!;
         Assert.Equal("busy", sample["verdict"]!.GetValue<string>());
-        Assert.Equal(11.25, sample["cpuSeconds"]!.GetValue<double>());
+        Assert.Equal(3.75, sample["cpuSeconds"]!.GetValue<double>());   // 0.75 CPU s/s over the 5 s window
         Assert.Empty(w.M.ClosesSent);
     }
 
@@ -211,7 +211,7 @@ public class LabViewRestartTests
         Assert.Equal("busy", Str(a, "stoppedBy"));
         Assert.Contains("whole 60 s waited", Str(a, "error"));
         Assert.Contains("started 121 min ago", Str(a, "error"));
-        Assert.Equal(4, a["guards"]!["cpu"]!.AsArray().Count);   // samples ending at 15, 30, 45, 60 s - then the wait is up
+        Assert.Equal(12, a["guards"]!["cpu"]!.AsArray().Count);   // 5 s samples ending at 5, 10, ... 60 s - then the wait is up
         Assert.Empty(w.M.ClosesSent);
     }
 

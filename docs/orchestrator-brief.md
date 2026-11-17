@@ -100,6 +100,14 @@ Build by dependency: leaf VIs in parallel with no project open, then one agent f
 Restart LabVIEW between two builds of the same application: a same-named VI of the earlier build,
 still in memory, silently captures a bare-name call.
 
+## Drive a finished application as scenarios, one call each
+
+To check an application against its spec, write each scenario as ONE `lvai_running_vi`
+`action: steps` call: `start`, `set`/`press`/`signal`, `wait`, `read` with `expect`, `stop`. The
+tool compares the values and answers `expectations` and `firstFailure`. One action per call was
+the largest repeated cost in the first CLD benchmark round (2026-11-17): 20-49 drive calls per
+build, each a model turn of about five seconds.
+
 ## Do not add work nobody asked for
 
 No negative-control test run unless the user asked for one. Batch lookups: one tool call with a

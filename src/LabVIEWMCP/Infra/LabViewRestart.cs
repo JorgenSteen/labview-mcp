@@ -47,7 +47,13 @@ internal sealed class RestartDependencies
     public bool ReadsOverActiveX { get; init; }
 
     public string? AutoSaveDirectory { get; init; }
-    public TimeSpan CpuWindow { get; init; } = TimeSpan.FromSeconds(15);
+    /// <summary>
+    /// One CPU sample. 5 s since 2026-11-17: at 15 s, two quiet samples in a row cost every close
+    /// at least 30 s, which was most of the 38-39 s each close took in the CLD benchmark runs, and
+    /// a `waitForIdleSeconds` wait outlived the 40 s answer window into stillRunning polls. Two
+    /// quiet samples in a row still cover 10 s, and the threshold scales with the window.
+    /// </summary>
+    public TimeSpan CpuWindow { get; init; } = TimeSpan.FromSeconds(5);
     public TimeSpan CloseWait { get; init; } = TimeSpan.FromSeconds(20);
     public Func<MachineProcess, bool> IsServerStarted { get; init; } = LabViewOwnership.IsServerStarted;
     public Action<int, DateTime?> RecordOwnership { get; init; } = LabViewOwnership.Record;

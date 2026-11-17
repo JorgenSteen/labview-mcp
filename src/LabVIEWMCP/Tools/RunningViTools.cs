@@ -24,13 +24,14 @@ internal sealed class RunningViTools
 {
     internal const string SignalHelperFileName = "lvai_signal_running.xml";
 
-    internal static readonly string[] Actions = ["start", "read", "set", "press", "signal", "stop"];
+    internal static readonly string[] Actions = ["start", "read", "set", "press", "signal", "stop", "steps"];
 
     [McpServerTool(Name = "lvai_running_vi", Destructive = true, OpenWorld = true,
                    Title = "Start a VI, drive it while it runs, stop it")]
     [Description("""
         Run: a VI that KEEPS RUNNING between calls, in LabVIEW's main instance over ActiveX (no NI
-        service). MUTATING: the VI's side effects happen. One action per call:
+        service). MUTATING: the VI's side effects happen. One action per call - or a whole
+        scenario with `steps` (prefer it: each call is a model turn):
         start - set valuesJson's controls, open the front panel (it keeps the VI in memory), run
         WITHOUT waiting, return. A broken VI is not run; one already running is left as it is.
         read - the execution state and values; `controls` names them, one per line, else every
@@ -43,11 +44,19 @@ internal sealed class RunningViTools
         XML), signalGapMs between.
         stop - press `stopControl` if given, wait up to waitMs for the VI to end, then ABORT it if
         it still runs (abort: false to leave it) - Abort runs no cleanup - and close its panel.
+        steps - stepsJson, a JSON array run in order in ONE call, each step one of
+        {"start":{..values..}|{}}, {"set":{"control":"value"}}, {"press":"Start"|["A","B"]},
+        {"signal":[{"control":..,"value":..}]}, {"wait":ms}, {"read":["Status"],"expect":{"Status":"Running"}}
+        (expect alone reads what it checks; a value is equality, numbers as numbers, text
+        case-insensitive, or prefixed >= <= > < != ~contains), {"stop":"stop"|{}|{"stopControl":..,"waitMs":..,"abort":..}}.
+        A failing step ends the run; a later stop step still runs when the VI is running.
+        `expectations` counts passed/failed; ok is false on any failure. A long scenario answers
+        stillRunning: call again with the SAME arguments to collect it.
         For a VI that runs to its end, use lvai_run_vi_and_read_values.
         """)]
     public static async Task<string> RunningViAsync(
         [Description("Absolute path of the VI")] string viPath,
-        [Description("start, read, set, press, signal or stop")] string action,
+        [Description("start, read, set, press, signal, stop or steps")] string action,
         [Description("start and set: {\"control\":\"value\",...}, values as text, converted to each control's type")]
         string? valuesJson = null,
         [Description("signal: a JSON array of {\"control\":..,\"value\":..}, fired in order")] string? signalsJson = null,
@@ -61,6 +70,7 @@ internal sealed class RunningViTools
         bool panel = true,
         [Description("press and signal: wait after each write, in ms (default 200)")] int signalGapMs = 200,
         [Description("Local budget in seconds")] int timeoutSeconds = 60,
+        [Description("steps: the scenario, a JSON array of steps (see the description)")] string? stepsJson = null,
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
         {
@@ -84,6 +94,8 @@ internal sealed class RunningViTools
                         .Select(c => KeyValuePair.Create(c, "TRUE"))], signalGapMs, timeoutSeconds, ct),
                     "signal" => await SignalAsync(full, act, RunTools.ParseSignals(signalsJson),
                                                   signalGapMs, timeoutSeconds, ct),
+                    "steps" => await StepsAsync(full, RunningViSteps.Parse(stepsJson), stepsJson!, panel,
+                                                signalGapMs, timeoutSeconds, ct),
                     _ => await StopAsync(full, stopControl, waitMs, abort, panel, signalGapMs, timeoutSeconds, ct),
                 };
             }
@@ -256,6 +268,122 @@ internal sealed class RunningViTools
                                     "the values saved in the file, not the ones it ended with." : ""),
         });
     }
+
+    private static readonly TimeSpan StepsAnswerWithin = TimeSpan.FromSeconds(Rpc.MaxToolWaitSeconds - 5);
+
+    /// <summary>
+    /// Run a parsed scenario through the single actions' own code, as a resumable job: a scenario
+    /// with waits outlives one answer window, and the caller collects it by calling again.
+    /// </summary>
+    private static Task<string> StepsAsync(string vi, List<RunningViSteps.Step> steps, string stepsJson, bool panel,
+                                           int gapMs, int timeoutSeconds, CancellationToken ct) =>
+        ResumableCall.RunAsync("lvai_running_vi", vi + "|" + stepsJson.Trim(), StepsAnswerWithin,
+            () => RunStepsAsync(vi, steps, panel, gapMs, timeoutSeconds),
+            "Call lvai_running_vi again with the SAME arguments to collect the scenario's answer; it attaches " +
+            "to this run and never starts a second one.", ct,
+            label: $"lvai_running_vi steps on {Path.GetFileName(vi)}");
+
+    private static async Task<string> RunStepsAsync(string vi, List<RunningViSteps.Step> steps, bool panel,
+                                                    int gapMs, int timeoutSeconds)
+    {
+        var ct = CancellationToken.None;   // the job outlives the call that started it
+        var results = new JsonArray();
+        int passed = 0, failed = 0, state = -1;
+        string? firstFailure = null;
+        for (var i = 0; i < steps.Count; i++)
+        {
+            var step = steps[i];
+            var result = await RunStepAsync(vi, step, panel, gapMs, timeoutSeconds, ct);
+            state = result["execState"]?.GetValue<int>() ?? state;
+            var ok = result["ok"]?.GetValue<bool>() ?? false;
+            if (step.Kind == "read" && step.Expect is { Count: > 0 } expect)
+            {
+                var values = result["values"] as JsonObject;
+                var checks = new JsonObject();
+                foreach (var (name, wanted) in expect)
+                {
+                    var actual = values?[name]?.GetValue<string>();
+                    var meets = actual is not null && RunningViSteps.Meets(actual, wanted);
+                    if (meets) passed++; else failed++;
+                    checks[name] = meets ? "pass" : $"FAIL: expected {wanted}, read {actual ?? "(no value)"}";
+                    if (!meets) firstFailure ??= $"step {step.Index}: {name} expected {wanted}, read {actual ?? "(no value)"}";
+                }
+                result["expect"] = checks;
+            }
+            results.Add(result);
+            if (ok) continue;
+
+            firstFailure ??= $"step {step.Index} ({step.Kind}): " + (result["error"] ?? result["note"])?.ToString();
+            // a failed action ends the scenario; the last stop step still runs, so a VI is not left running
+            var cleanup = steps.Skip(i + 1).LastOrDefault(s => s.Kind == "stop");
+            for (var j = i + 1; j < steps.Count; j++)
+                if (steps[j] != cleanup || state is not (2 or 3))
+                    results.Add(new JsonObject { ["step"] = steps[j].Index, ["action"] = steps[j].Kind, ["skipped"] = true });
+            if (cleanup is not null && state is 2 or 3)
+            {
+                var stop = await RunStepAsync(vi, cleanup, panel, gapMs, timeoutSeconds, ct);
+                stop["cleanup"] = true;
+                results.Add(stop);
+                state = stop["execState"]?.GetValue<int>() ?? state;
+            }
+            break;
+        }
+        var allOk = firstFailure is null;
+        return Answer(vi, "steps", state, allOk, new JsonObject
+        {
+            ["expectations"] = new JsonObject { ["passed"] = passed, ["failed"] = failed },
+            ["firstFailure"] = firstFailure,
+            ["steps"] = results,
+            ["note"] = allOk ? "Every step ran and every expectation held."
+                : "See firstFailure. A failed action ends the scenario (a later stop step still runs); a failed " +
+                  "expectation is recorded and the scenario goes on.",
+        });
+    }
+
+    /// <summary>One step, through the single action's code; the answer cut down to what a scenario needs.</summary>
+    private static async Task<JsonObject> RunStepAsync(string vi, RunningViSteps.Step step, bool panel,
+                                                       int gapMs, int timeoutSeconds, CancellationToken ct)
+    {
+        string answer;
+        try
+        {
+            switch (step.Kind)
+            {
+                case "wait":
+                    await Task.Delay(step.WaitMs, ct);
+                    return new JsonObject { ["step"] = step.Index, ["action"] = "wait", ["ok"] = true, ["waitedMs"] = step.WaitMs };
+                case "start":
+                    answer = await StartAsync(vi, ValuesJson(step.Values), panel, timeoutSeconds, ct); break;
+                case "set":
+                    answer = await SetAsync(vi, ValuesJson(step.Values), timeoutSeconds, ct); break;
+                case "press":
+                    answer = await SignalAsync(vi, "press", [.. step.Controls!.Select(c => KeyValuePair.Create(c, "TRUE"))],
+                                               gapMs, timeoutSeconds, ct); break;
+                case "signal":
+                    answer = await SignalAsync(vi, "signal", RunTools.ParseSignals(step.SignalsJson), gapMs, timeoutSeconds, ct); break;
+                case "read":
+                    answer = await ReadAsync(vi, string.Join("\n", step.Controls!), timeoutSeconds, ct); break;
+                default:
+                    answer = await StopAsync(vi, step.StopControl, step.StopWaitMs, step.Abort, panel, gapMs, timeoutSeconds, ct); break;
+            }
+        }
+        catch (ArgumentException bad) { answer = Json.Error("badArguments", bad.Message); }
+        catch (LabViewCom.ComException e) { answer = Json.Error(e.Kind, e.Message); }
+
+        var full = JsonNode.Parse(answer) as JsonObject ?? new JsonObject { ["ok"] = false, ["error"] = answer };
+        var ok = full["ok"]?.GetValue<bool>() ?? false;
+        var slim = new JsonObject { ["step"] = step.Index, ["action"] = step.Kind, ["ok"] = ok };
+        // what a scenario reads back; the per-action note only when the step failed
+        foreach (var key in new[] { "execState", "values", "problems", "setProblems", "signalled", "failed",
+                                    "errorCode", "aborted", "pressedStop", "errorKind", "error" })
+            if (full[key] is { } v) slim[key] = v.DeepClone();
+        if (!ok && full["note"] is { } note) slim["note"] = note.DeepClone();
+        return slim;
+    }
+
+    private static string? ValuesJson(IReadOnlyDictionary<string, string>? values) =>
+        values is null || values.Count == 0 ? null
+            : new JsonObject(values.Select(kv => KeyValuePair.Create(kv.Key, (JsonNode?)JsonValue.Create(kv.Value)))).ToJsonString();
 
     // ------------------------------------------------------------------ helpers
 
