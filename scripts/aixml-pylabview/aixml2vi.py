@@ -190,6 +190,20 @@ def _extract_callee(path):
     return got
 
 
+def normalise_property_access(vi):
+    """A Property Node field with no `read+`/`write+` prefix READS, as the AIXML reference says
+    (and NI's converter takes it). Every site here partitions on "+", so a bare `Disabled` became
+    the property '' - "LV.Boolean declares no property ''" in a CLD benchmark build, 2026-11-17.
+    Rewritten once, at load, to the explicit `read+` form."""
+    for el in vi.iter("Node"):
+        if el.get("_name") != "Property Node" or not el.get("fields"):
+            continue
+        parts = split_top(el.get("fields"))
+        fixed = [p if (not p or "+" in p) else "read+" + p for p in parts]
+        if fixed != parts:
+            el.set("fields", ",".join(fixed))
+
+
 def split_top(s, sep=","):
     """Split at `sep` outside braces and brackets."""
     out, depth, cur = [], 0, []
@@ -11104,6 +11118,7 @@ class Composer:
     def compose(self, aixml_path):
         vi = ET.parse(aixml_path).getroot()
         self.doc = vi
+        normalise_property_access(vi)
         self.vi_name = unescape(vi.get("_name") or "Composed.vi")
         # the reader's connector pane PATTERN, after </VI> where NI's service ignores it: a
         # recomposed subVI keeps the pattern its callers were linked against (vi2aixml.py)
