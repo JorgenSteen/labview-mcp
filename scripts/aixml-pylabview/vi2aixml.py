@@ -3774,11 +3774,30 @@ class Reader:
             self.term_owner[t.get("uid")] = (el, "value", False)
         return el
 
+    def typedef_inner_owners(self):
+        """uid of an object INSIDE a typedef'd control's `typeDef` ddo -> that control. A control
+        bound to a typedef is keyed by its wrapper (`typeDef` ddo), but a reference to it names the
+        wrapped object inside (measured 2026-11-17 on a CLD Car Wash: the Wash Options reference's
+        ddo was the stdClust 214 inside typeDef 208). Exported as element="?" until then, which made
+        lvai_bind_control_references answer ok:false for bindings that had worked."""
+        if getattr(self, "_td_owners", None) is None:
+            self._td_owners = {}
+            for d in self.b.fp.iter("ddo"):
+                owner = self.ctl_by_ddo.get(d.get("uid")) if d.get("class") == "typeDef" else None
+                if owner is None:
+                    continue
+                for inner in d.iter():
+                    if inner is not d and inner.get("uid"):
+                        self._td_owners.setdefault(inner.get("uid"), owner)
+        return self._td_owners
+
     def ctlref(self, node, parent_uid):
         el = self._node_el(node, parent_uid, "VI Server Reference")
         ddo = node.find("ddo")
         if ddo is not None:
             ctl = self.ctl_by_ddo.get(ddo.get("uid"))
+            if ctl is None:    # never `or`: an Element with no children is falsy
+                ctl = self.typedef_inner_owners().get(ddo.get("uid"))
             pane = self.panes_by_ddo().get(ddo.get("uid")) if ctl is None else None
             sub = None
             if ctl is None and pane is None:
