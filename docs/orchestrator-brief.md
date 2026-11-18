@@ -103,4 +103,4 @@ still in memory, silently captures a bare-name call.
 
 No negative-control test run unless the user asked for one. Each round trip is a model turn:
 batch lookups in one call; drive an app one scenario per `lvai_running_vi` `steps` call
-(`latchedAsSwitch` for latched buttons).
+(`latchedAsSwitch` for latched buttons; `Name@Disabled` / `@Blinking` reads a control's state).

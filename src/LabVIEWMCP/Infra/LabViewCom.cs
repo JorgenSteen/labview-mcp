@@ -554,6 +554,49 @@ internal static class LabViewCom
             timeoutSeconds, ct);
 
     /// <summary>
+    /// Every top-level control's Disabled, Blinking, Visible and Key Focus, by label, read by the
+    /// composed `lvai_control_props` helper while the target is HELD (its Open VI Reference then
+    /// reaches the running VI in memory). ActiveX reads a control's VALUE only; CLD benchmark builds
+    /// could not verify enabled/disabled buttons or a blinking LED without this (2026-11-17).
+    /// </summary>
+    public static Task<(Dictionary<string, Dictionary<string, string>> Properties, string? ErrorXml)> ReadPropertiesAsync(
+        string viPath, string propsHelper, int timeoutSeconds, CancellationToken ct) =>
+        WithLabViewAsync(app => WithVi(app, viPath, _ => WithVi(app, propsHelper, helper =>
+        {
+            Call(helper, "SetControlValue", "VI Path", Path.GetFullPath(viPath));
+            Call(helper, "Run", false);
+            var text = Call(helper, "GetControlValue", "Properties") as string ?? "";
+            return (ParseProperties(text), Call(helper, "GetControlValue", "error xml") as string);
+        })), timeoutSeconds, ct);
+
+    /// <summary>The names <see cref="ParseProperties"/> gives each column, in the helper's order.</summary>
+    internal static readonly string[] PropertyColumns = ["Disabled", "Blinking", "Visible", "Key Focus"];
+
+    /// <summary>
+    /// The helper's lines, `Label TAB Disabled TAB Blinking TAB Visible TAB Key Focus`, as
+    /// label -> property -> text: Disabled as LabVIEW names its values (Enabled, Disabled,
+    /// Disabled and Grayed Out), the booleans TRUE/FALSE as a read of a boolean answers. The first
+    /// control of a label wins when two share one.
+    /// </summary>
+    internal static Dictionary<string, Dictionary<string, string>> ParseProperties(string text)
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        foreach (var line in text.Replace("\r", "", StringComparison.Ordinal).Split('\n'))
+        {
+            var cells = line.Split('\t');
+            if (cells.Length != PropertyColumns.Length + 1 || cells[0].Length == 0 || result.ContainsKey(cells[0])) continue;
+            var row = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Disabled"] = cells[1] switch { "0" => "Enabled", "1" => "Disabled", "2" => "Disabled and Grayed Out", var n => n },
+            };
+            for (var i = 1; i < PropertyColumns.Length; i++)
+                row[PropertyColumns[i]] = cells[i + 1] == "1" ? "TRUE" : "FALSE";
+            result[cells[0]] = row;
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Set control values of a VI as it runs - SetControlValue, which fires NO Value Change event
     /// (an event-driven VI is driven with Value (Signaling), the press/signal route). The problems,
     /// empty when all took.

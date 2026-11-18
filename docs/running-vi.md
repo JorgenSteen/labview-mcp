@@ -48,6 +48,13 @@ per call:
   in the panel's type and picked out of the cluster's value. ActiveX reads top-level controls only;
   LabVIEW's answer for any other name is "parameter %p not found in the VI's connector pane" with
   `%p` unfilled, which the tool translates.
+- A name may be `Control@Property` (2026-11-18): `@Disabled` reads `Enabled`, `Disabled` or
+  `Disabled and Grayed Out`; `@Blinking`, `@Visible` and `@Key Focus` read `TRUE`/`FALSE`. The
+  control is a top-level one or a `Cluster.Element` one level down (`Boiler Controls.Pilot@Blinking`).
+  ActiveX reads a VALUE only, so these come from the composed helper `scripts/lvai_control_props.xml`,
+  run while the VI is held: one run lists every control's four properties, whatever the step asks.
+  An unknown property or a label it did not list is a named `problem`. Why: the second CLD round
+  left an ATM's enabled/disabled buttons and a Boiler's blinking Pilot "not verifiable".
 - Every step answers its own `ms`, so a lagging application is told apart from a slow step.
 - Each step runs through the same code as the single action and answers a cut-down result. A
   failed EXPECTATION is recorded and the scenario goes on; a failed ACTION ends it, the remaining

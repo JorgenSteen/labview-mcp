@@ -599,7 +599,8 @@ impossible.
    report says that this one step was not driven.
    **A SCENARIO IS ONE CALL: `lvai_running_vi` `action: steps`.** For an application with several
    scenarios, write each as a step list - `start`, `set`/`press`/`signal`, `wait`, `read` with
-   `expect` (a cluster field is `Cluster.Element`), `stop` - with `latchedAsSwitch: true` when a
+   `expect` (a cluster field is `Cluster.Element`; a control's state `Name@Disabled`,
+   `@Blinking`, `@Visible`, `@Key Focus`), `stop` - with `latchedAsSwitch: true` when a
    button is latched - and send it in ONE call; the tool checks the expectations and answers
    `expectations` passed/failed and `firstFailure`. Measured in the first CLD benchmark round
    (2026-11-17): drives sent one action per call were 20-49 calls per build, about five seconds of
