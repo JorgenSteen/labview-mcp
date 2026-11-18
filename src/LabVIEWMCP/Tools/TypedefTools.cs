@@ -918,6 +918,13 @@ internal sealed class TypedefTools(LvaiConnection connection)
     /// <summary>Name of the pane-binding helper's AIXML source inside the scripts folder.</summary>
     internal const string PaneBindHelperAixmlFileName = "lvai_bind_pane_typedef.xml";
 
+    /// <summary>
+    /// The pane-binding helper for a VI that is NOT a class member: no class open or save, the VI
+    /// saved right after the Replace loop. Measured 2026-11-18 on a CLD Boiler's library-member
+    /// subVI, project active: both pane terminals bound in the SAVED file, the caller's dots gone.
+    /// </summary>
+    internal const string PaneBindPlainHelperAixmlFileName = "lvai_bind_pane_typedef_plain.xml";
+
     /// <summary>Name of the .ctl resave helper's AIXML source inside the scripts folder.</summary>
     internal const string ResaveCtlHelperAixmlFileName = "lvai_resave_ctl.xml";
 
@@ -1055,13 +1062,14 @@ internal sealed class TypedefTools(LvaiConnection connection)
     }
 
     [McpServerTool(Name = "lvai_bind_pane_typedef", Destructive = true, OpenWorld = true,
-                   Title = "Bind a .ctl typedef onto a class member's own pane controls")]
+                   Title = "Bind a .ctl typedef onto a VI's own pane controls")]
     [Description("""
-        Typedef: install a .ctl typedef onto named FRONT PANEL controls of an existing CLASS MEMBER
-        ({LV.Control} Replace), saving the VI and its owning class in one run. Use it for a coercion
-        dot whose source is the method's own pane CONTROL - lvai_bind_typedef_constants reaches only
-        constants. A VI that is NOT a class member is not supported: Save.Instrument alone does not
-        commit the binding.
+        Typedef: install a .ctl typedef onto named FRONT PANEL controls of an existing VI
+        ({LV.Control} Replace) and save it - a class member with its owning class (lvclassPath) in
+        one run, any other VI (a library member, a loose subVI) on its own, right after the Replace.
+        Use it for a coercion dot whose source is the VI's own pane CONTROL (AIXML has no typedef, so
+        a generated subVI's pane is the bare type) - lvai_bind_typedef_constants reaches only
+        constants.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath) - Replace is a SILENT no-op
         outside the IDE's instance. On the pylabview default it runs through NI's service when that
         answers (`routeNote`): over ActiveX this Replace binds nothing (measured).
@@ -1074,17 +1082,18 @@ internal sealed class TypedefTools(LvaiConnection connection)
         tool retries once and says so in `retriedAfterEmptyNames`.
         """)]
     public async Task<string> BindPaneTypedefAsync(
-        [Description(@"Absolute path to the class member .vi whose pane controls should be bound")]
+        [Description(@"Absolute path to the .vi whose pane controls should be bound")]
         string viPath,
-        [Description("""
-            Absolute path to the .lvclass owning the VI; its Save is what commits the binding.
-            """)]
-        string lvclassPath,
         [Description("""
             JSON array, e.g. [{"terminal":"Profil","ctlPath":"C:\\p\\Ofenprofil.ctl"}]; `terminal`
             is the label as lvai_vi_terminals prints it. Unknown keys are refused.
             """)]
         string bindingsJson,
+        [Description("""
+            A CLASS MEMBER: absolute path to the .lvclass owning the VI - its Save commits the
+            binding. Omit for any other VI; projectPath is then required.
+            """)]
+        string? lvclassPath = null,
         [Description("The .lvproj to open first; omit only if you opened one yourself")]
         string? projectPath = null,
         [Description("Where to keep the generated helper VI")] string? helperViPath = null,
@@ -1130,12 +1139,20 @@ internal sealed class TypedefTools(LvaiConnection connection)
     }
 
     private async Task<string> BindPaneCoreAsync(
-        string viPath, string lvclassPath, string bindingsJson, string? projectPath, string? helperViPath,
+        string viPath, string? lvclassPath, string bindingsJson, string? projectPath, string? helperViPath,
         string? helperAixmlPath, bool regenerateHelper, int timeoutSeconds, CancellationToken ct)
     {
         if (!File.Exists(viPath)) return Json.Error("badArguments", $"No .vi at '{viPath}'.");
-        if (!File.Exists(lvclassPath))
+        var plain = string.IsNullOrWhiteSpace(lvclassPath);
+        if (!plain && !File.Exists(lvclassPath))
             return Json.Error("badArguments", $"No .lvclass at '{lvclassPath}'.");
+        // THE PROJECT IS THE PRECONDITION A PLAIN VI CANNOT DO WITHOUT: the 2026-09-18 refusal was
+        // measured on a VI in no project (Replace a silent no-op), and the 2026-11-18 bind that
+        // worked had the project open and active.
+        if (plain && string.IsNullOrWhiteSpace(projectPath))
+            return Json.Error("badArguments",
+                "A VI that is not a class member needs projectPath - the project that lists it, opened " +
+                "and made active here: Replace is a silent no-op outside the IDE's instance.");
         if (projectPath is { Length: > 0 } && !File.Exists(projectPath))
             return Json.Error("badArguments", $"No .lvproj at projectPath '{projectPath}'.");
 
@@ -1148,16 +1165,17 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 return Json.Error("badArguments",
                     $"No .ctl at '{binding.CtlPath}' for terminal '{binding.Terminal}'.");
 
-        var aixml = helperAixmlPath ?? ScriptPath(PaneBindHelperAixmlFileName)
+        var helperName = plain ? PaneBindPlainHelperAixmlFileName : PaneBindHelperAixmlFileName;
+        var aixml = helperAixmlPath ?? ScriptPath(helperName)
             ?? throw new FileNotFoundException(
                 "The helper's AIXML source could not be located; pass helperAixmlPath " +
-                $"explicitly, pointing at {PaneBindHelperAixmlFileName}.");
+                $"explicitly, pointing at {helperName}.");
         if (!File.Exists(aixml))
             throw new FileNotFoundException($"No helper AIXML at '{aixml}'.", aixml);
 
         var helperVi = Path.GetFullPath(helperViPath ??
             Path.Combine(AixmlBackend.HelperFolder(),
-                         "lvai_bind_pane_typedef.vi"));
+                         Path.ChangeExtension(helperName, ".vi")));
         if (Path.GetDirectoryName(helperVi) is { Length: > 0 } directory)
             Directory.CreateDirectory(directory);
 
@@ -1189,14 +1207,15 @@ internal sealed class TypedefTools(LvaiConnection connection)
                     new JsonObject { ["steps"] = steps });
         }
 
-        var inputs = new JsonObject
+        var inputValues = new JsonObject
         {
             ["vi path"] = Path.GetFullPath(viPath),
-            ["class path"] = Path.GetFullPath(lvclassPath),
             ["terminal names"] = string.Join("|", bindings.Select(b => b.Terminal)),
             ["ctl paths"] =
                 string.Join("|", bindings.Select(b => Path.GetFullPath(b.CtlPath))),
-        }.ToJsonString();
+        };
+        if (!plain) inputValues["class path"] = Path.GetFullPath(lvclassPath!);
+        var inputs = inputValues.ToJsonString();
 
         var runner = new RunTools(connection);
         var answer = await runner.RunViAndReadValuesAsync(
@@ -1227,7 +1246,7 @@ internal sealed class TypedefTools(LvaiConnection connection)
     /// unit-testable with no LabVIEW and no pylabview.
     /// </summary>
     internal static string DescribePaneBind(
-        string runnerAnswer, IReadOnlyList<PaneBinding> bindings, string viPath, string lvclassPath,
+        string runnerAnswer, IReadOnlyList<PaneBinding> bindings, string viPath, string? lvclassPath,
         string helperVi, string aixml, bool helperGenerated, bool retried, JsonArray steps,
         SavedTypedefs? onDisk)
     {
@@ -1279,6 +1298,9 @@ internal sealed class TypedefTools(LvaiConnection connection)
         // answers null rather than true.
         var allOnPanel = notOnPanel.Count == 0;
         var boundAsManyAsAsked = bound >= bindings.Count;
+        static bool ReplaceRefusedBrokenSource(JsonObject? values) =>
+            values?["replace errors"]?["xml"]?.GetValue<string>() is { } xml &&
+            xml.Contains("<Val>1154</Val>", StringComparison.Ordinal);
         var verified = onDisk?.Pane is null
             ? (bool?)null
             : notOnPane.Count == 0 && allOnPanel && boundAsManyAsAsked;
@@ -1288,7 +1310,7 @@ internal sealed class TypedefTools(LvaiConnection connection)
             ["ok"] = verified is true,
             ["verified"] = verified,
             ["viPath"] = Path.GetFullPath(viPath),
-            ["lvclassPath"] = Path.GetFullPath(lvclassPath),
+            ["lvclassPath"] = string.IsNullOrWhiteSpace(lvclassPath) ? null : Path.GetFullPath(lvclassPath),
             ["terminalsAsked"] = bindings.Count,
             ["terminalsBound"] = bound,
             ["retriedAfterEmptyNames"] = retried,
@@ -1310,6 +1332,14 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 true => "Every requested terminal's type on the connector pane of the SAVED VI is " +
                         "its typedef - read from the file with pylabview, not from the session. " +
                         "Check the caller with lvai_coercion_dots, which is what the repair is for.",
+                // 1154 FROM Replace IS THE .ctl, NOT THE PROJECT: measured 2026-11-18, a typedef that
+                // names a class as its owner, used outside it, loads broken and Replace answered
+                // 1154 on every stage - while this note said "check that a project is active".
+                false when ReplaceRefusedBrokenSource(values) =>
+                    "Replace answered Error 1154: LabVIEW refused the .ctl itself. It is most often a " +
+                    "typedef that is BROKEN where it is used - one that names a class or library as its " +
+                    "owner, used outside it, or one with a missing dependency. Check it with " +
+                    "lvai_exec_state (state 0 is broken) and bind a .ctl that loads clean.",
                 false when notOnPanel.Count > 0 =>
                     "A requested terminal is NOT on this VI's panel - read terminalsNotOnPanel " +
                     "against terminalNamesSeen, which is what the panel really has, including any " +

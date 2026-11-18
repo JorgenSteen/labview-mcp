@@ -851,6 +851,26 @@ def check_case_tunnels(elements: list[_El]) -> list[Finding]:
     return findings
 
 
+TUNNEL_ID_RE = re.compile(r"(In|Out|Local)[1-9][0-9]*")
+
+
+def check_tunnel_ids(elements: list[_El]) -> list[Finding]:
+    """A Tunnel's `_id` IS its direction: NI's schema allows only `(In|Out)[1-9][0-9]*`
+    (stacked-sequence locals add `LocalN`), and the composer reads an `In` prefix as input and
+    anything else as output. A CLD benchmark build (2026-11-18) wrote `_id="iFD"`; the composer
+    failed a regeneration later with "case tunnel iFD: no typed wire reaches it". The C# check
+    (`tunnelIdNotDirection`) and aixml2vi.py's `refuse_bad_tunnel_ids` say the same."""
+    findings: list[Finding] = []
+    for e in elements:
+        if e.tag != "Tunnel" or TUNNEL_ID_RE.fullmatch(e.el.get("_id") or ""):
+            continue
+        findings.append(Finding(
+            "error", "tunnel-id", e.uid, e.label(), e.path,
+            f"_id={e.el.get('_id')!r}: a tunnel's _id must be In<n> (input) or Out<n> (output), "
+            f"n from 1 - the prefix IS the direction (NI's schema: (In|Out)[1-9][0-9]*)."))
+    return findings
+
+
 def _load_catalogue() -> tuple[set[tuple[str, str]], set[str]]:
     """The VI Server property catalogue, for the ONE lookup that is safe against its gaps.
 
@@ -2001,6 +2021,7 @@ def lint_file(path: str, new_vi: bool = False) -> list[Finding]:
     findings += check_stop_module_not_last(elements)
     findings += check_value_escapes(elements)
     findings += check_case_tunnels(elements)
+    findings += check_tunnel_ids(elements)
     findings += check_raw_colons(elements)
     findings += check_type_grammar(elements)
     findings += check_property_nodes(elements)

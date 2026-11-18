@@ -154,11 +154,14 @@ internal static class AixmlComposer
     /// <summary>
     /// AIXML -> VI. The VI is written source-only; the bundle is a temporary folder. A Call target
     /// is resolved in the VI's own folder first, then in <paramref name="searchFolders"/>.
+    /// <paramref name="sourcePath"/> is the AUTHOR's file when <paramref name="aixmlPath"/> is a
+    /// rewritten copy in TEMP (<see cref="SymbolicUids.Prepare"/>): the projects that own its calls
+    /// are found from where the author wrote it, not from TEMP.
     /// </summary>
     public static async Task<Result> ComposeAsync(Setup setup, string aixmlPath, string viPath,
                                                   IReadOnlyList<string> searchFolders,
                                                   int timeoutSeconds, CancellationToken ct,
-                                                  bool validate = false)
+                                                  bool validate = false, string? sourcePath = null)
     {
         // the LabVIEW this VI is FOR: the one whose installation and add-ons resolve its calls, and
         // the release it is stamped as - the running one, by its -pref INI (issue #99)
@@ -172,7 +175,7 @@ internal static class AixmlComposer
         try
         {
             var result = await ComposeCoreAsync(setup, member.AixmlPath, viPath, searchFolders, targetRelease,
-                                                context, timeoutSeconds, ct, projectsOf: aixmlPath,
+                                                context, timeoutSeconds, ct, projectsOf: sourcePath ?? aixmlPath,
                                                 validate: validate);
             return result with
             {

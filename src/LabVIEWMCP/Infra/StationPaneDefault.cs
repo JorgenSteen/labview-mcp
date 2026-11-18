@@ -113,6 +113,34 @@ internal static class StationPaneDefault
         return Read(ini).Pattern ?? FactoryDefault;
     }
 
+    /// <summary>
+    /// <see cref="ForNewVi(LabViewContext)"/> for the LabVIEW the tools work for, falling back to the
+    /// <see cref="Read"/> reading (and then <see cref="FactoryDefault"/>) when no context resolves,
+    /// with a note saying which. <c>lvai_check_build_contract</c> answered <c>patternUnknown</c> on
+    /// every VI of a CLD benchmark contract (2026-11-18) because it took <see cref="Read"/>'s null for
+    /// an INI without the key, while the generator gave the same VIs 4815; an orchestrator re-ran
+    /// the plan with panePattern to get the slots checked.
+    /// </summary>
+    public static (int Pattern, string Note) ForNewViHere()
+    {
+        try
+        {
+            if (ForNewVi(LabViewContext.Resolve()) is { } pattern)
+                return (pattern, pattern == FactoryDefault
+                    ? $"LabVIEW's own default {FactoryDefault}: the INI of the LabVIEW in use carries no DefaultConPane"
+                    : $"DefaultConPane={pattern} in the INI of the LabVIEW in use");
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // fall back to the locator's reading
+        }
+
+        var reading = Read();
+        return reading.Pattern is { } read
+            ? (read, reading.Note)
+            : (FactoryDefault, $"LabVIEW's own default {FactoryDefault} - {reading.Note}");
+    }
+
     /// <summary>The INI LabVIEW reads its settings from: the -pref file, else LabVIEW.ini beside the exe.</summary>
     private static string? IniOf(LabViewContext context) =>
         context.IniFile ?? (context.Root is { } root ? Path.Combine(root, "LabVIEW.ini") : null);

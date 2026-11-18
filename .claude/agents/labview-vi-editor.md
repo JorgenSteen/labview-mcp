@@ -44,14 +44,15 @@ Phase 2 export:
 
 Measured facts that each cost minutes when found at run time. Plan around them from the start.
 
-- **AIXML has no Event Structure timeout terminal** (NI's exporter drops it too, so an existing
-  Timeout frame's value is lost in the export). An inactivity timeout is the consumer's
+- **An Event Structure's timeout is `timeoutin="<net>"` on the pylabview backend** (the
+  default); NI's AIXML (gRPC) has none, and NI's exporter drops an existing Timeout frame's
+  value. On gRPC an inactivity timeout is the consumer's
   `Dequeue Element` `timeout in ms` on a shift register; a poll is a second While Loop paced by
   `Wait on Notification`. `docs/cold-build-atm-cld.md` §4,
   `scripts/aixml-skeletons/web-browser-title-poll.xml`.
-- **A regeneration drops every typedef on the VI's own pane.** On a CLASS MEMBER re-bind it with
-  `lvai_bind_pane_typedef` (needs the `.lvclass`); on a plain VI no route is established - name
-  that loss in the Phase 2 gate. Constants: into a subVI call's typedef input
+- **A regeneration drops every typedef on the VI's own pane.** Re-bind it with
+  `lvai_bind_pane_typedef`: a CLASS MEMBER with its `.lvclass`, any other VI with only
+  `projectPath` (measured 2026-11-18). Constants: into a subVI call's typedef input
   `lvai_bind_typedef_constants`; any other (e.g. into `Bundle By Name`) `lvai_swap_subvis`
   `constantsJson` with the `.ctl` as `class`.
   `docs/typedef-disconnect.md` §13a-§13b.

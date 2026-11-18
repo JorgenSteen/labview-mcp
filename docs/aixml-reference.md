@@ -457,8 +457,11 @@ Enumerated values observed:
 - `Tunnel._id`: `In1`…`InN`, `Out1`…`OutN` — numbering is per structure and matters only
   for pairing input to output side. **The prefix IS the direction**: the pylabview composer takes
   an `_id` starting with `In` as an input tunnel and any other as an output, so an input named
-  otherwise is refused as "case tunnel ...: no typed wire reaches it" (a CLD benchmark build,
-  2026-11-17)
+  otherwise was refused as "case tunnel ...: no typed wire reaches it" (a CLD benchmark build,
+  2026-11-17). Since 2026-11-18 any `_id` outside `(In|Out)N` (stacked-sequence `LocalN` aside)
+  is refused BY NAME first: `lvai_check_aixml` answers `tunnelIdNotDirection`, the composer
+  "Tunnel _id 'iFD' ...: must be In<n> (input) or Out<n> (output)", gRPC's schema `Error -2628`
+  (`iFD` and `oB` cost a benchmark builder a regeneration cycle)
 - `Tunnel.mode`: `index` (auto-indexing on a loop border); absent means plain tunnel
 - `Tunnel.cond`: `true` seen on an event-structure border tunnel
 - `Control.style`: `latched` (mechanical action of a boolean)
@@ -693,6 +696,13 @@ delimiter is **silent** — the file parses into one column of zeros with no err
 
 So a library-qualified call target is written `MyLib.lvlib\3AHelper.vi`, and a nested
 property is `Front Panel Window\3ACloseable`.
+
+**A `Call` target (and `instance`) may carry a LITERAL colon instead**:
+`target="MyLib.lvlib:Helper.vi"`, the spelling `lvai_palette_index` prints. Since 2026-11-18 the
+server writes it as `\3A` before either backend sees the file (the answer says
+`callTargetsEscaped`). Use it from a generator script: a benchmark builder spent five shell calls
+getting `\3A` through Python (`"\\3A"`, `r"\3A"`, `chr(92)`). Everywhere else - property paths,
+event selectors, terminal names - `\3A` stays the spelling.
 
 ### Write AIXML with a file tool, never through a shell
 

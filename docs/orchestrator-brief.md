@@ -101,6 +101,6 @@ still in memory, silently captures a bare-name call.
 
 ## Do not add work nobody asked for
 
-No negative-control test run unless the user asked for one. Each round trip is a model turn:
-batch lookups in one call; drive an app one scenario per `lvai_running_vi` `steps` call
-(`latchedAsSwitch` for latched buttons).
+No negative-control test unless asked. Each round trip is a model turn: batch lookups;
+drive an app one scenario per `lvai_running_vi` `steps` call (`latchedAsSwitch`; a
+control's state reads as `Name@Disabled`).

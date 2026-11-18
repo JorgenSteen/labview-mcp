@@ -114,4 +114,15 @@ public sealed class RunningViStepsTests
         Assert.Equal([RunningViSteps.BareStopWaitMs, RunningViSteps.BareStopWaitMs, 5000, 5000],
                      steps.Select(s => s.StopWaitMs));
     }
+
+    [Fact]
+    public void A_cluster_element_is_replaced_in_the_literal_set_writes_whole()
+    {
+        Assert.Equal("[0,true,false]", RunningViSteps.ReplaceClusterElement("[0,false,false]", 1, "true"));
+        Assert.Equal(@"[a\2Cb,x]", RunningViSteps.ReplaceClusterElement("[y,x]", 0, "a,b"));   // a comma escaped
+        Assert.Equal("[Lockout,[3,4],0]", RunningViSteps.ReplaceClusterElement("[Lockout,[1,2],0]", 1, "[3,4]"));
+        Assert.Equal("a,b", RunningViSteps.ClusterElement(RunningViSteps.ReplaceClusterElement("[y,x]", 0, "a,b")!, 0));
+        Assert.Null(RunningViSteps.ReplaceClusterElement("[0,1]", 2, "x"));
+        Assert.Null(RunningViSteps.ReplaceClusterElement("not a cluster", 0, "x"));
+    }
 }

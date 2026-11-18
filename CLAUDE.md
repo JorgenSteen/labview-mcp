@@ -354,7 +354,8 @@ VI and nothing reports it (`pylv_route` included) - check with `pylv_extract` fi
   a bind against an ordinary control succeeds and binds nothing;
 - constants: `lvai_bind_typedef_constants` for one feeding a subVI call; any other (into
   `Bundle By Name`, a queue's element type) `lvai_swap_subvis constantsJson` with the `.ctl`;
-- a method's own pane: `lvai_bind_pane_typedef`.
+- a VI's own pane: `lvai_bind_pane_typedef` - with the `.lvclass` for a class member, with only
+  `projectPath` for any other VI (measured 2026-11-18; it was class-only until then).
 
 Create a typedef with `lvai_create_typedef` (VI Server; nested typedefs in ONE run). A class field
 can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconnect.md`.

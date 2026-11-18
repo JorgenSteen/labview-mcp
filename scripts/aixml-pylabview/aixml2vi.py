@@ -204,6 +204,24 @@ def normalise_property_access(vi):
             el.set("fields", ",".join(fixed))
 
 
+TUNNEL_ID_RE = re.compile(r"(In|Out|Local)[1-9][0-9]*")
+
+
+def refuse_bad_tunnel_ids(vi):
+    """A Tunnel's `_id` IS its direction: every site here reads `startswith("In")` as input and
+    anything else as output. NI's schema allows only `(In|Out)[1-9][0-9]*` (stacked-sequence
+    locals add `LocalN`); gRPC refuses anything else at the schema. The composer took `_id="iFD"`
+    as an OUTPUT and failed far later with "case tunnel iFD: no typed wire reaches it" - a CLD
+    benchmark build lost a regeneration cycle to it, 2026-11-18. Refused here, by name, first."""
+    bad = [(el.get("uid"), el.get("_id")) for el in vi.iter("Tunnel")
+           if not TUNNEL_ID_RE.fullmatch(el.get("_id") or "")]
+    if bad:
+        raise Unsupported(
+            "Tunnel _id %s: a tunnel's _id must be In<n> (input) or Out<n> (output), n from 1 - "
+            "the prefix IS the direction (NI's schema: (In|Out)[1-9][0-9]*)"
+            % ", ".join("%r (uid %s)" % (i or "", u) for u, i in bad[:5]))
+
+
 def split_top(s, sep=","):
     """Split at `sep` outside braces and brackets."""
     out, depth, cur = [], 0, []
@@ -11119,6 +11137,7 @@ class Composer:
         vi = ET.parse(aixml_path).getroot()
         self.doc = vi
         normalise_property_access(vi)
+        refuse_bad_tunnel_ids(vi)
         self.vi_name = unescape(vi.get("_name") or "Composed.vi")
         # the reader's connector pane PATTERN, after </VI> where NI's service ignores it: a
         # recomposed subVI keeps the pattern its callers were linked against (vi2aixml.py)
