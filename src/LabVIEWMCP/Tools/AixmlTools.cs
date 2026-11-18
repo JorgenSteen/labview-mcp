@@ -1006,7 +1006,7 @@ internal sealed class AixmlTools(LvaiConnection connection)
         {
             var result = await AixmlComposer.ComposeAsync(setup, symbolic.PathForLabview,
                 Path.Combine(scratch, Path.GetFileNameWithoutExtension(aixmlPath) + ".vi"),
-                SearchFolders(aixmlPath), timeoutSeconds, ct, validate: true);
+                SearchFolders(aixmlPath), timeoutSeconds, ct, validate: true, sourcePath: aixmlPath);
             return ComposerAnswer(result, choice,
                 [.. SymbolicFacts(symbolic),
                  ("validatedBy", JsonValue.Create("composer")),
@@ -1037,7 +1037,8 @@ internal sealed class AixmlTools(LvaiConnection connection)
         var existedBefore = File.Exists(viPath);
         var symbolic = SymbolicUids.Prepare(aixmlPath);
         var result = await AixmlComposer.ComposeAsync(setup, symbolic.PathForLabview, viPath,
-                                                      SearchFolders(aixmlPath, viPath), timeoutSeconds, ct);
+                                                      SearchFolders(aixmlPath, viPath), timeoutSeconds, ct,
+                                                      sourcePath: aixmlPath);
 
         // EXECUTABILITY NEEDS LabVIEW, and today the only road to it is NI's service. So it is
         // attempted, and when it cannot be read the answer says why instead of guessing: the
@@ -1179,12 +1180,16 @@ internal sealed class AixmlTools(LvaiConnection connection)
     /// </summary>
     private static (string, JsonNode?)[] SymbolicFacts(SymbolicUids.Result symbolic)
     {
-        if (!symbolic.Rewritten) return [];
+        if (!symbolic.Rewritten)
+            return symbolic.TargetsEscaped == 0 ? [] : [
+                ("callTargetsEscaped", JsonValue.Create(symbolic.TargetsEscaped)),
+                ("aiXmlSentToLabview", JsonValue.Create(symbolic.PathForLabview)),
+            ];
 
         var map = new JsonObject();
         foreach (var pair in symbolic.Map) map[pair.Key] = JsonValue.Create(pair.Value);
 
-        return [
+        (string, JsonNode?)[] facts = [
             ("symbolicUids", map),
             ("aiXmlSentToLabview", JsonValue.Create(symbolic.PathForLabview)),
             ("symbolicNote", JsonValue.Create(
@@ -1192,6 +1197,9 @@ internal sealed class AixmlTools(LvaiConnection connection)
                 "message naming a number refers to the file at aiXmlSentToLabview, and " +
                 "symbolicUids gives the symbol each number came from.")),
         ];
+        return symbolic.TargetsEscaped == 0
+            ? facts
+            : [.. facts, ("callTargetsEscaped", JsonValue.Create(symbolic.TargetsEscaped))];
     }
 
     private static async Task<(string, JsonNode?)[]> FileFactsAsync(

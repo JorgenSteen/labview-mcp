@@ -139,6 +139,7 @@ internal static class AixmlCheck
         CheckIndicatorValues(root, findings);
         CheckNestedArrays(root, findings);
         CheckWireEndsHaveUids(root, findings);
+        CheckTunnelIds(root, findings);
         CheckNetAttributes(root, findings);
         CheckTimestampValues(root, findings);
         CheckNonFiniteConstants(root, findings);
@@ -499,6 +500,31 @@ internal static class AixmlCheck
                 "outputs and has no uid. A net is named uid.terminal, so nothing can wire to it: " +
                 "give it uid (and uid_parent - its structure's uid, or root). NI's converter refuses " +
                 "the whole document for it with Error -2628."));
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TunnelId =
+        new(@"^(In|Out|Local)[1-9][0-9]*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A Tunnel's <c>_id</c> IS its direction: NI's schema allows only <c>(In|Out)[1-9][0-9]*</c>
+    /// (stacked-sequence locals add <c>LocalN</c>), and the composer reads an <c>In</c> prefix as
+    /// input and anything else as output. A CLD benchmark build (2026-11-18) wrote
+    /// <c>_id="iFD"</c> and <c>"oB"</c>; the composer took both as outputs and failed with
+    /// "case tunnel iFD: no typed wire reaches it", a regeneration cycle later. aixml2vi.py's
+    /// <c>refuse_bad_tunnel_ids</c> and scripts/aixml_lint.py's <c>tunnel-id</c> say the same.
+    /// </summary>
+    private static void CheckTunnelIds(XElement root, List<Finding> findings)
+    {
+        foreach (var tunnel in root.Descendants("Tunnel"))
+        {
+            var id = (string?)tunnel.Attribute("_id") ?? "";
+            if (TunnelId.IsMatch(id)) continue;
+            findings.Add(new Finding(Severity.Error, "tunnelIdNotDirection",
+                $"Tunnel _id=\"{id}\": a tunnel's _id must be In<n> (input) or Out<n> (output), n from 1 - " +
+                "the prefix IS the direction. NI's schema refuses anything else (Error -2628), and the " +
+                "pylabview composer refuses it by name.",
+                (string?)tunnel.Attribute("uid")));
         }
     }
 
