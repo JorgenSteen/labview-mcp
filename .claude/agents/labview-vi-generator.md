@@ -27,13 +27,16 @@ it an icon.
 
 Measured facts that each cost minutes when found at run time. Plan around them from the start.
 
-- **AIXML has no Event Structure timeout terminal** (NI's exporter drops it too). An inactivity
-  timeout is the consumer's `Dequeue Element` `timeout in ms` on a shift register (-1 idle, N
-  armed); a poll is a second While Loop paced by `Wait on Notification`.
+- **An Event Structure's timeout is `timeoutin="<net>"` on the pylabview backend** (the default;
+  `lvai_aixml_reference node=timeoutin`). NI's AIXML (gRPC) has none - there an inactivity timeout
+  is the consumer's `Dequeue Element` `timeout in ms` on a shift register (-1 idle, N armed), and
+  a poll a second While Loop paced by `Wait on Notification`. Two CLD benchmark builders
+  disagreed on this from the old wording (2026-11-17).
   `docs/cold-build-atm-cld.md` §4, `scripts/aixml-skeletons/web-browser-title-poll.xml`.
-- **AIXML drops every typedef on a VI's own pane.** On a CLASS MEMBER re-bind it with
-  `lvai_bind_pane_typedef` (needs the `.lvclass`); on a plain subVI no route is established, so
-  decide before designing a typedef pane. A typedef CONSTANT: one wired into a subVI CALL's typedef
+- **AIXML drops every typedef on a VI's own pane.** Re-bind it with `lvai_bind_pane_typedef`
+  after the VI is generated: a CLASS MEMBER with its `.lvclass`; any other subVI (a library
+  member, a loose one) with only `projectPath` (measured 2026-11-18: the caller's coercion dots
+  go). A CLD grader marks a typedef'd state or cluster passed as a bare type down. A typedef CONSTANT: one wired into a subVI CALL's typedef
   input is bound by `lvai_bind_typedef_constants`; any other - a cluster constant into `Bundle By
   Name`, a queue's element type - by `lvai_swap_subvis` `constantsJson`
   `[{"label":"<constant label>","class":"<the .ctl>"}]` (needs the project active; measured
