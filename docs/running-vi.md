@@ -19,6 +19,73 @@ per call:
 | `press` | each boolean in `controls` written TRUE with Value (Signaling): its Value Change event fires |
 | `signal` | `signalsJson`, `[{"control":..,"value":..}]`, each written with Value (Signaling) in order, `signalGapMs` between |
 | `stop` | presses `stopControl` if given, waits up to `waitMs` for the VI to end, then ABORTS it if it still runs (`abort: false` leaves it), and closes its panel |
+| `steps` | a whole scenario in ONE call - see the next section |
+
+## `steps`: a scenario in one call (2026-11-17)
+
+`stepsJson` is a JSON array run in order, each element one action:
+
+```json
+[{"start":{}},
+ {"set":{"Run Interlock":true,"Fuel Control Valve":40}},
+ {"press":"Boiler Reset"},
+ {"wait":500},
+ {"read":["Status"],"expect":{"Status":"Ready","Time Count":">=0"}},
+ {"signal":[{"control":"Flame","value":"35"}]},
+ {"expect":{"Pilot LED":"true"}},
+ {"stop":"stop"}]
+```
+
+- `start` and `set` take `{"control":"value"}` (a JSON number or boolean is written as text);
+  `press` a name or an array of names; `signal` the same array as `signalsJson`; `wait`
+  milliseconds (up to 120 000); `stop` null, a stop control's name, or
+  `{"stopControl":..,"waitMs":..,"abort":..}`. A stop with no stop control waits 500 ms before
+  the abort (the single action's 5 s default was paid on every bare stop in the first live check).
+- `read` + `expect` reads the named values plus every name in `expect`; `expect` alone reads what it
+  checks. An expectation is equality - numbers compared as numbers, other text case-insensitive (a
+  boolean reads `true`) - or a prefix: `>=`, `<=`, `>`, `<` (numbers), `!=`, `~` (contains).
+- A name may be `Cluster.Element`: a field of a cluster control or indicator, found by its label
+  in the panel's type and picked out of the cluster's value. ActiveX reads top-level controls only;
+  LabVIEW's answer for any other name is "parameter %p not found in the VI's connector pane" with
+  `%p` unfilled, which the tool translates.
+- Every step answers its own `ms`, so a lagging application is told apart from a slow step.
+- Each step runs through the same code as the single action and answers a cut-down result. A
+  failed EXPECTATION is recorded and the scenario goes on; a failed ACTION ends it, the remaining
+  steps are listed `skipped`, and the last `stop` step still runs when the VI is running
+  (`cleanup: true`), so a scenario never leaves the VI running.
+- The answer: `ok` (every step ran, every expectation held), `expectations` `{passed, failed}`,
+  `firstFailure`, `steps`.
+- It is a resumable job: a scenario longer than the answer window answers `stillRunning`; call
+  again with the SAME arguments to collect it.
+
+Why: in the first CLD benchmark round (2026-11-17, four exams, one build each) every application
+was driven one action per call - 49 `lvai_running_vi` calls in one build, 20-34 drive calls in the
+others. Each was about half a second in LabVIEW and about five seconds of model turn: 2-4 minutes
+of each build, the largest repeated cost after reading the spec.
+
+## Latched booleans: `latchedAsSwitch` (2026-11-17)
+
+Value and Value (Signaling) refuse a LATCHED boolean (Error 1193) - an exam's `Start`, `Enter` and
+`stop` are latched as a rule. In all four builds of the first CLD round the builder grafted a
+second, switch-action test copy of the main VI to drive them, re-bound its references, and still
+could not drive the delivered VI's own buttons.
+
+`latchedAsSwitch: true` on `start` (or on a `steps` call, for its `start` step) does it in memory:
+
+1. While the server HOLDS the target (so a helper's Close Reference cannot unload it), the composed
+   helper `scripts/lvai_latch_switch.xml` gives every top-level Boolean whose Mechanical Action is
+   a latch (4 Latch When Pressed, 5 When Released, 6 Until Released) the matching switch action
+   (0, 1, 2). The answer lists them as `latchedSwitched` (`latchErrorCode` is the helper's error).
+2. A `press` on a switched boolean writes TRUE with Value (Signaling) - the event fires - waits
+   `signalGapMs`, then writes FALSE with SetControlValue, which fires nothing: a latch's reset as
+   the diagram would have done it on read (`releasedAsLatch`). A POLLING loop faster than the gap
+   may read the TRUE more than once; raise or lower `signalGapMs` to the loop's period.
+3. `stop` runs `Revert VI` on the ended VI before its panel closes (`revertedLatches`,
+   `revertErrorCode`): the VI is reloaded from disk, and the file never carried the change.
+
+Stop such a VI through `lvai_running_vi stop` (or a `stop` step) - a VI that ended on its own is
+still reverted by the next stop. Save nothing of it in between: a save would write the switch
+actions into the file.
 
 Value (Signaling) is not in ActiveX, so `press` and `signal` run a composed helper,
 `scripts/lvai_signal_running.xml`. It is the signal section of `lvai_run_for_ms.xml` - the part

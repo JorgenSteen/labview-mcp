@@ -494,7 +494,26 @@ internal static class LabViewCom
     // ------------------------------------------------------------ a VI that keeps running
 
     internal sealed record StartResult(int StateBefore, int StateAfter, bool PanelOpen, bool AlreadyRunning,
-                                       IReadOnlyList<string> SetProblems);
+                                       IReadOnlyList<string> SetProblems,
+                                       IReadOnlyList<string>? Switched = null, string? LatchErrorXml = null);
+
+    /// <summary>
+    /// Run the composed `lvai_latch_switch` helper on the HELD target <paramref name="viPath"/>:
+    /// revert FALSE switches its latched booleans to switch actions in memory, TRUE reloads it from
+    /// disk (Revert VI). The target must be held by the caller, so the helper's Open VI Reference
+    /// reaches the same VI in memory and the change survives the helper's Close Reference.
+    /// </summary>
+    private static (List<string> Switched, string? ErrorXml) RunLatchHelper(object app, string latchHelper,
+                                                                           string viPath, bool revert) =>
+        WithVi(app, latchHelper, helper =>
+        {
+            Call(helper, "SetControlValue", "VI Path", Path.GetFullPath(viPath));
+            Call(helper, "SetControlValue", "Revert", revert);
+            Call(helper, "Run", false);
+            var switched = (Call(helper, "GetControlValue", "Switched") as string ?? "")
+                .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+            return (switched, Call(helper, "GetControlValue", "error xml") as string);
+        });
 
     /// <summary>
     /// Start a VI and RETURN while it runs: inputs set, its front panel opened - a VI run without
@@ -505,22 +524,26 @@ internal static class LabViewCom
     /// </summary>
     public static Task<StartResult> StartAsync(string viPath, IReadOnlyList<Input> inputs, bool openPanel,
                                                int timeoutSeconds, CancellationToken ct,
-                                               string? namedSetHelper = null) =>
+                                               string? namedSetHelper = null, string? latchHelper = null) =>
         WithLabViewAsync(app => WithVi(app, viPath, vi =>
         {
             var before = Convert.ToInt32(Get(vi, "ExecState"), CultureInfo.InvariantCulture);
             if (before == 0) return new StartResult(0, 0, false, false, []);
             if (before is 2 or 3)
                 return new StartResult(before, before, Get(vi, "FPWinOpen") is true, true, []);
+            List<string>? switched = null;
+            string? latchError = null;
+            if (latchHelper is not null)
+                (switched, latchError) = RunLatchHelper(app, latchHelper, viPath, revert: false);
             var problems = SetInputs(app, vi, viPath, inputs, namedSetHelper);
-            if (problems.Count > 0) return new StartResult(before, before, false, false, problems);
+            if (problems.Count > 0) return new StartResult(before, before, false, false, problems, switched, latchError);
             if (openPanel)
                 vi.GetType().InvokeMember("FPWinOpen", BindingFlags.SetProperty, null, vi, [true],
                                           CultureInfo.InvariantCulture);
             Call(vi, "Run", true);
             Thread.Sleep(300);
             var after = Convert.ToInt32(Get(vi, "ExecState"), CultureInfo.InvariantCulture);
-            return new StartResult(before, after, Get(vi, "FPWinOpen") is true, false, []);
+            return new StartResult(before, after, Get(vi, "FPWinOpen") is true, false, [], switched, latchError);
         }), timeoutSeconds, ct);
 
     /// <summary>The VI's execution state and the named controls' and indicators' values, read as it runs.</summary>
@@ -543,7 +566,8 @@ internal static class LabViewCom
              (IReadOnlyList<string>)SetInputs(app, vi, viPath, inputs, namedSetHelper))),
             timeoutSeconds, ct);
 
-    internal sealed record StopResult(int StateBefore, int StateAfter, bool Aborted, long WaitedMs, bool PanelClosed);
+    internal sealed record StopResult(int StateBefore, int StateAfter, bool Aborted, long WaitedMs, bool PanelClosed,
+                                      bool Reverted = false, string? RevertErrorXml = null);
 
     /// <summary>
     /// Wait up to <paramref name="waitMs"/> for the VI to end on its own (after a stop control was
@@ -551,7 +575,7 @@ internal static class LabViewCom
     /// the answer says - and close its panel when asked.
     /// </summary>
     public static Task<StopResult> StopAsync(string viPath, int waitMs, bool abort, bool closePanel,
-                                             int timeoutSeconds, CancellationToken ct) =>
+                                             int timeoutSeconds, CancellationToken ct, string? revertHelper = null) =>
         WithLabViewAsync(app => WithVi(app, viPath, vi =>
         {
             var before = Convert.ToInt32(Get(vi, "ExecState"), CultureInfo.InvariantCulture);
@@ -569,6 +593,15 @@ internal static class LabViewCom
                 catch (Exception e) when (e is TargetInvocationException or COMException) { }
                 state = Convert.ToInt32(Get(vi, "ExecState"), CultureInfo.InvariantCulture);
             }
+            // a VI whose latches were switched for the run is reloaded from disk BEFORE its panel
+            // closes, while this call still holds it - so the in-memory change never meets a save
+            var reverted = false;
+            string? revertError = null;
+            if (revertHelper is not null && state is not (2 or 3))
+            {
+                (_, revertError) = RunLatchHelper(app, revertHelper, viPath, revert: true);
+                reverted = true;
+            }
             var closed = false;
             if (closePanel && state is not (2 or 3) && Get(vi, "FPWinOpen") is true)
             {
@@ -576,7 +609,7 @@ internal static class LabViewCom
                                           CultureInfo.InvariantCulture);
                 closed = Get(vi, "FPWinOpen") is not true;
             }
-            return new StopResult(before, state, aborted, clock.ElapsedMilliseconds, closed);
+            return new StopResult(before, state, aborted, clock.ElapsedMilliseconds, closed, reverted, revertError);
         }), timeoutSeconds, ct);
 
     /// <summary>

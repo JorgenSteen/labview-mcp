@@ -179,7 +179,7 @@ internal sealed class RestartTools(LvaiConnection connection)
         Anything else is refused with errorKind needsUserGoAhead unless userGoAhead carries the
         USER'S OWN WORDS from this conversation (an agent's "approved" is not the user); the
         answer echoes them. The go-ahead never opens three guards: more than one LabVIEW, a VISIBLE
-        possible dialog, and a busy CPU (two quiet 15 s samples needed; measured, a busy LabVIEW
+        possible dialog, and a busy CPU (two quiet 5 s samples needed; measured, a busy LabVIEW
         answers CloseMainWindow False and stays; waitForIdleSeconds keeps sampling up to 300 s
         instead of refusing at once). A HIDDEN titled window nothing measured explains (it may
         be a dialog that reports itself invisible) is guard `hiddenWindows`: the go-ahead opens it,
@@ -227,7 +227,7 @@ internal sealed class RestartTools(LvaiConnection connection)
             """)]
         string? projectPath = null,
         [Description("""
-            Seconds to wait for a BUSY LabVIEW to go quiet (two quiet 15 s samples in a row) before the
+            Seconds to wait for a BUSY LabVIEW to go quiet (two quiet 5 s samples in a row) before the
             busy guard refuses; 0 or omitted refuses on the first busy sample. At most 300. A LabVIEW
             started minutes ago with a project open was measured busy for about 3.5 minutes.
             """)]

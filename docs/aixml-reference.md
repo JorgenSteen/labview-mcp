@@ -455,7 +455,10 @@ Enumerated values observed:
 - `connection`: `required` · `recommended` · `optional` · `dynamic` — the fourth one is dynamic dispatch
   and appears only on a class terminal; see below
 - `Tunnel._id`: `In1`…`InN`, `Out1`…`OutN` — numbering is per structure and matters only
-  for pairing input to output side
+  for pairing input to output side. **The prefix IS the direction**: the pylabview composer takes
+  an `_id` starting with `In` as an input tunnel and any other as an output, so an input named
+  otherwise is refused as "case tunnel ...: no typed wire reaches it" (a CLD benchmark build,
+  2026-11-17)
 - `Tunnel.mode`: `index` (auto-indexing on a loop border); absent means plain tunnel
 - `Tunnel.cond`: `true` seen on an event-structure border tunnel
 - `Control.style`: `latched` (mechanical action of a boolean)
@@ -1084,7 +1087,14 @@ frame. And a terminal whose **name embeds its default value** must be spelled ou
 
 ### Event Structure
 
-> **Reading only — and it fails *silently*.** NI lists `Event Structure` (and `Timed Loop`)
+**On the pylabview backend (the default) an Event Structure IS authorable**: front-panel and user
+event frames, the Event Data Node, and its Timeout through `timeoutin` (below, "The Timeout
+value"). The warning that follows is about NI's converter (grpc). Stated here first since
+2026-11-17: in the first CLD benchmark round one builder used `timeoutin`, another read this
+passage and the "no terminal in AIXML" line under the Web Browser control, and rebuilt its
+application as a polling loop.
+
+> **On grpc: reading only — and it fails *silently*.** NI lists `Event Structure` (and `Timed Loop`)
 > among the node families the generator does not support (§9). Exports are complete and the
 > syntax below is accurate, but authoring one does not produce an error. Measured:
 >
@@ -1155,7 +1165,9 @@ NI's converter (grpc) is not known to read it (untested); on grpc set the value 
 | `Property Node` | `write+Disabled` | property, `write+` prefix = write access |
 | `Property Node` | `write+Front Panel Window\3ACloseable` | nested property class |
 
-A `Property Node` without the `write+` prefix reads. `Index Array` with two `index:`
+A `Property Node` without the `write+` prefix reads; `read+Disabled` says so explicitly, and the
+pylabview composer accepts a bare `Disabled` as a read since 2026-11-17 (it refused it before, as
+"declares no property ''"). `Index Array` with two `index:`
 entries in `inputs` returns two `element` outputs — repeated terminal names are how
 expandable nodes are described.
 
@@ -1290,8 +1302,8 @@ export: inputs `reference`, `error in (no error)`, `JavaScript`, `arg`, `Wait fo
 The script is a FUNCTION BODY and needs `return`. At run time it needs the control's panel OPEN in
 the instance that runs the VI, and the first call right after `FP.Open` can still answer `Error 53`
 while the browser initialises - measured twice on cold starts, a second call clean - so poll or
-retry rather than calling once. **Not in an Event Structure Timeout frame**, which has no terminal
-in AIXML: `scripts/aixml-skeletons/web-browser-title-poll.xml` is the measured shape, a second loop
+retry rather than calling once. **Not in an Event Structure Timeout frame on grpc**, where it has no
+terminal (pylabview: `timeoutin`, §7): `scripts/aixml-skeletons/web-browser-title-poll.xml` is the measured shape, a second loop
 paced by `Wait on Notification` with a 250 ms timeout and stopped by the notifier. A run leaves the
 panel the program opened OPEN, which keeps the VI in memory (`Error 1357` on the next convert);
 `lvai_run_vi_and_read_values` closes it afterwards (`panelClosedAfterRun`).
@@ -1327,7 +1339,7 @@ are surprising. Verified from exports:
 | `Build Array` | `array` / `element`, repeatable | `appended array` |
 | `Unbundle By Name` | `input cluster` | one per `fields`, e.g. `status`, `code`, `source` |
 | `Bundle By Name` | one per `fields`, **then** `input cluster` — the order matters | `output cluster` |
-| `Bundle` | `element`, repeatable, **then** `cluster` | `output cluster` |
+| `Bundle` | one per field, **named by the field's label** (`element` only for an unlabelled field), **then** `cluster` | `output cluster` |
 | `Unbundle` | `cluster` | `element`, repeatable |
 | `Unbundle / Bundle Elements` | `input cluster` | `output cluster` — the In Place Element border node |
 | `String To Path` | `string` | `path` |

@@ -65,13 +65,12 @@ verified, because it needs the project:
 
 ## Reuse what the project already holds
 
-Pass the `.lvproj` to every builder. The VI agents look through the project's own VIs before the
-palette and call a fit by name instead of rebuilding it - project VIs are callable once loaded
-through the project.
+Pass the `.lvproj` to every builder. The VI agents search the project's own VIs before the
+palette and call a fit by name (callable once loaded through the project).
 
 ## One agent, one output directory
 
-Two agents writing into one folder overwrite each other's files. Give each agent its own folder,
+Two agents in one folder overwrite each other's files. Give each agent its own folder,
 for example `<project>\Tests\<ClassName>\`, and say so in its prompt.
 
 ## Check the station with `pylv_status`
@@ -102,5 +101,6 @@ still in memory, silently captures a bare-name call.
 
 ## Do not add work nobody asked for
 
-No negative-control test run unless the user asked for one. Batch lookups: one tool call with a
-comma-separated list beats several, because each round trip is a model turn.
+No negative-control test run unless the user asked for one. Each round trip is a model turn:
+batch lookups in one call; drive an app one scenario per `lvai_running_vi` `steps` call
+(`latchedAsSwitch` for latched buttons).
