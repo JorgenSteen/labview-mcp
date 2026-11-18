@@ -63,7 +63,8 @@ internal sealed class RunningViTools
         (expect alone reads what it checks; a value is equality, numbers as numbers, text
         case-insensitive, or prefixed >= <= > < != ~contains), {"stop":"stop"|{}|{"stopControl":..,"waitMs":..,"abort":..}}.
         A failing step ends the run; a later stop step still runs when the VI is running.
-        A read/expect name may be `Cluster.Element` (a field of a cluster control or indicator), or
+        A read/expect name - and a steps `set` name - may be `Cluster.Element` (a field of a
+        cluster; a set reads the cluster and writes it whole), or
         `Control@Disabled` / `@Blinking` / `@Visible` / `@Key Focus` (a top-level control's or a
         `Cluster.Element`'s state: Disabled reads Enabled, Disabled or Disabled and Grayed Out; the
         others TRUE/FALSE).
@@ -468,6 +469,46 @@ internal sealed class RunningViTools
         });
     }
 
+    /// <summary>
+    /// A steps `set` of `Cluster.Element`: the cluster is read as it is now, the field replaced, and
+    /// the whole cluster set (fields of one cluster in one write). Other names pass through.
+    /// </summary>
+    private static async Task<IReadOnlyDictionary<string, string>?> ClusterElementsAsWholeAsync(
+        string vi, IReadOnlyDictionary<string, string>? values,
+        Func<Task<List<AixmlComposer.PanelItem>?>> panelItems, int timeoutSeconds, CancellationToken ct)
+    {
+        if (values is null || !values.Keys.Any(k => k.Contains('.'))) return values;
+        var items = await panelItems();
+        if (items is null) return values;
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var fields = new Dictionary<string, List<(int Index, string Value)>>(StringComparer.Ordinal);
+        foreach (var (name, value) in values)
+        {
+            var cut = name.IndexOf('.');
+            if (cut > 0 && items.All(p => p.Name != name)
+                && items.FirstOrDefault(p => p.Name == name[..cut]) is { } cluster
+                && RunningViSteps.ClusterFields(cluster.Type) is { } names
+                && names.IndexOf(name[(cut + 1)..]) is var index and >= 0)
+            {
+                if (!fields.TryGetValue(cluster.Name, out var list)) fields[cluster.Name] = list = [];
+                list.Add((index, value));
+            }
+            else result[name] = value;
+        }
+        if (fields.Count == 0) return values;
+        var (_, now) = await LabViewCom.ReadRunningAsync(vi, [.. fields.Keys], timeoutSeconds, ct);
+        foreach (var (cluster, list) in fields)
+        {
+            var whole = now.FirstOrDefault(r => r.Name == cluster)?.Value
+                ?? throw new ArgumentException($"'{cluster}' could not be read, so its elements cannot be set one by one.");
+            foreach (var (index, value) in list)
+                whole = RunningViSteps.ReplaceClusterElement(whole, index, value)
+                    ?? throw new ArgumentException($"'{cluster}' read as '{whole}', which is no cluster literal - set it whole.");
+            result[cluster] = whole;
+        }
+        return result;
+    }
+
     /// <summary>One step, through the single action's code; the answer cut down to what a scenario needs.</summary>
     private static async Task<JsonObject> RunStepAsync(string vi, RunningViSteps.Step step, bool panel, bool latchedAsSwitch,
                                                        int gapMs, int timeoutSeconds,
@@ -486,7 +527,9 @@ internal sealed class RunningViTools
                 case "start":
                     answer = await StartAsync(vi, ValuesJson(step.Values), panel, latchedAsSwitch, timeoutSeconds, ct); break;
                 case "set":
-                    answer = await SetAsync(vi, ValuesJson(step.Values), timeoutSeconds, ct); break;
+                    answer = await SetAsync(vi, ValuesJson(await ClusterElementsAsWholeAsync(vi, step.Values, panelItems,
+                                                                                            timeoutSeconds, ct)),
+                                            timeoutSeconds, ct); break;
                 case "press":
                     answer = await SignalAsync(vi, "press", [.. step.Controls!.Select(c => KeyValuePair.Create(c, "TRUE"))],
                                                gapMs, timeoutSeconds, ct); break;

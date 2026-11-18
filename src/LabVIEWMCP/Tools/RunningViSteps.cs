@@ -207,6 +207,25 @@ internal static class RunningViSteps
         return index < items.Count ? items[index].Replace("\\2C", ",").Replace("\\5C", "\\") : null;
     }
 
+    /// <summary>
+    /// The cluster value with element <paramref name="index"/> replaced - the inverse of
+    /// <see cref="ClusterElement"/>, for a steps `set` of `Cluster.Element`: the read's literal
+    /// `[0,false,false]` goes back as the whole cluster, which `set` takes. A live check of the
+    /// Control@Property read (2026-11-18) found `set` refusing `Boiler Simulation Controls.Run
+    /// Interlock`, so the scenario wrote the whole cluster by hand. Null when the value is no
+    /// cluster literal or has no such element.
+    /// </summary>
+    internal static string? ReplaceClusterElement(string value, int index, string element)
+    {
+        var v = value.Trim();
+        if (!v.StartsWith('[') || !v.EndsWith(']')) return null;
+        var items = SplitTop(v[1..^1], '[', ']');
+        if (index < 0 || index >= items.Count) return null;
+        var nested = element.TrimStart().StartsWith('[');
+        items[index] = nested ? element.Trim() : element.Replace("\\", "\\5C").Replace(",", "\\2C");
+        return "[" + string.Join(",", items) + "]";
+    }
+
     private static List<string> SplitTop(string text, char open, char close)
     {
         var items = new List<string>();

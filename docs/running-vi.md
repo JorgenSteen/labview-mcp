@@ -48,6 +48,9 @@ per call:
   in the panel's type and picked out of the cluster's value. ActiveX reads top-level controls only;
   LabVIEW's answer for any other name is "parameter %p not found in the VI's connector pane" with
   `%p` unfilled, which the tool translates.
+- A steps `set` may name `Cluster.Element` too (2026-11-18): the cluster is read as it is, the
+  field replaced in its literal (`[0,true,false]`), and the whole cluster set - fields of one
+  cluster in one write. A live check found `set` refusing `Boiler Simulation Controls.Run Interlock`.
 - A name may be `Control@Property` (2026-11-18): `@Disabled` reads `Enabled`, `Disabled` or
   `Disabled and Grayed Out`; `@Blinking`, `@Visible` and `@Key Focus` read `TRUE`/`FALSE`. The
   control is a top-level one or a `Cluster.Element` one level down (`Boiler Controls.Pilot@Blinking`).
