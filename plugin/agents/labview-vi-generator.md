@@ -45,6 +45,8 @@ Measured facts that each cost minutes when found at run time. Plan around them f
 - **Check the 1920 x 1080 budget BEFORE generating**: `lvai_check_aixml` `diagramChain`
   (10 stages). Fold a sequential stretch into a subVI while the AIXML is text - one ATM main VI came
   out 5 983 px wide and was regenerated four times. `docs/diagram-size.md` §3-§4.
+- **Which booleans latch: `lvai_describe_vi` answers `booleanActions`** (`latched` / `switch`,
+  a button inside a cluster as `Cluster.Element`) - never read the panel heap for it.
 - **A latched boolean is driven with `lvai_running_vi` `latchedAsSwitch: true`** - on the
   DELIVERED VI, no test copy: the tool switches the latches in memory for the run, a `press`
   releases them like a latch, and `stop` reverts the VI from disk (the file never changes).

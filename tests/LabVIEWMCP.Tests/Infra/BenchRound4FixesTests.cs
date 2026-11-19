@@ -113,4 +113,26 @@ public sealed class BenchRound4FixesTests
         Assert.Equal(8000, compact["stepMs"]!["cleanUpDiagram"]!.GetValue<long>());
         Assert.Equal(keepSteps, compact["steps"] is not null);
     }
+
+    [Fact]
+    public void Describe_vi_lifts_the_boolean_actions_from_the_readers_trailer()
+    {
+        const string aixml = "<VI _name=\"A.vi\" description=\"\"/>\n" +
+            "<?lvmcp booleans latched=\"Enter|Left Buttons.Func Button 2\" switch=\"Card &amp; Simulator\"?>";
+
+        var info = FileDescriptions.DescribeVi(@"C:\fixtures\A.vi", aixml, 0, "");
+
+        var actions = info["booleanActions"]!;
+        Assert.Equal(["Enter", "Left Buttons.Func Button 2"],
+                     actions["latched"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal(["Card & Simulator"], actions["switch"]!.AsArray().Select(n => n!.GetValue<string>()));
+    }
+
+    [Fact]
+    public void An_export_without_the_trailer_gets_no_boolean_actions()
+    {
+        var info = FileDescriptions.DescribeVi(@"C:\fixtures\A.vi", "<VI _name=\"A.vi\" description=\"\"/>", 0, "");
+
+        Assert.Null(info["booleanActions"]);
+    }
 }
