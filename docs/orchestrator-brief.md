@@ -52,17 +52,16 @@ agent that has to rediscover them reads long documents at runtime.
 
 ## New VIs that belong together go into a library
 
-As soon as a request produces TWO OR MORE related new VIs (an
-application, a helper set), they end up in ONE new `.lvlib`. A single standalone VI stays loose,
-and EXISTING code is left as it is - with or without a library. You do it, after the last wave is
-verified, because it needs the project:
+TWO OR MORE related new VIs (an application, a helper set) end up in ONE new `.lvlib`. A single
+VI stays loose; EXISTING code is left as it is. You do it after the LAST wave is verified (it
+needs the project) - helpers a builder added included; callers in the open project are relinked:
 
 1. `lvai_create_library` beside the VIs, with the VIs other code calls (the API) as `itemsJson`;
 2. `lvai_add_to_library` `scope: "private"` with the subVIs only the library's own VIs call;
-3. `lvai_move_to_folder` once per FUNCTION folder (`API`, `Helpers`, `UI`, ... - named for what
-   they hold), so the library is not flat;
+3. `lvai_move_to_folder` once per FUNCTION folder (`API`, `Helpers`, `UI`, ...), never flat;
 4. `lvai_exec_state` over every member: membership changes each VI's qualified name;
-5. `lvai_bind_pane_typedef` per subVI whose pane carries a typedef (it picks its own route).
+5. `lvai_bind_pane_typedef` per subVI whose pane carries a typedef; a subVI's enum constants
+   the builder left plain: `lvai_swap_subvis` `constantsJson`.
 
 ## Reuse what the project already holds
 
