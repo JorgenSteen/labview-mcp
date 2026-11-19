@@ -154,3 +154,21 @@ target level. `verify.stillClaimsLibrary` (the VIs' `LIBN`) and `verify.stillLis
 `.lvlib`) must be empty for `ok`. A caller that named the VI by its qualified name relinks to the
 loose VI on load - check the callers with `lvai_exec_state`. Classes and class members are refused:
 not measured.
+
+## A project listing does not put a library's members back (2026-11-19)
+
+Symptom, a timed build of 2026-11-18: right after `lvai_add_to_library scope=private`, an
+unrelated `lvai_add_vis_to_project` (three VIs into `Controls`) answered `restored: 4` and the
+four new private members were loose project entries again, under `Controls`. LabVIEW's close had
+dropped their loose entries - correctly, a project lists the library and not its members - and the
+listing step took every VI "listed before, gone after" for a victim of the close and re-added it
+into the folder of the CURRENT call. The next save removed them once more, so the final project
+was clean, but only by luck of the order.
+
+Since 2026-11-19 (`TestTools.RestorePlan`, `LvClass.OwnedMemberPaths`): a VI that a library or
+class listed in the project owns is not restored (`notRestoredOwnedByLibrary` names it), and any
+other VI goes back into the folder it was in (the innermost one; target level for none), not into
+the call's folder. What this gives up: a VI that was in a NESTED folder whose folder LabVIEW's save
+also dropped comes back in a top-level folder of that name; and the old behaviour of gathering
+restored VIs in the requested folder is gone - a caller that relied on a restore to move a VI must
+name it in the call.
