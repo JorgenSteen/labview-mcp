@@ -82,6 +82,15 @@ drops a successful entry's `steps` entirely and states a note shared by every en
 `common`; multi-VI `lvai_exec_state` does the same for executable VIs. A broken or failed entry is
 never reduced. In-process callers get the full answer (the compaction is in the MCP wrappers).
 
+**Where the time went: `stepMs`, since 2026-11-19.** Every step is stamped `atMs` (the sequence's
+clock when it was done), and the compact answer lifts `stepMs` - step name against the
+milliseconds since the step before, a repeated name summed - also in `lvai_generate_vis`, where
+the steps themselves are dropped. Symptom that led to it: a CLD benchmark build whose first two
+generate calls took 95 s and 58 s (15 s and less in the next run) answered only
+`totalElapsedMs`, so the transcript could not say whether composing, the executable check or the
+layout was slow. Cost: about 150 characters per generated VI. The 95 s itself is still
+unexplained - read `stepMs` the next time it shows.
+
 **`ok: false` with `failedAtStep: "connectorPane"` still means the `.vi` was written.** The
 generation succeeded; the pane needs another pass. The corrected `conIdx` values come back in the
 `connectorPane` step, ready to paste into the AIXML.
