@@ -196,3 +196,18 @@ VIs inside LabVIEW. So the retry (`NeedsErrorsRetry`) now fires on `1026` whatev
 well as on any refusal for a broken VI; `1073` on a running VI is still not retried. When the lines
 are still missing on an executable VI, `errorsNotReadBecause` says so and adds that it is harmless:
 an executable VI has no error line to miss.
+
+## Error 1026 from Get Errors belongs to the PROJECT instance (measured 2026-11-19)
+
+Symptom (a benchmark build, pylabview backend): a broken generated VI answered
+`errorsNotReadBecause: Get Errors answered error 1026`, and the builder fell back to one gRPC
+validate to learn the cause. Reproduced: a deliberately broken VI (an unwired `reference` on a
+Property Node) generated with its project OPEN answered 1026 in `lvai_generate_vi` and in
+`lvai_exec_state` (instance `project`, `errorsRead: false`), and from then on a second broken VI
+that had read its line a minute earlier in the same project instance answered 1026 too. With the
+project CLOSED both read at once (instance `own`): `Property Node: Contains unwired or bad
+terminal` and `While Loop: Conditional terminal is not wired`. With no project at all the errors
+always read. An EXECUTABLE VI in the project instance answers 1026 as well, harmlessly.
+Not found: why the project instance refuses, and why not from the first call. What works today:
+close the project and ask again. `lvai_error_list` did not help - it lists what LabVIEW holds in
+memory, and answered `brokenCount: 0` in every case.

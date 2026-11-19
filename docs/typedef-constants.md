@@ -379,3 +379,27 @@ tool saves the project-folder VIs this call left modified (`callersSaved`). It l
 that were unsaved before (`unsavedBefore`). **A second run with the same carrier** appended `Flow
 Rate 2` - LabVIEW makes a label unique rather than refusing. The tool refuses a name already
 present before LabVIEW (`elementAlreadyPresent`).
+
+## A state machine's data: cluster and array constants bound to their typedefs (measured 2026-11-19)
+
+Symptom: two benchmark builds left an enum INSIDE a cluster constant and two array-of-enum
+constants as plain copies - the builder had "no tool". The answer is a typedef for the data, not a
+way into the constant (the user's decision): `State.ctl` (enum), `Data.ctl` (cluster with a member
+typed by `State.ctl`, nested in one `lvai_create_typedef` run) and `States.ctl` (array of the enum).
+
+One probe VI with three uniquely labelled plain constants, `lvai_swap_subvis` `constantsJson`
+(`class` = the `.ctl`), project active: `constantsAsked: 3`, `constantsSwapped: 3`, exec state 1.
+Then a fourth item was added to `State.ctl` and the VI saved again, and the FILE was read:
+
+| constant | bound to | after the enum grew | value |
+|---|---|---|---|
+| enum | `State.ctl` | four items | kept (Run) |
+| cluster | `Data.ctl` | four items in its `State` member | kept ({Run, 3}) |
+| array of enum | `States.ctl` | still three - until `States.ctl` itself was rewritten, then four | kept ([Idle, Stop]) |
+
+So all three bind and keep their values. THE GAP: `lvai_create_typedef` links a nested typedef only
+inside a CLUSTER (`elementTypedefsJson`); an ARRAY typedef's element is a plain copy of the enum,
+and the array constant follows its own `.ctl` only. Until that is closed, an enum table is better a
+cluster typedef or a constant per entry. Also measured: no tool adds an ITEM to an enum typedef
+(`lvai_add_typedef_elements` appends cluster elements) - the probe overwrote the `.ctl` with
+`lvai_create_typedef overwrite: true`.

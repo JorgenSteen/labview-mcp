@@ -139,3 +139,16 @@ left out on purpose: the check needs the target installed on the PC.
 - **NI's converter** (`backend: grpc`) writes the running LabVIEW's version; only the composer takes
   a target version.
 - **`.lvversion` files** and a library's or class's own save version are not read: not measured here.
+
+## 5. A project's pin is not honoured by a save through VI Server, also with the project active (measured 2026-11-19)
+
+Two copies of a supplied application saved in LabVIEW 17.0, each in a minimal project pinned to
+`20.0` and to `17.0` (`lvai_describe_project` reads both pins; LabVIEW 2026 opens both projects
+with no dialog and keeps the pin and `LVVersion` on close). `lvai_set_vi_descriptions` after the
+close, and `lvai_layout_diagram` WITH the pinned project active, both left the VI as 26.0
+(`LVSR` 17008000 -> 26008000; `saveVersionCheck`: `savedAs 26.0, was 17.0, projectSaveVersion
+20.0` / `17.0`). So setting the project's save version - the practice for LabVIEW 2024 and later
+when a developer saves from the IDE - does not carry to our tools' saves: they call the VI's Save
+method. Not tried: the Save for Previous Version method after such a save, and a save from the
+IDE's own menu. The composer does write the pinned version (20.0 at the oldest), so the files it
+writes keep it; what LabVIEW re-saves (clean-up, icon, descriptions, graft) does not.
