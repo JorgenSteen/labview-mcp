@@ -42,7 +42,8 @@ implements against it, the main-VI agent authors its scaffold in parallel with w
 standalone VI stays loose; existing code is never moved into or out of a library unasked. The
 orchestrator does it after the last wave: `lvai_create_library` with the API VIs,
 `lvai_add_to_library scope=private` for subVIs only the library calls, `lvai_move_to_folder` per
-function folder (never flat), then `lvai_exec_state` over the members. The VI agents search the
+function folder (never flat), then `lvai_exec_state` over the members and `lvai_bind_pane_typedef`
+per subVI whose pane carries a typedef (builders cannot: it needs the project). The VI agents search the
 PROJECT's own VIs before the palette. `docs/orchestrator-brief.md`.
 
 **LOGIC INSIDE A DQMH MODULE KEEPS ITS STATE IN THE MODULE'S DATA CLUSTER, NEVER IN AN FGV**

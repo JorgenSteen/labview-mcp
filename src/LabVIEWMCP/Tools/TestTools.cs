@@ -1674,6 +1674,41 @@ internal sealed class TestTools(LvaiConnection connection)
         }
     }
 
+    /// <summary>
+    /// WHAT THE RESTORE AFTER A CLOSE PUTS BACK, AND WHERE. Until 2026-11-19 every VI listed before
+    /// the close and gone after it went into the CURRENT call's folder. Measured on a timed build of
+    /// 2026-11-18: four VIs had just become private members of a library, LabVIEW's save dropped
+    /// their loose entries - correctly, a project lists the library, not its members - and the next
+    /// listing (of three .ctl-side VIs into `Controls`) answered `restored: 4` and put all four
+    /// back, under `Controls`. So: a VI owned by a library or class the project lists is NOT
+    /// restored (named in `notRestoredOwnedByLibrary`), and every other one goes back into the
+    /// folder it was in - the innermost one of its chain, target level for none. A VI listed twice
+    /// before is restored once, at its first place.
+    /// </summary>
+    internal static (List<(string Folder, List<(string Name, string Url)> Vis)> Plan, List<string> OwnedSkipped) RestorePlan(
+        IReadOnlyList<(string Name, string Url, string Folder)> placesBefore, IReadOnlyCollection<string> moved,
+        IReadOnlySet<string> ownedPaths, string projectPath)
+    {
+        var skipped = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var groups = new List<(string Folder, List<(string Name, string Url)> Vis)>();
+        foreach (var v in placesBefore)
+        {
+            if (v.Url.Length == 0 || moved.Contains(v.Name, StringComparer.OrdinalIgnoreCase) || !seen.Add(v.Name))
+                continue;
+            if (LvClass.ResolveUrl(projectPath, v.Url) is { } full && ownedPaths.Contains(full))
+            {
+                skipped.Add(v.Name);
+                continue;
+            }
+            var folder = v.Folder.Length == 0 ? "" : v.Folder[(v.Folder.LastIndexOf('/') + 1)..];
+            var group = groups.FindIndex(g => string.Equals(g.Folder, folder, StringComparison.Ordinal));
+            if (group < 0) { groups.Add((folder, [])); group = groups.Count - 1; }
+            groups[group].Vis.Add((v.Name, v.Url));
+        }
+        return (groups, skipped);
+    }
+
     internal async Task<JsonObject> ListInProjectAsync(
         string projectPath, string folderName, IReadOnlyList<string> viPaths, int timeoutSeconds,
         CancellationToken ct, bool reopen = true, bool moveTargetLevel = false)
@@ -1692,6 +1727,7 @@ internal sealed class TestTools(LvaiConnection connection)
             // to be put in by hand. `AddClassToProject` has re-asserted class entries for this
             // same reason since 2026-08-28; this route did not, and that is half of the defect.
             var listedBefore = LvClass.ListedVis(projectPath);
+            var placesBefore = LvClass.ListedViPlaces(projectPath);
 
             // ON PYLABVIEW ONLY THIS PROJECT IS CLOSED, never whatever else is active - see
             // KeepActiveProjectReason.
@@ -1748,8 +1784,12 @@ internal sealed class TestTools(LvaiConnection connection)
             // A VI MOVED ABOVE IS NOT RESTORED: it was listed before the close only at target
             // level, and putting that entry "back" into the folder would count a requested move as
             // the close clobbering the file - measured on the explicit tool's first live run.
-            var restored = LvClass.AddVisToProject(projectPath, folderName,
-                [.. listedBefore.Where(v => !moved.Contains(v.Name, StringComparer.OrdinalIgnoreCase))]);
+            // NOT WHAT A LIBRARY OR CLASS NOW OWNS, AND BACK WHERE IT WAS - see RestorePlan.
+            var (restorePlan, ownedSkipped) = RestorePlan(
+                placesBefore, moved, LvClass.OwnedMemberPaths(projectPath), projectPath);
+            var restored = restorePlan.Sum(g => LvClass.AddVisToProject(projectPath, g.Folder, g.Vis));
+            if (ownedSkipped.Count > 0)
+                step["notRestoredOwnedByLibrary"] = new JsonArray([.. ownedSkipped.Select(v => (JsonNode)v)]);
             var added = entries.Count > 0
                 ? LvClass.AddVisToProject(projectPath, folderName, entries)
                 : 0;

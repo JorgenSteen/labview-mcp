@@ -116,6 +116,28 @@ public class LayoutDenseTests(ITestOutputHelper output)
         Assert.False(DiagramLayoutTools.KeepNiMeasured(ours, null));                      // not measured
     }
 
+    /// <summary>
+    /// The size budget vetoes NI in ONE case: NI over 1920 x 1080, ours within. The CLD ATM main VI
+    /// of 2026-11-18 (ours 1190 x 458, NI 2330 x 763) keeps ours; MP3 Granule Info (ours 2470, NI
+    /// 2894 - the user preferred NI) and anything with both within stay with the wire rules.
+    /// </summary>
+    [Theory]
+    [InlineData(1190, 458, 2330, 763, true)]     // the ATM main VI
+    [InlineData(2470, 605, 2894, 603, false)]    // Granule Info: both over, the wires decide
+    [InlineData(900, 400, 1500, 700, false)]     // both within
+    [InlineData(2100, 400, 1500, 700, false)]    // ours over, NI within
+    [InlineData(1000, 900, 1200, 1200, true)]    // NI too tall
+    [InlineData(1920, 1080, 1921, 1080, true)]   // the budget itself is within
+    public void The_size_budget_vetoes_NI_only_when_NI_alone_is_over_it(int w, int h, int niW, int niH, bool veto) =>
+        Assert.Equal(veto, DiagramLayoutTools.NiAloneBreaksBudget(new Box(0, 0, w, h), new Box(0, 0, niW, niH)));
+
+    [Fact]
+    public void An_outline_that_was_not_read_vetoes_nothing()
+    {
+        Assert.False(DiagramLayoutTools.NiAloneBreaksBudget(new Box(0, 0, 1000, 500), null));
+        Assert.False(DiagramLayoutTools.NiAloneBreaksBudget(null, new Box(0, 0, 3000, 500)));
+    }
+
     /// <summary>Error 2 is what BD.CleanUp answered for MP3 Granule Info while a parallel worker
     /// laid out its caller (2026-11-05); it is tried again, any other error is final.</summary>
     [Fact]

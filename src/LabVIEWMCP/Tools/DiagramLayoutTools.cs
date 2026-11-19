@@ -324,7 +324,7 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
             // not matter (verify says so if it did)
             if (dense)
             {
-                var kept = await TryNiCleanupAsync(vi, scripts, plannedCrossings, answer, timeoutSeconds, ct);
+                var kept = await TryNiCleanupAsync(vi, scripts, plannedCrossings, plan.PredictedTop, answer, timeoutSeconds, ct);
                 Lap("niCleanup");
                 if (kept)
                 {
@@ -376,13 +376,15 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
             // wire geometry and compiled code, never where an object is; run after them, the dump
             // had to load the VI cold again, and that was the largest step of a whole project:
             // 37 of 102 s over ATM_DQMH_Cold's 76 VIs, a Caraya test 1.8-2.1 s each (2026-10-18)
+            var oursTop = plan.PredictedTop;
             if (verify)
             {
                 var again = await DumpAsync(Path.Combine(scripts, DumpHelper), vi, timeoutSeconds, ct);
                 if (again.Lines is not null)
                 {
                     var after = DiagramModel.Parse(again.Lines);
-                    answer["after"] = Outline(TopOutline(after));
+                    oursTop = TopOutline(after);
+                    answer["after"] = Outline(oursTop);
                     var (exact, off, worst) = Compare(plan, after);
                     answer["landedExactly"] = exact;
                     answer["landedOff"] = off;
@@ -416,7 +418,7 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
 
             // ---- 5d. our result as SAVED, measured: a tangled one is given to LabVIEW's Clean Up
             // as well, and NI's layout kept where its wires are drawn better (docs/diagram-layout.md 6q)
-            await TangledFallbackAsync(vi, scripts, work, answer, timeoutSeconds, ct);
+            await TangledFallbackAsync(vi, scripts, work, oursTop, answer, timeoutSeconds, ct);
             Lap("tangledCheck");
 
             if (render)
@@ -462,12 +464,25 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
         ni is not null && ni.Bends < ours.Bends && ni.Backward <= ours.Backward;
 
     /// <summary>
+    /// THE SIZE BUDGET OUTRANKS THE WIRES, in one case only: NI's layout is over 1920 x 1080 and
+    /// ours is within it. Measured on the CLD ATM build of 2026-11-18: ours 1190 x 458 with 698
+    /// bends and 7 backward wires, NI's 2330 x 763 with 509 and 6 - NI was kept on the wires and the
+    /// delivered main VI failed the size rule at 2575 px. When BOTH are over (MP3 Granule Info,
+    /// ours 2470, NI 2894, the user preferred NI) or both within, the wire rules decide as before.
+    /// An outline that could not be read vetoes nothing.
+    /// </summary>
+    internal static bool NiAloneBreaksBudget(Box? ours, Box? ni) =>
+        ours is { } o && ni is { } n && !OverBudget(o) && OverBudget(n);
+
+    private static bool OverBudget(Box b) => b.W > DiagramSize.MaxWidth || b.H > DiagramSize.MaxHeight;
+
+    /// <summary>
     /// Measures our saved result; when it is tangled, runs LabVIEW's Clean Up Diagram on the VI,
     /// measures that, and keeps whichever <see cref="KeepNiMeasured"/> picks - ours is put back
     /// from a copy otherwise. Writes `wireMetrics` and, when it ran NI, `tangledFallback` into the
     /// answer. The VI must not be held: both measurements read the file.
     /// </summary>
-    private async Task TangledFallbackAsync(string vi, string scripts, string work, JsonObject answer,
+    private async Task TangledFallbackAsync(string vi, string scripts, string work, Box oursTop, JsonObject answer,
                                             int timeoutSeconds, CancellationToken ct)
     {
         var cleanup = new DiagramCleanup(connection);
@@ -487,13 +502,30 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
         // why the clean-up did not run is the first thing to read when NI was not kept
         if (!ran) report["niStep"] = step.DeepClone();
         if (ni is not null) report["ni"] = ni.ToJson();
+        // NI's outline is read only where its wires would win: the size budget can still veto it
+        Box? niTop = null;
         if (ran && KeepNiMeasured(ours, ni))
+        {
+            var dump = await DumpAsync(Path.Combine(scripts, DumpHelper), vi, timeoutSeconds, ct);
+            if (dump.Lines is not null) niTop = TopOutline(DiagramModel.Parse(dump.Lines));
+            report["oursSize"] = Outline(oursTop);
+            if (niTop is { } size) report["niSize"] = Outline(size);
+        }
+        var overBudget = NiAloneBreaksBudget(oursTop, niTop);
+        if (overBudget)
+        {
+            report["niOverBudget"] = true;
+            answer["note"] = "Our layout came out tangled and LabVIEW's Clean Up Diagram drew the wires better, " +
+                             "but its diagram is over the 1920 x 1080 budget and ours is within it, so ours was " +
+                             "kept. Read tangledFallback (oursSize, niSize); to shorten the wires, fold part of " +
+                             "the diagram into a subVI.";
+        }
+        if (ran && KeepNiMeasured(ours, ni) && !overBudget)
         {
             report["kept"] = "ni";
             answer["layoutEngine"] = LayoutEngineNi;
             answer["windowView"] = await cleanup.FitViewAsync(vi, timeoutSeconds, ct);
-            var dump = await DumpAsync(Path.Combine(scripts, DumpHelper), vi, timeoutSeconds, ct);
-            if (dump.Lines is not null) answer["after"] = Outline(TopOutline(DiagramModel.Parse(dump.Lines)));
+            if (niTop is { } top) answer["after"] = Outline(top);
             answer["note"] = "Our layout came out tangled (bends per wire or backward wires), and LabVIEW's " +
                              "Clean Up Diagram drew the wires better, so its layout was kept. Read tangledFallback.";
             return;
@@ -520,8 +552,8 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
     /// `niCleanup` into the answer and answers whether NI's layout is to be kept; when it is,
     /// `layoutEngine` and `after` say so.
     /// </summary>
-    private async Task<bool> TryNiCleanupAsync(string vi, string scripts, int ourCrossings, JsonObject answer,
-                                               int timeoutSeconds, CancellationToken ct)
+    private async Task<bool> TryNiCleanupAsync(string vi, string scripts, int ourCrossings, Box oursPlanned,
+                                               JsonObject answer, int timeoutSeconds, CancellationToken ct)
     {
         var report = new JsonObject { ["oursPlanned"] = ourCrossings };
         answer["niCleanup"] = report;
@@ -542,10 +574,20 @@ internal sealed class DiagramLayoutTools(LvaiConnection connection)
             var niModel = DiagramModel.Parse(dump.Lines);
             niCrossings = DiagramLayout.DataCrossings(niModel, new LayoutPlan());
             report["crossings"] = niCrossings;
-            report["size"] = Outline(TopOutline(niModel));
+            var niTop = TopOutline(niModel);
+            report["size"] = Outline(niTop);
+            if (KeepNi(niCrossings, ourCrossings) && NiAloneBreaksBudget(oursPlanned, niTop))
+            {
+                // ours is applied over NI's layout by the caller, as for any plan NI does not beat
+                report["niOverBudget"] = true;
+                report["note"] = "LabVIEW's layout crosses fewer data wires, but it is over the 1920 x 1080 budget " +
+                                 "and our plan is within it, so ours is applied.";
+                report["kept"] = false;
+                return false;
+            }
             if (KeepNi(niCrossings, ourCrossings))
             {
-                answer["after"] = Outline(TopOutline(niModel));
+                answer["after"] = Outline(niTop);
                 answer["layoutEngine"] = LayoutEngineNi;
             }
         }
