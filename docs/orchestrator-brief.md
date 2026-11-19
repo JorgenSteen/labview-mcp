@@ -52,7 +52,7 @@ agent that has to rediscover them reads long documents at runtime.
 
 ## New VIs that belong together go into a library
 
-The user's rule of 2026-11-11: as soon as a request produces TWO OR MORE related new VIs (an
+As soon as a request produces TWO OR MORE related new VIs (an
 application, a helper set), they end up in ONE new `.lvlib`. A single standalone VI stays loose,
 and EXISTING code is left as it is - with or without a library. You do it, after the last wave is
 verified, because it needs the project:
@@ -61,7 +61,8 @@ verified, because it needs the project:
 2. `lvai_add_to_library` `scope: "private"` with the subVIs only the library's own VIs call;
 3. `lvai_move_to_folder` once per FUNCTION folder (`API`, `Helpers`, `UI`, ... - named for what
    they hold), so the library is not flat;
-4. `lvai_exec_state` over every member: membership changes each VI's qualified name.
+4. `lvai_exec_state` over every member: membership changes each VI's qualified name;
+5. `lvai_bind_pane_typedef` per subVI whose pane carries a typedef (it picks its own route).
 
 ## Reuse what the project already holds
 
@@ -70,8 +71,8 @@ palette and call a fit by name (callable once loaded through the project).
 
 ## One agent, one output directory
 
-Two agents in one folder overwrite each other's files. Give each agent its own folder,
-for example `<project>\Tests\<ClassName>\`, and say so in its prompt.
+Two agents in one folder overwrite each other's files. Give each agent its own folder
+(`<project>\Tests\<ClassName>\`) and say so in its prompt.
 
 ## Check the station with `pylv_status`
 
@@ -90,7 +91,7 @@ LabVIEW's copy over the `.lvproj`. So agents GENERATE files; you alone:
 
 The server enforces this. While tool calls overlap, or overlapped in the last 60 s, it refuses a
 project open or close with `projectChangeWhileParallel`. That applies to you too, so open a project
-once a wave has finished and the guard has lifted (the refusal says how many seconds are left).
+once a wave has finished and the guard has lifted.
 
 A test agent in a parallel build passes `leaveProjectOpen: true` to the test generators: they
 then close no project and list nothing, and report the test VIs for you to list.

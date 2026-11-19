@@ -1071,8 +1071,9 @@ internal sealed class TypedefTools(LvaiConnection connection)
         a generated subVI's pane is the bare type) - lvai_bind_typedef_constants reaches only
         constants.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath) - Replace is a SILENT no-op
-        outside the IDE's instance. On the pylabview default it runs through NI's service when that
-        answers (`routeNote`): over ActiveX this Replace binds nothing (measured).
+        outside the IDE's instance. CALL IT ON ANY BACKEND AND PASS NO `backend`: the tool picks
+        the route that binds by itself and says which in `routeNote`; whether it bound is
+        `verified`, never the route.
         THE VERDICT IS `verified`, three conditions: each terminal's type on the SAVED VI's
         connector pane is its .ctl (read with pylabview - a .ctl used elsewhere in the VI does not
         count), every requested terminal is on the panel, and the helper matched as many as asked.
