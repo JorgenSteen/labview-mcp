@@ -543,6 +543,16 @@ the servers of other sessions), so a tool call that wants a helper mid-compose w
 instead of writing the same file. Given up: a few seconds of one Python worker after each
 start, and helpers composed for nothing in a session that never uses them.
 
+**What it saves, and what it does not - live A/B the same day.** Every helper made stale (13 on
+that station), LabVIEW restarted, then the same two-VI generate: 74.6 s with the warm-up off,
+45.1 s with it on (all 13 recomposed in about 23 s, none failed, no lock file left). Gone: the
+composing inside `tidyConstants` (6.6 s to 2.1 s), `cleanUpPanel` (4.2 s to 2.1 s) and the second
+VI's `cleanUpDiagram` (16.7 s to 5.0 s). NOT gone: the FIRST `cleanUpDiagram`, 32.9 s against
+27.4 s - with helpers LabVIEW had loaded before, the same step took 3.9 s. So that step does not
+wait for the composer. Not tested, the likely reading: a freshly composed helper carries no
+compiled code, and LabVIEW compiles the two layout helpers on their first load. Paying that
+ahead would need a load inside LabVIEW after it starts, which this warm-up does not do.
+
 **Caches.** The resolver's installation index is keyed on its roots AND the write times of the
 locations and chosen version folders, so an `lvpm install` is seen on the next compose instead of
 after its ten-minute lifetime. The palette and example indexes carry the selection in their key
