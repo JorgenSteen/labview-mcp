@@ -95,7 +95,7 @@ internal static class ProjectRewrite
         {
             result["note"] = "The file changed, and one side could not be read as XML, so only the " +
                              "sizes are compared.";
-            result["warning"] = Warning((string?)result["backupPath"], 0, 0, 0, 0, null, null);
+            result["warning"] = Warning((string?)result["backupPath"], 0, 0, 0, 0, 0, null, null);
             return result;
         }
 
@@ -112,10 +112,13 @@ internal static class ProjectRewrite
         var itemsAfter = ProjectItems(now);
         var removed = itemsBefore.Except(itemsAfter, StringComparer.Ordinal).ToList();
         var added = itemsAfter.Except(itemsBefore, StringComparer.Ordinal).ToList();
+        var moved = MovedIntoOwner(removed, LvClass.OwnedMemberPaths(before.Path));
         result["items"] = new JsonObject
         {
             ["removedCount"] = removed.Count,
             ["removed"] = Names(removed),
+            ["movedIntoLibraryOrClassCount"] = moved.Count,
+            ["movedIntoLibraryOrClass"] = Names(moved),
             ["addedCount"] = added.Count,
             ["added"] = Names(added),
         };
@@ -139,14 +142,26 @@ internal static class ProjectRewrite
         result["otherPropertiesChangedCount"] = otherChanges.Count;
         result["otherPropertiesChanged"] = Names(otherChanges);
 
-        result["warning"] = Warning((string?)result["backupPath"], removed.Count,
+        result["warning"] = Warning((string?)result["backupPath"], removed.Count - moved.Count, moved.Count,
                                     specChanges.Count + specsRemoved.Count, depsBefore, depsAfter,
                                     stampBefore, stampAfter);
         return result;
     }
 
     /// <summary>One sentence per kind of change, then where the copy is and when to use it.</summary>
-    private static string Warning(string? backupPath, int itemsRemoved, int specChanges, int depsBefore,
+    /// <summary>
+    /// The removed entries that are now MEMBERS of a library or class the project lists, matched by
+    /// file name: LabVIEW drops the loose entry of a VI that joined a library, and the note called
+    /// that "went missing" - a false alarm in every benchmark build with a library step.
+    /// </summary>
+    internal static List<string> MovedIntoOwner(IEnumerable<string> removed, IEnumerable<string> ownedMemberPaths)
+    {
+        var owned = ownedMemberPaths.Select(p => Path.GetFileName(p))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return [.. removed.Where(r => owned.Contains(r[(r.LastIndexOfAny(['/', '\\']) + 1)..]))];
+    }
+
+    private static string Warning(string? backupPath, int itemsRemoved, int itemsMoved, int specChanges, int depsBefore,
                                   int depsAfter, string? stampBefore, string? stampAfter)
     {
         var parts = new List<string> { "LabVIEW's save REWROTE the .lvproj." };
@@ -160,6 +175,10 @@ internal static class ProjectRewrite
         if (itemsRemoved > 0)
             parts.Add($"{Count(itemsRemoved, "project entry", "project entries")} outside Dependencies " +
                       "went missing (see items.removed).");
+        if (itemsMoved > 0)
+            parts.Add($"{Count(itemsMoved, "project entry", "project entries")} left the project tree because " +
+                      "the VI is now a member of a library or class the project lists (see " +
+                      "items.movedIntoLibraryOrClass) - nothing is lost.");
         if (depsAfter < depsBefore)
             parts.Add($"Dependencies went from {depsBefore} to {depsAfter} entries (LabVIEW lists them " +
                       "again when it loads the VIs).");

@@ -203,4 +203,15 @@ public sealed class ProjectRewriteTests : IDisposable
             }));
         Assert.Contains("may rewrite", LabViewRestart.RewriteNote(null));
     }
+
+    [Fact]
+    public void An_entry_that_became_a_library_member_is_moved_not_missing()
+    {
+        string[] removed = ["My Computer/SubVIs/Find Account.vi", "My Computer/Old Notes.txt", "My Computer/Get Message.vi"];
+        string[] owned = [@"C:\app\SubVIs\Find Account.vi", @"C:\app\SubVIs\get message.vi"];
+
+        Assert.Equal(["My Computer/SubVIs/Find Account.vi", "My Computer/Get Message.vi"],
+                     ProjectRewrite.MovedIntoOwner(removed, owned));
+        Assert.Empty(ProjectRewrite.MovedIntoOwner(removed, []));
+    }
 }

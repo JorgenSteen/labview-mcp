@@ -39,6 +39,8 @@ internal static class DialogAnswer
     public const string Ok = "OK";
 
     public const string ExitSaveTitle = "Save changes? (Exit)";
+    public const string FindMissingVi = "findMissingVi";
+    public const string FindMissingViTitle = "Find the VI Named";
 
     /// <summary>Each kind and the answers it allows. Cancel changes nothing, so it is always allowed for LabVIEW's.</summary>
     internal static readonly Dictionary<string, string[]> Allowed = new(StringComparer.Ordinal)
@@ -47,6 +49,10 @@ internal static class DialogAnswer
         // is the several-VI form, allowed but with no measured picture yet, so it presses nothing.
         [ExitSaveScratchOnly] = [DontSave, DontSaveAll, Cancel],
         [ChangedOnDisk] = [Cancel],
+        // LabVIEW's file dialog for a subVI it cannot find while loading a caller. Cancel ends the
+        // search for THAT callee: the caller finishes loading with the call broken, nothing is
+        // written. A live check (2026-11-19) met twelve in a row and had no tool for them.
+        [FindMissingVi] = [Cancel],
         [NigelBox] = [Ok],
     };
 
@@ -108,7 +114,15 @@ internal static class DialogAnswer
         // ---------- the press ----------
         string means;
         bool posted;
-        if (r.Action == Cancel)
+        if (r.Action == Cancel && r.DialogKind == FindMissingVi
+            && m.Children(r.Handle).FirstOrDefault(c => c.ClassName == "Button" && c.Handle != 0 &&
+                                                        c.Text.Replace("&", "") == Cancel) is { } cancelButton)
+        {
+            // a Win32 file dialog: its own Cancel button, as a hand would press it
+            posted = m.ClickButton(cancelButton.Handle);
+            means = $"BM_CLICK posted to the Cancel button (handle {cancelButton.Handle})";
+        }
+        else if (r.Action == Cancel)
         {
             posted = m.PostKey(r.Handle, VkEscape);
             means = "Esc posted to the dialog window (WM_KEYDOWN/WM_KEYUP); nothing brought to the front";
@@ -222,6 +236,10 @@ internal static class DialogAnswer
                            "disabled frame or Project Explorer): it does not look like the measured modal.";
                 return null;
             }
+            case FindMissingVi:
+                return window.Title.StartsWith(FindMissingViTitle, StringComparison.Ordinal) ? null
+                    : $"findMissingVi is LabVIEW's '{FindMissingViTitle} \"<name>\"' file dialog; this window is " +
+                      $"titled '{window.Title}'.";
             case NigelBox:
                 return window.ClassName == "#32770" ? null
                     : $"nigelBox is a Win32 message box (#32770); this window is {window.ClassName}.";

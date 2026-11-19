@@ -123,6 +123,10 @@ internal sealed class RestartTools(LvaiConnection connection)
         WARNING, measured 2026-10-10: LabVIEW CRASHED on the next call after this dialog had been
         answered. Answering it does not make the VI in memory safe; close or restart LabVIEW next.
         Not exercised live by this tool (unit tests only).
+        findMissingVi - LabVIEW's file dialog `Find the VI Named "<name>"`, raised while it loads a
+        caller whose subVI it cannot find: action "Cancel" (the dialog's own Cancel button). The
+        caller then finishes loading with that call BROKEN; one dialog per missing callee, so read
+        lvai_labview_state again after each.
         nigelBox - a message box of an LVNigelChat this server started: action "OK".
         Anything else: refused (notAllowlisted, notOwnLabview) with the screenshot; nothing pressed.
         The window is read again right before the press (same handle, title, still visible), with
@@ -134,7 +138,7 @@ internal sealed class RestartTools(LvaiConnection connection)
         """)]
     public static async Task<string> AnswerDialogAsync(
         [Description("The dialog window's handle, as lvai_labview_state lists it")] long handle,
-        [Description("exitSaveScratchOnly, changedOnDisk or nigelBox")] string dialogKind,
+        [Description("exitSaveScratchOnly, changedOnDisk, findMissingVi or nigelBox")] string dialogKind,
         [Description("\"Don't Save\", \"Don't Save - All\", \"Cancel\" or \"OK\" - see the description for which kind allows which")]
         string action,
         [Description("The LabVIEW pid your session started, when this server process did not start it")]

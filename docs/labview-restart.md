@@ -380,6 +380,7 @@ these by yourself is fine." `lvai_answer_dialog` implements exactly that, and no
 |---|---|---|---|
 | `exitSaveScratchOnly` | "Save changes? (Exit)" | `Don't Save` (one VI listed), `Don't Save - All` (several), `Cancel` | for a Don't Save: every `*` window of the process is an `LVMCP …` scratch VI, and `listedVis` (every VI the dialog lists, read from its screenshot) are all `LVMCP …` |
 | `changedOnDisk` | the untitled "… has changed on disk since last saved or loaded by LabVIEW …" modal [Revert] [Cancel] | `Cancel` | untitled `LVDChild` classified as a possible dialog (section 4); `viName`, the VI this session touched |
+| `findMissingVi` | LabVIEW's file dialog `Find the VI Named "<name>"`, while a caller loads whose subVI is not found | `Cancel` | title starts with `Find the VI Named`. Since 2026-11-19: a live check grafted a scaffold whose six callees had become library members and met twelve of these, with no tool for them. Cancel is the dialog's own button (`BM_CLICK`, Esc when no such child is listed); the caller then loads with that call BROKEN - the least change, not no change. Unit tests only |
 | `nigelBox` | a Win32 message box (`#32770`) of an `LVNigelChat` this server started | `OK` | |
 
 A refusal presses nothing and returns the screenshot, so the user can decide. Before the press,

@@ -340,7 +340,12 @@ internal sealed class RunningViTools
                         "was not written. Make the control switch-action, or stop the VI with stop.",
                 null => "The helper's error could not be read; see its answer. `signalled` took.",
                 _ => $"The helper answered error {code} on `failed`: a name that is not a control on the panel, or " +
-                     "a value that does not convert to its type. `signalled` took; `notSent` was not written.",
+                     "a value that does not convert to its type. `signalled` took; `notSent` was not written." +
+                     (code == 1103
+                         ? " A CLUSTER or ARRAY is written WHOLE, as LabVIEW's XML (<Cluster><Name>..</Name>" +
+                           "<NumElts>n</NumElts>..one element per field..</Cluster>) - a bracket list is not a " +
+                           "value; one button of a cluster is pressed by signalling the whole cluster."
+                         : ""),
             },
             ["helperError"] = errorXml,
         });

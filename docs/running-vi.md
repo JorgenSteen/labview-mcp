@@ -73,6 +73,16 @@ was driven one action per call - 49 `lvai_running_vi` calls in one build, 20-34 
 others. Each was about half a second in LabVIEW and about five seconds of model turn: 2-4 minutes
 of each build, the largest repeated cost after reading the spec.
 
+## A cluster or array is written whole (2026-11-19)
+
+`set` and `signal` take a cluster or array as LabVIEW's XML, the whole value - that is how
+LabVIEW itself writes one, and pressing ONE button of a cluster of buttons is a signal of the
+whole cluster with that element TRUE (measured in a benchmark build: it works for LATCHED
+buttons inside the cluster too, which a write to the element alone would refuse). A bracket
+list (`[false,true,false]`) answers error 1103 - three benchmark rounds tried it once each -
+and the 1103 answer now says so. No short form was added: the user's call, the whole cluster
+is normal behaviour.
+
 ## Latched booleans: `latchedAsSwitch` (2026-11-17)
 
 **Which booleans latch is in `lvai_describe_vi`'s `booleanActions`, since 2026-11-19** (pylabview
