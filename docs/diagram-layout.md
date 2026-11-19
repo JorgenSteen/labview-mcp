@@ -1363,6 +1363,10 @@ wires, and the user's earlier verdicts read NI's wiring as the tidier one. No ve
 VI where only NI was over the budget (Parse Frames' widths were not recorded), so the rule rests
 on the size rule itself ("an over-budget VI is not done"), not on a judged pair. It also costs one
 more diagram dump when NI wins on the wires (the outline was read only after NI was kept).
+Live A/B on two copies of that delivered VI, 2026-11-19 (installed build against the fix): the old
+rule kept NI at 2575 x 717, the new one kept ours at 1135 x 494, both exec state 1. The price in
+that pair, measured: ours 670 bends and 7 backward wires, NI's 577 and 0 - against 70 000 px of
+wire for ours and 167 000 px for NI's.
 
 **In parallel workers NI's clean-up can fail, measured 2026-11-05.** `lvai_layout_diagrams` with
 4 workers over the 16 MP3 VIs kept our tangled layout of `MP3 Granule Info` (3.26 bends a wire,

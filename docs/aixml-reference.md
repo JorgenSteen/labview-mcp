@@ -2183,6 +2183,38 @@ converter's build of a probe pair, 2026-11-01); the pylabview composer writes an
 `Write to Text File` takes `convertEol` too, on the same bit (read off NI's `Line Stream To
 File.vi`, 2026-11-19; the composer refused the attribute on that node until then, `false`
 included). Absent or `false` leaves the bit clear: write the line ending you want into the text.
+Run in LabVIEW 2026 the same day: the text `a<LF>b` wrote 4 bytes (`a CR LF b`) with
+`convertEol="true"` and 3 bytes without.
+**Not solved by this:** `Write to Text File` given a PATH with its `refnum out` wired on into
+`Close File` composes a broken VI on pylabview (`Polymorphic terminal cannot accept this data
+type`), with or without the attribute. Leave `refnum out` unwired when the node opens the file
+itself from a path (it closes it too), or open with `Open/Create/Replace File` and pass the refnum.
+
+**Appending to a text file: `Set File Position`, `Format Date/Time String`, `End of Line
+Constant`.** Three lookups a timed build's log writer made in vain on 2026-11-18 (no passage named
+any of them, and its first guess overwrote the file). The spellings below are that builder's
+second document, which composed on pylabview and appended correctly over three runs:
+
+```xml
+<Constant _name="from (end)" outputs="value:4210.value" type="uint16" uid="4210" uid_parent="root" value="1"/>
+<Node _name="Set File Position" inputs="refnum:4208.refnum out,from (0\3Astart):4210.value,error in:4208.error out"
+      outputs="refnum out:4212.refnum,error out:4212.error in" uid="4211" uid_parent="root"/>
+<Node _name="Format Date/Time String" inputs="time format string (%c):4213.value"
+      outputs="date/time string:4215.string" uid="4214" uid_parent="root"/>
+```
+
+- `Set File Position` - inputs `refnum`, `from (0\3Astart)` (the colon of the terminal's name is
+  `\3A`), `offset (in bytes) (0)`, `error in`; outputs `refnum out`, `error out`. **`from` is
+  0 = start, 1 = end, 2 = current.** To append, `from` = 1 with `offset` unwired; with 2 the builder's
+  second write overwrote the file (measured).
+- `Format Date/Time String` - inputs `time format string (%c)` and `UTC format`; output
+  `date/time string`. Its time input left unwired formats the current time, which is what the log
+  writer used; that terminal's NAME is not measured (`time stamp` was refused by the composer in
+  an earlier build) - read it from an export before wiring it. Codes as in LabVIEW:
+  `%m/%d/%Y %H:%M:%S`.
+- `End of Line Constant` has no node of its own here: write a string `<Constant>` with
+  `value="&#10;"` (LF) or `&#13;&#10;` (CR LF), or wire plain LF and set `convertEol="true"` on
+  the `Write to Text File`.
 
 **Wiring alone can change an output's type.** `TDMS List Contents` with `group name` UNWIRED
 answers `group names` as `array{string}` and `group/channel names` as the names of every group;
