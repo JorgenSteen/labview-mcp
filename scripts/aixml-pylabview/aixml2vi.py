@@ -3286,6 +3286,7 @@ class Composer:
     XNODE_CALL_ROUTES = {"Match Regular Expression": "Match Regular Expression_Execute.vi"}
     PRIM_MODES = {"In Range and Coerce": ("includeHigh", "includeLow", "aggregate"),   # name -> mode attributes add_node writes
                   "Read from Text File": ("readLines", "convertEol"),
+                  "Write to Text File": ("convertEol",),
                   "Array To Cluster": ("elements",)}
     # COMPARE AGGREGATES (aggregate="true") is the 0x80000 bit of a comparison prim's objFlags,
     # one boolean for two whole clusters or arrays: read off NI's 3D Graph axes_auto_range.vi
@@ -3307,7 +3308,13 @@ class Composer:
                       # differing only in readLines="true", 2026-10-10 (lvpane_sweep.xml uses it)
                       # Convert EOL: 640 -> 33555072, the same way, 2026-11-01 (it was refused
                       # until then, and a test helper of the PC AI DI TDMS build dropped it)
-                      "Read from Text File": {"readLines": 0x4000000, "convertEol": 0x2000000}}
+                      "Read from Text File": {"readLines": 0x4000000, "convertEol": 0x2000000},
+                      # the same bit on the Write prim (8080): NI's own Line Stream To File.vi,
+                      # which NI exports with convertEol="true", has objFlags 33555072 there, and
+                      # two VIs composed without the attribute have 640. It was REFUSED until
+                      # 2026-11-19 ("mode convertEol=false is not composable yet", twice in a
+                      # timed build), and the reader printed no attribute for a Write with it set
+                      "Write to Text File": {"convertEol": 0x2000000}}
     for _n in AGGREGATE_PRIMS:
         PRIM_MODE_BITS.setdefault(_n, {})["aggregate"] = 0x80000
     del _n

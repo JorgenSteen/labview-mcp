@@ -30,12 +30,37 @@ public sealed class PylabviewConvertEolTests
         </VI>
         """;
 
-    private static async Task<XElement> ComposeAndReadAsync(string mode)
+    /// <summary>The WRITE prim carries the same bit: NI's Line Stream To File.vi, exported by NI
+    /// with convertEol="true", has objFlags 33555072 on it. A timed build's file writer was refused
+    /// twice on 2026-11-18, with "false" and with "true".</summary>
+    private static string WriteProbe(string mode) => $$"""
+        <VI _name="EOL Probe.vi" description="Probe.">
+          <Control _name="File" conIdx="0" connection="required" outputs="value:4200.value" type="path" uid="4200" uid_parent="root" value=""/>
+          <Control _name="error in" conIdx="11" connection="required" outputs="value:4201.value" type="cluster{bool.status,int32.code,string.source}" uid="4201" uid_parent="root" value="[false,0,]"/>
+          <Control _name="Text" conIdx="1" connection="recommended" outputs="value:4203.value" type="string" uid="4203" uid_parent="root" value=""/>
+          <Node _name="Write to Text File"{{mode}} inputs="file (use dialog):4200.value,text:4203.value,error in:4201.value" outputs="refnum out:,cancelled:,error out:4202.error out" uid="4202" uid_parent="root"/>
+          <Indicator _name="error out" conIdx="15" connection="recommended" inputs="value:4202.error out" type="cluster{bool.status,int32.code,string.source}" uid="4204" uid_parent="root" value="[false,0,]"/>
+        </VI>
+        """;
+
+    [Theory]
+    [InlineData(" convertEol=\"true\"", "true")]
+    [InlineData(" convertEol=\"false\"", null)]   // refused until 2026-11-19; false is the bit left clear
+    [InlineData("", null)]
+    public async Task Write_to_Text_File_takes_convertEol_too(string mode, string? readBack)
+    {
+        if (!ComposerHere()) return;
+        var node = await ComposeAndReadAsync(mode, WriteProbe(mode), "Write to Text File");
+        Assert.Equal(readBack, (string?)node.Attribute("convertEol"));
+    }
+
+    private static async Task<XElement> ComposeAndReadAsync(string mode, string? document = null,
+                                                            string nodeName = "Read from Text File")
     {
         await using var server = await LvaiTestServer.StartAsync();
         var xml = server.TempPath("eol.xml");
         var vi = server.TempPath("eol.vi");
-        await File.WriteAllTextAsync(xml, Probe(mode));
+        await File.WriteAllTextAsync(xml, document ?? Probe(mode));
 
         var composed = await new AixmlTools(server.Connection).ConvertAixmlToViAsync(
             xml, vi, checkExecutable: false, backend: "pylabview");
@@ -46,7 +71,7 @@ public sealed class PylabviewConvertEolTests
         var read = await AixmlComposer.ReadAsync(setup, vi, output, 120, default);
         Assert.True(read.Written, read.Message);
         return XElement.Load(output).Descendants("Node")
-            .Single(n => (string?)n.Attribute("_name") == "Read from Text File");
+            .Single(n => (string?)n.Attribute("_name") == nodeName);
     }
 
     [Fact]

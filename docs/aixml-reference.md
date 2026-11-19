@@ -2180,6 +2180,9 @@ Wire the scalar form to an array indicator and `ValidateAIXML` says
 
 `convertEol="true"` is the 0x2000000 bit of the node's `objFlags` (640 -> 33555072 on NI's
 converter's build of a probe pair, 2026-11-01); the pylabview composer writes and reads it since then.
+`Write to Text File` takes `convertEol` too, on the same bit (read off NI's `Line Stream To
+File.vi`, 2026-11-19; the composer refused the attribute on that node until then, `false`
+included). Absent or `false` leaves the bit clear: write the line ending you want into the text.
 
 **Wiring alone can change an output's type.** `TDMS List Contents` with `group name` UNWIRED
 answers `group names` as `array{string}` and `group/channel names` as the names of every group;
