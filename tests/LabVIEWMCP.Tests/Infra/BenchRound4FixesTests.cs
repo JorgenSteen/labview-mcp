@@ -135,4 +135,42 @@ public sealed class BenchRound4FixesTests
 
         Assert.Null(info["booleanActions"]);
     }
+
+    [Fact]
+    public void The_helper_prewarm_takes_the_layout_helpers_and_what_the_station_composed_before()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "lvmcp-prewarm-" + Guid.NewGuid().ToString("N"));
+        var scripts = Directory.CreateDirectory(Path.Combine(root, "scripts")).FullName;
+        var helpers = Directory.CreateDirectory(Path.Combine(root, "helpers")).FullName;
+        try
+        {
+            foreach (var shipped in new[] { DiagramLayoutTools.DumpHelper, DiagramLayoutTools.ApplyHelper, "used_before.xml", "never_used.xml" })
+                File.WriteAllText(Path.Combine(scripts, shipped), "<VI/>");
+            File.WriteAllText(Path.Combine(helpers, "used_before.vi"), "");
+            File.WriteAllText(Path.Combine(helpers, "no_longer_shipped.vi"), "");
+            File.WriteAllText(Path.Combine(helpers, Path.ChangeExtension(DiagramLayoutTools.DumpHelper, ".vi")), "");
+
+            Assert.Equal([DiagramLayoutTools.DumpHelper, DiagramLayoutTools.ApplyHelper, "used_before.xml"],
+                         HelperPrewarm.Targets(scripts, helpers));
+            Assert.Equal([DiagramLayoutTools.DumpHelper, DiagramLayoutTools.ApplyHelper],
+                         HelperPrewarm.Targets(scripts, Path.Combine(root, "no-such-folder")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public async Task A_second_compose_of_one_helper_waits_for_the_first()
+    {
+        var vi = Path.Combine(Path.GetTempPath(), "lvmcp-gate-" + Guid.NewGuid().ToString("N") + ".vi");
+        var first = await ComposedHelpers.ComposeGate.EnterAsync(vi, 5, CancellationToken.None);
+        Assert.True(first.HoldsFile);
+
+        var second = ComposedHelpers.ComposeGate.EnterAsync(vi, 5, CancellationToken.None);
+        await Task.Delay(300);
+        Assert.False(second.IsCompleted);
+
+        first.Dispose();
+        using var entered = await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(entered.HoldsFile);
+    }
 }

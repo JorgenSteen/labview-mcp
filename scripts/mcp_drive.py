@@ -19,6 +19,9 @@ reading any answer (how the exec-state/run race of docs/error-list.md 6e was rep
         {"name": "lvai_run_vi_and_read_values", "arguments": {"viPath": "C:\\\\x\\\\A.vi"}}]}
     ]
 
+An entry {"sleep": 30} waits that many seconds before the next call - for looking at what a
+background task of the server did meanwhile.
+
 THE PRIVATE TEMP. With a third argument the exe runs with TMP/TEMP set to that folder. Every
 cache path goes through Path.GetTempPath(), so a branch's helper VIs then never overwrite the
 installed plugin's in %TEMP%\\LabVIEWMCP. Two consequences, both measured: a LabVIEW STARTED
@@ -93,6 +96,10 @@ def main(argv):
         calls = json.load(f)
 
     for entry in calls:
+        if "sleep" in entry:
+            # a pause, so a background task of the server (a pre-warm) can be looked at after it
+            time.sleep(float(entry["sleep"]))
+            continue
         batch = entry["parallel"] if "parallel" in entry else [entry]
         started = time.monotonic()
         ids = [request("tools/call", {"name": c["name"], "arguments": c.get("arguments", {})})

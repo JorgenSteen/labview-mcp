@@ -530,6 +530,19 @@ add-on location satisfies. Explorer cannot pass arguments, so that strategy open
 `.cmd` that does; it is reached only when `breakaway` is refused, which never happened here, so
 its survival is not measured.
 
+**The helper VIs are composed in the background after a start, since 2026-11-19**
+(`HelperPrewarm`; `pylv_status` `helperPrewarm`; `LABVIEWMCP_HELPER_PREWARM=0` switches it off).
+A composed helper is stale after every new build - its AIXML is newer - and the first tool call
+then composed it while the caller waited. Symptom: a benchmark build's first
+`lvai_generate_vis` took 95 s; measured afterwards with `stepMs`, two small VIs took 59.7 s on
+an empty helper cache (31.7 s of it the first VI's `cleanUpDiagram`) and 14.4 s on a warm one.
+The warm-up composes the layout engine's two helpers and every helper this station has composed
+before, one at a time, with no LabVIEW; a server started on an empty cache had both layout
+helpers 10 s after its start. A compose now holds a lock per helper (`<vi>.lock`, also across
+the servers of other sessions), so a tool call that wants a helper mid-compose waits for it
+instead of writing the same file. Given up: a few seconds of one Python worker after each
+start, and helpers composed for nothing in a session that never uses them.
+
 **Caches.** The resolver's installation index is keyed on its roots AND the write times of the
 locations and chosen version folders, so an `lvpm install` is seen on the next compose instead of
 after its ten-minute lifetime. The palette and example indexes carry the selection in their key

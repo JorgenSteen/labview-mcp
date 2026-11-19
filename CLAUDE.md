@@ -90,7 +90,8 @@ add-on install it needs `refresh=true` once. A hit may be a `.lvproj` - use
 **Exports of installation VIs are cached** under `%USERPROFILE%\.labviewmcp\cache\aixml` (not
 `%LOCALAPPDATA%`; `CacheDirectory.Root` is the authority). Your own code is never cached, because
 an export depends on its subVIs too. So browsing examples is cheap - browse. On the pylabview
-backend the server reads the examples into the cache in the background after a start and deletes
+backend the server composes its helper VIs in the background after a start (`HelperPrewarm`:
+they are stale after every new build, and the first generate paid for it), reads the examples into the cache in the background after a start and deletes
 reader entries of older reader code (`ReaderPrewarm`; progress in `pylv_status readerPrewarm`,
 coverage - warm, partial, cold - in `exportCache`). Triage several
 candidates in ONE `lvai_convert_vis_to_aixml`; LabVIEW serialises the work, so fanning out

@@ -81,6 +81,12 @@ internal static class ComposedHelpers
         if (!IsStale(aixml, vi, stamp, partsInUse)) return (vi, null, false);
 
         Directory.CreateDirectory(Folder);
+        // ONE COMPOSE PER HELPER AT A TIME. The background pre-warm (HelperPrewarm) and a tool
+        // call can want the same helper in the same second, and so can the servers of two
+        // sessions started together; two composers writing one file leave neither's VI. Whoever
+        // comes second waits and then finds the helper current.
+        using var gate = await ComposeGate.EnterAsync(vi, timeoutSeconds, ct);
+        if (!IsStale(aixml, vi, stamp, partsInUse)) return (vi, null, false);
         var composed = await AixmlComposer.ComposeAsync(setup, aixml, vi, [Folder, scripts],
                                                         timeoutSeconds, ct);
         if (!composed.Written)
@@ -105,6 +111,63 @@ internal static class ComposedHelpers
     internal static bool IsStale(string aixmlPath, string viPath, string stampPath, string expected) =>
         !File.Exists(viPath) || HelperCache.NeedsRebuild(aixmlPath, viPath)
         || !File.Exists(stampPath) || File.ReadAllText(stampPath) != expected;
+
+    /// <summary>
+    /// The lock one compose of one helper holds: a semaphore for this process and a lock FILE
+    /// (`<vi>.lock`, opened with no sharing, deleted on close) for the other servers on the
+    /// machine. It FAILS OPEN: when the file cannot be had within the budget the compose runs
+    /// anyway, as it always did before there was a lock.
+    /// </summary>
+    internal sealed class ComposeGate : IDisposable
+    {
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> Local =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        private readonly SemaphoreSlim _local;
+        private readonly FileStream? _file;
+
+        private ComposeGate(SemaphoreSlim local, FileStream? file) => (_local, _file) = (local, file);
+
+        /// <summary>True when the lock file is held - false after a fail-open.</summary>
+        internal bool HoldsFile => _file is not null;
+
+        internal static async Task<ComposeGate> EnterAsync(string viPath, int timeoutSeconds, CancellationToken ct)
+        {
+            var local = Local.GetOrAdd(Path.GetFullPath(viPath), _ => new SemaphoreSlim(1, 1));
+            await local.WaitAsync(ct);
+            try
+            {
+                var until = DateTime.UtcNow.AddSeconds(Math.Max(1, timeoutSeconds));
+                while (true)
+                {
+                    try
+                    {
+                        return new ComposeGate(local, new FileStream(viPath + ".lock", FileMode.OpenOrCreate,
+                            FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose));
+                    }
+                    catch (IOException) when (DateTime.UtcNow < until)
+                    {
+                        await Task.Delay(200, ct);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        return new ComposeGate(local, null);
+                    }
+                }
+            }
+            catch
+            {
+                local.Release();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            _file?.Dispose();
+            _local.Release();
+        }
+    }
 
     /// <summary>Which parts, and of when - a changed table or a different folder rebuilds the helper.</summary>
     private static string PartsStamp(string partsDirectory)

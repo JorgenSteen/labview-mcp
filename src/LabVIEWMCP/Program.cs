@@ -246,6 +246,14 @@ _ = ReaderPrewarm.RunAsync(LoggerFactory.Create(b =>
     b.SetMinimumLevel(LogLevel.Information);
 }).CreateLogger("reader-prewarm"));
 
+// And the helper VIs the pylabview backend composes: stale after every new build, and the first
+// generate call then paid for composing them (HelperPrewarm has the measurement).
+_ = HelperPrewarm.RunAsync(LoggerFactory.Create(b =>
+{
+    b.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+    b.SetMinimumLevel(LogLevel.Information);
+}).CreateLogger("helper-prewarm"));
+
 await builder.Build().RunAsync();
 return 0;
 

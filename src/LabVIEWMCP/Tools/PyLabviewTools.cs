@@ -42,6 +42,7 @@ internal sealed class PyLabviewTools(LvaiConnection connection)
         AFTER a failure, never as a gate), and `grpcService`: whether NI's service answers, as a
         side fact (a composerRefused call may be repeated on grpc only while it reads reachable).
         `readerPrewarm`: the background read of the examples into the export cache;
+        `helperPrewarm`: the background compose of the helper VIs after a start;
         `exportCache`: how many of those examples the cache covers NOW (`state` warm, partial, cold,
         or unknown while the example index is still being built).
         Readiness to work is lvai_ensure_labview. A source checkout has no bundle until
@@ -93,6 +94,10 @@ internal sealed class PyLabviewTools(LvaiConnection connection)
             var camel = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
             answer["readerPrewarm"] = ReaderPrewarm.Current is { } p
                 ? JsonSerializer.SerializeToNode(p, camel)
+                : new JsonObject { ["state"] = "not started" };
+            // The background compose of the helper VIs (HelperPrewarm).
+            answer["helperPrewarm"] = HelperPrewarm.Current is { } h
+                ? JsonSerializer.SerializeToNode(h, camel)
                 : new JsonObject { ["state"] = "not started" };
             // How much of what it reads is covered right now, from the files - warm or not is
             // visible at once after a start, not only when a run has finished.
