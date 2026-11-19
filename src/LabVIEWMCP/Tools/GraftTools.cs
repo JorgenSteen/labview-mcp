@@ -77,7 +77,7 @@ internal sealed class GraftTools(LvaiConnection connection)
         [Description("Absolute path the grafted VI is written to - a copy of panelViPath. Must differ from both inputs")]
         string outputViPath,
         [Description("Overwrite outputViPath when it exists")] bool overwrite = false,
-        [Description("Copy each scaffold control's non-empty description onto the supplied control")]
+        [Description("Copy each scaffold control's non-empty description onto a supplied control that has NONE; a supplied description is never replaced")]
         bool copyDescriptions = true,
         [Description("Render the panel before and after and compare the images byte for byte")]
         bool comparePanel = true,

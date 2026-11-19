@@ -88,8 +88,12 @@ milliseconds since the step before, a repeated name summed - also in `lvai_gener
 the steps themselves are dropped. Symptom that led to it: a CLD benchmark build whose first two
 generate calls took 95 s and 58 s (15 s and less in the next run) answered only
 `totalElapsedMs`, so the transcript could not say whether composing, the executable check or the
-layout was slow. Cost: about 150 characters per generated VI. The 95 s itself is still
-unexplained - read `stepMs` the next time it shows.
+layout was slow. Cost: about 150 characters per generated VI. Measured with it the same day, two
+small VIs in one `lvai_generate_vis`: 59.7 s in a fresh LabVIEW with an empty helper cache -
+`cleanUpDiagram` of the FIRST VI 31.7 s, `tidyConstants` 6.8 s, `cleanUpPanel` 6.4 s, the second
+VI 8.7 s in all - 25.7 s repeated in the same LabVIEW, 14.4 s after a LabVIEW restart with the
+cache warm. So the first use of the layout helpers after a new build is the cost; the 95 s was
+that plus a second builder's call queued behind it (not reproduced as such).
 
 **`ok: false` with `failedAtStep: "connectorPane"` still means the `.vi` was written.** The
 generation succeeded; the pane needs another pass. The corrected `conIdx` values come back in the

@@ -3,7 +3,7 @@
   <Control _name="Target Path" conIdx="1" connection="recommended" description="The VI holding the pasted diagram. Saved in place." outputs="value:4210.value" type="string" uid="4210" uid_parent="root" value=""/>
   <Control _name="Originals" conIdx="2" connection="recommended" description="Labels of the supplied controls, one per pair." outputs="value:4211.value" type="array{string}" uid="4211" uid_parent="root" value="[]"/>
   <Control _name="Duplicates" conIdx="3" connection="recommended" description="Labels of their pasted duplicates, in the same order." outputs="value:4214.value" type="array{string}" uid="4214" uid_parent="root" value="[]"/>
-  <Control _name="Copy Descriptions" conIdx="4" connection="recommended" description="TRUE copies a non-empty description from the duplicate onto the supplied control before the duplicate is deleted." outputs="value:4215.value" type="bool" uid="4215" uid_parent="root" value="true"/>
+  <Control _name="Copy Descriptions" conIdx="4" connection="recommended" description="TRUE copies a non-empty description from the duplicate onto a supplied control that has NONE, before the duplicate is deleted. A supplied description is never replaced." outputs="value:4215.value" type="bool" uid="4215" uid_parent="root" value="true"/>
   <Control _name="error in" conIdx="11" connection="recommended" description="Error chain in." outputs="value:4212.value" type="cluster{bool.status,int32.code,string.source}" uid="4212" uid_parent="root" value="[false,0,]"/>
   <Control _name="Switch Labels" description="Labels of boolean controls whose Mechanical Action is set to Switch When Pressed, in the same run and before the save. Empty sets none." outputs="value:4216.value" type="array{string}" uid="4216" uid_parent="root" value="[]"/>
   <Constant _name="Boolean Class" outputs="value:4217.value" type="ref{LV.Boolean}" uid="4217" uid_parent="root" value=""/>
@@ -58,7 +58,11 @@
     <Node _name="String Length" inputs="string:4313.ddesc" outputs="length:4345.length" uid="4345" uid_parent="4300"/>
     <Node _name="Greater Than 0?" inputs="x:4345.length" outputs="x &gt; 0?:4346.hasdesc" uid="4346" uid_parent="4300"/>
     <Node _name="And" inputs="x:4346.hasdesc,y:4308.copy" outputs="x .and. y?:4347.take" uid="4347" uid_parent="4300"/>
-    <Node _name="Select" inputs="t:4313.ddesc,s:4347.take,f:4340.tdesc" outputs="s? t\3Af:4348.desc" uid="4348" uid_parent="4300"/>
+    <Node _name="String Length" inputs="string:4340.tdesc" outputs="length:4355.length" uid="4355" uid_parent="4300"/>
+    <Node _name="Greater Than 0?" inputs="x:4355.length" outputs="x &gt; 0?:4356.thas" uid="4356" uid_parent="4300"/>
+    <Node _name="Not" inputs="x:4356.thas" outputs=".not. x?:4357.tempty" uid="4357" uid_parent="4300"/>
+    <Node _name="And" inputs="x:4347.take,y:4357.tempty" outputs="x .and. y?:4358.fill" uid="4358" uid_parent="4300"/>
+    <Node _name="Select" inputs="t:4313.ddesc,s:4358.fill,f:4340.tdesc" outputs="s? t\3Af:4348.desc" uid="4348" uid_parent="4300"/>
     <Node _name="Property Node" fields="write+Description" type="{LV.Control}" inputs="reference:4311.element,error in (no error):4340.error out,Description:4348.desc" outputs="reference out:,error out:4349.error out" uid="4349" uid_parent="4300"/>
 
     <Constant _name="duplicate" outputs="value:4341.value" type="bool" uid="4341" uid_parent="4300" value="false"/>
