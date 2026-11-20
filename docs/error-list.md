@@ -212,7 +212,7 @@ Not found: why the project instance refuses, and why not from the first call. Wh
 close the project and ask again. `lvai_error_list` did not help - it lists what LabVIEW holds in
 memory, and answered `brokenCount: 0` in every case.
 
-**The fallback, since 2026-11-20 (NOT yet checked live):** when a BROKEN VI read in the project's
+**The fallback, since 2026-11-20 (checked live the same day, see below):** when a BROKEN VI read in the project's
 instance still has no lines after the retry and Get Errors answered 1026, the helper runs once
 more with its new `own instance` input TRUE and reads the VI in its own application instance.
 Lines from there join the answer as `errors`, with `errorsFromInstance: "own"` and
@@ -221,3 +221,13 @@ taken from a second copy that is not broken or gave no lines. Given up: that cop
 WITHOUT the project, so a line about something only the project resolves (a library, a
 project-local callee) can be an artefact of the copy - the note says so; and one more helper run
 (seconds) in the one case that had no lines at all before.
+
+**Live check, 2026-11-20, LabVIEW 2026.** The 2026-11-19 sequence (open a project, generate the
+broken probe, `lvai_exec_state` on the broken VI) hit 1026 once in four runs: that run answered
+`instance: "project"`, `errorsRead: true`, `errorsFromInstance: "own"`, the line `While Loop:
+Conditional terminal is not wired`, and an `errorsInstanceNote` naming Get Errors error 1026. That
+call took 7.4 s, against 1-2 s otherwise. The other three runs on the branch, and three on the
+previous build, never got 1026 and read the line in the project instance directly. So 1026 is
+INTERMITTENT, seen in the first project session after a fresh LabVIEW start. Because of that the
+old build could not be made to fail on demand that day; its failure is in the 2026-11-19 logs. A
+minimal project holding only the broken VI never answered 1026 at all.
