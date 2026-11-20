@@ -447,6 +447,17 @@ internal static class PaletteIndex
     /// entries: a member of a library container is qualified with it; one found in a directory or
     /// an .llb is qualified with the library that lists that file, if any.
     /// </summary>
+    /// <summary>
+    /// vi.lib\dlg_ctls.llb holds the extension-less stand-ins for PRIMITIVES, in whatever form
+    /// the installation ships it: a FOLDER in LabVIEW 2025/2026, a real .llb FILE in LabVIEW
+    /// 2020 - where the file-only rule above let `Machine Epsilon` through as a callable VI
+    /// (measured 2026-11-20, once the station's remembered LabVIEW was 2020). Given up: an
+    /// extension-less member of that one container is never listed.
+    /// </summary>
+    internal static bool IsPrimitiveStandIns(string place) =>
+        string.Equals(Path.GetFileName(Path.TrimEndingDirectorySeparator(place)), "dlg_ctls.llb",
+                      StringComparison.OrdinalIgnoreCase);
+
     private sealed class ContainerLookup(string root, IReadOnlyList<PaletteSource> sources)
     {
         private readonly Dictionary<string, HashSet<string>?> _libraryMembers = new(StringComparer.OrdinalIgnoreCase);
@@ -485,7 +496,8 @@ internal static class PaletteIndex
         {
             foreach (var place in places)
             {
-                if (llbFilesOnly && !(place.EndsWith(".llb", StringComparison.OrdinalIgnoreCase) && File.Exists(place)))
+                if (llbFilesOnly && (!(place.EndsWith(".llb", StringComparison.OrdinalIgnoreCase) && File.Exists(place)) ||
+                                     IsPrimitiveStandIns(place)))
                     continue;
                 // a LIBRARY or a CLASS as the container: Report Generation's plat-nireport.mnu
                 // names `<vilib>\Utility\NIReport.llb\NI_report.lvclass`, and its items are that

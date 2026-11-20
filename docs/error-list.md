@@ -196,3 +196,38 @@ VIs inside LabVIEW. So the retry (`NeedsErrorsRetry`) now fires on `1026` whatev
 well as on any refusal for a broken VI; `1073` on a running VI is still not retried. When the lines
 are still missing on an executable VI, `errorsNotReadBecause` says so and adds that it is harmless:
 an executable VI has no error line to miss.
+
+## Error 1026 from Get Errors belongs to the PROJECT instance (measured 2026-11-19)
+
+Symptom (a benchmark build, pylabview backend): a broken generated VI answered
+`errorsNotReadBecause: Get Errors answered error 1026`, and the builder fell back to one gRPC
+validate to learn the cause. Reproduced: a deliberately broken VI (an unwired `reference` on a
+Property Node) generated with its project OPEN answered 1026 in `lvai_generate_vi` and in
+`lvai_exec_state` (instance `project`, `errorsRead: false`), and from then on a second broken VI
+that had read its line a minute earlier in the same project instance answered 1026 too. With the
+project CLOSED both read at once (instance `own`): `Property Node: Contains unwired or bad
+terminal` and `While Loop: Conditional terminal is not wired`. With no project at all the errors
+always read. An EXECUTABLE VI in the project instance answers 1026 as well, harmlessly.
+Not found: why the project instance refuses, and why not from the first call. What works today:
+close the project and ask again. `lvai_error_list` did not help - it lists what LabVIEW holds in
+memory, and answered `brokenCount: 0` in every case.
+
+**The fallback, since 2026-11-20 (checked live the same day, see below):** when a BROKEN VI read in the project's
+instance still has no lines after the retry and Get Errors answered 1026, the helper runs once
+more with its new `own instance` input TRUE and reads the VI in its own application instance.
+Lines from there join the answer as `errors`, with `errorsFromInstance: "own"` and
+`errorsInstanceNote`; `execState`, `linkerErrors` and `instance` stay the project's. Nothing is
+taken from a second copy that is not broken or gave no lines. Given up: that copy is loaded
+WITHOUT the project, so a line about something only the project resolves (a library, a
+project-local callee) can be an artefact of the copy - the note says so; and one more helper run
+(seconds) in the one case that had no lines at all before.
+
+**Live check, 2026-11-20, LabVIEW 2026.** The 2026-11-19 sequence (open a project, generate the
+broken probe, `lvai_exec_state` on the broken VI) hit 1026 once in four runs: that run answered
+`instance: "project"`, `errorsRead: true`, `errorsFromInstance: "own"`, the line `While Loop:
+Conditional terminal is not wired`, and an `errorsInstanceNote` naming Get Errors error 1026. That
+call took 7.4 s, against 1-2 s otherwise. The other three runs on the branch, and three on the
+previous build, never got 1026 and read the line in the project instance directly. So 1026 is
+INTERMITTENT, seen in the first project session after a fresh LabVIEW start. Because of that the
+old build could not be made to fail on demand that day; its failure is in the 2026-11-19 logs. A
+minimal project holding only the broken VI never answered 1026 at all.

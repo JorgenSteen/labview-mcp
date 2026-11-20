@@ -33,7 +33,8 @@ internal sealed class InspectTools(LvaiConnection connection)
         int maxContentChars = 0,
         [Description(AixmlBackend.ParameterDescription + """
              On pylabview the answer is read from the FILE in the same shape, with no running
-            LabVIEW; viImage stays empty.
+            LabVIEW; viImage stays empty, and `booleanActions` names the latched and the switch
+            boolean controls (`Cluster.Element` inside a cluster).
             """)]
         string? backend = null,
         CancellationToken ct = default) =>

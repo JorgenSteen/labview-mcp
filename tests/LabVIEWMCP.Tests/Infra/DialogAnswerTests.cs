@@ -228,4 +228,50 @@ public class DialogAnswerTests
         var once = new WindowImage(6, 1, [10, 10, 10, 200, 200, 200, 0, 0, 0, 0, 0, 0, 90, 90, 90, 90, 90, 90]);
         Assert.Equal((0, 0), DialogButtons.Find(once, needle));
     }
+
+    private static FakeLabViewMachine FindDialog(string title, bool withCancelButton = true)
+    {
+        var m = new FakeLabViewMachine();
+        m.AddProcess(Lv, "LabVIEW");
+        m.AddWindow(Lv, "LVFrame", "LabVIEW", true, handle: 61, enabled: false);
+        m.AddWindow(Lv, "#32770", title, true, handle: Prompt, owner: 61);
+        m.ChildMap[Prompt] = withCancelButton
+            ? [new("Button", "&Open", 71), new("Button", "Cancel", 72)]
+            : [new("Static", "File name:")];
+        m.OnInput = _ => m.WindowList.RemoveAll(w => w.Handle == Prompt);
+        return m;
+    }
+
+    [Fact]
+    public async Task The_find_the_vi_dialog_is_cancelled_with_its_own_button()
+    {
+        var m = FindDialog("Find the VI Named \"Get Elapsed Seconds.vi\"");
+        var a = await Ask(m, DialogAnswer.FindMissingVi, DialogAnswer.Cancel, listed: null);
+
+        Assert.True(a["ok"]!.GetValue<bool>());
+        Assert.Equal(["button 72"], m.Inputs);
+    }
+
+    [Fact]
+    public async Task The_find_the_vi_dialog_without_a_listed_cancel_button_gets_esc()
+    {
+        var m = FindDialog("Find the VI Named \"A.vi\"", withCancelButton: false);
+        var a = await Ask(m, DialogAnswer.FindMissingVi, DialogAnswer.Cancel, listed: null);
+
+        Assert.True(a["ok"]!.GetValue<bool>());
+        Assert.Equal([$"key 27 @{Prompt}"], m.Inputs);
+    }
+
+    [Fact]
+    public async Task Another_file_dialog_or_another_answer_is_not_the_find_the_vi_kind()
+    {
+        var other = FindDialog("Choose or enter file path");
+        Assert.Equal("notAllowlisted", Kind(await Ask(other, DialogAnswer.FindMissingVi, DialogAnswer.Cancel)));
+        Assert.Empty(other.Inputs);
+
+        var find = FindDialog("Find the VI Named \"A.vi\"");
+        Assert.Equal("notAllowlisted", Kind(await Ask(find, DialogAnswer.FindMissingVi, DialogAnswer.Ok)));
+        Assert.Equal("notOwnLabview", Kind(await Ask(find, DialogAnswer.FindMissingVi, DialogAnswer.Cancel, pid: null, note: null)));
+        Assert.Empty(find.Inputs);
+    }
 }

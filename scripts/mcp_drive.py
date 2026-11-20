@@ -19,6 +19,9 @@ reading any answer (how the exec-state/run race of docs/error-list.md 6e was rep
         {"name": "lvai_run_vi_and_read_values", "arguments": {"viPath": "C:\\\\x\\\\A.vi"}}]}
     ]
 
+An entry {"sleep": 30} waits that many seconds before the next call - for looking at what a
+background task of the server did meanwhile.
+
 THE PRIVATE TEMP. With a third argument the exe runs with TMP/TEMP set to that folder. Every
 cache path goes through Path.GetTempPath(), so a branch's helper VIs then never overwrite the
 installed plugin's in %TEMP%\\LabVIEWMCP. Two consequences, both measured: a LabVIEW STARTED
@@ -42,6 +45,14 @@ import time
 
 
 def main(argv):
+    # Answers carry non-ASCII text (an arrow, typographic quotes). Under `python -I` the
+    # PYTHONIOENCODING variable is ignored and a cp1252 console crashed the printer on the first
+    # one (measured 2026-11-20), so the output encoding is set here rather than by the caller.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if len(argv) < 3 or argv[1] in ("-h", "--help"):
         print(__doc__)
         return 0 if len(argv) > 1 else 2
@@ -93,6 +104,10 @@ def main(argv):
         calls = json.load(f)
 
     for entry in calls:
+        if "sleep" in entry:
+            # a pause, so a background task of the server (a pre-warm) can be looked at after it
+            time.sleep(float(entry["sleep"]))
+            continue
         batch = entry["parallel"] if "parallel" in entry else [entry]
         started = time.monotonic()
         ids = [request("tools/call", {"name": c["name"], "arguments": c.get("arguments", {})})

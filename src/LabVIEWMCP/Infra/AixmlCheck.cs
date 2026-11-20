@@ -1816,6 +1816,53 @@ internal static class AixmlCheck
         return new Fixed(repaired, repairs, Check(repaired, policy));
     }
 
+    /// <summary>How many findings of one code are written out in full before the rest are folded.</summary>
+    internal const int FullFindingsPerCode = 3;
+
+    /// <summary>
+    /// The findings as written into an answer: the first <see cref="FullFindingsPerCode"/> of each
+    /// code in full, the rest of that code folded into ONE entry that carries their count and
+    /// uids. A CLD benchmark build (2026-11-19) named every tunnel of a Case Structure wrongly and
+    /// got the same 300-character rule back 110 times, a 43 KB answer for one mistake. `errors`
+    /// and `warnings` still count every finding. What is given up: the folded findings' own
+    /// message texts (for most codes the same sentence with another value in it) - their uids
+    /// stay, and a check of the corrected file names whatever is left.
+    /// </summary>
+    internal static JsonArray Collapsed(List<Finding> findings)
+    {
+        var array = new JsonArray();
+        var seen = new Dictionary<(Severity, string), int>();
+        var folded = new Dictionary<(Severity, string), JsonObject>();
+        foreach (var finding in findings)
+        {
+            var key = (finding.Severity, finding.Code);
+            var count = seen[key] = seen.GetValueOrDefault(key) + 1;
+            if (count <= FullFindingsPerCode)
+            {
+                array.Add(finding.ToJson());
+                continue;
+            }
+            if (!folded.TryGetValue(key, out var entry))
+            {
+                entry = new JsonObject
+                {
+                    ["severity"] = finding.Severity.ToString().ToLowerInvariant(),
+                    ["code"] = finding.Code,
+                    ["repeated"] = 0,
+                    ["uids"] = new JsonArray(),
+                    ["message"] = "",
+                };
+                folded[key] = entry;
+                array.Add(entry);
+            }
+            entry["repeated"] = count - FullFindingsPerCode;
+            if (finding.Uid is { } uid) entry["uids"]!.AsArray().Add(uid);
+            entry["message"] = $"{count - FullFindingsPerCode} more `{finding.Code}` finding(s), the same rule " +
+                               $"as the {FullFindingsPerCode} above, at the uids listed.";
+        }
+        return array;
+    }
+
     /// <summary>The whole answer, ready to embed in a tool result.</summary>
     internal static JsonObject Summarise(List<Finding> findings)
     {
@@ -1827,7 +1874,7 @@ internal static class AixmlCheck
             ["ok"] = errors == 0,
             ["errors"] = errors,
             ["warnings"] = warnings,
-            ["findings"] = new JsonArray([.. findings.Select(f => (JsonNode)f.ToJson())]),
+            ["findings"] = Collapsed(findings),
             ["note"] = errors == 0 && warnings == 0
                 ? "Nothing found. This checks ONLY what ValidateAIXML was measured not to check - "
                   + "duplicate uids, a uid_parent naming no element, a Ring default outside its "

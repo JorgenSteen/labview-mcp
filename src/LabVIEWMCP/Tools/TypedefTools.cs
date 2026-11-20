@@ -1375,7 +1375,8 @@ internal sealed class TypedefTools(LvaiConnection connection)
         carries a connector pane, and NI's accessor wizard (lvai_create_accessors) answers Error 1061
         on its field. A NEW typedef is better made with lvai_create_typedef, which needs no resave.
         It converts only a .ctl that was generated with the project CLOSED.
-        PRECONDITION: a project OPEN and ACTIVE (pass projectPath).
+        PRECONDITION: a project OPEN and ACTIVE (pass projectPath; a project this call opens it
+        closes again - `projectLeftOpen`).
         THE VERDICT IS `wrappedTypeAfter`, re-read from the saved file: it must be `TypeDef`;
         `errorCode 0` alone proves nothing. A no-op on a .ctl LabVIEW already wrote.
         """)]
@@ -1424,17 +1425,16 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 helperGenerated = true;
             }
 
+            // A project this call opened is closed again at the end, as lvai_create_typedef does;
+            // one that was already active stays as the caller left it. Measured 2026-11-20: the
+            // project used to stay open and active, and the answer did not say so.
+            var openedHere = false;
             if (projectPath is { Length: > 0 })
             {
-                var opened = await new ActionTools(connection).OpenFileAsync(
-                    viPath: null, viName: null, projectPath: Path.GetFullPath(projectPath),
-                    projectName: Path.GetFileName(projectPath),
-                    checkActive: true, timeoutSeconds, ct: ct);
-                steps.Add(new JsonObject
-                {
-                    ["step"] = "openProject",
-                    ["answer"] = Parse(opened),
-                });
+                var (active, openStep) = await TypedefCreateTools.EnsureProjectActiveAsync(
+                    connection, Path.GetFullPath(projectPath), timeoutSeconds, ct);
+                openedHere = active && openStep["alreadyActive"] is null;
+                steps.Add(openStep);
             }
 
             var before = await DescribeCtlOnDiskAsync(ctlPath, timeoutSeconds, ct);
@@ -1445,14 +1445,32 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 new JsonObject { ["ctl path"] = Path.GetFullPath(ctlPath) }.ToJsonString(),
                 includeRawXml: false, helperViPath: null, helperAixmlPath: null,
                 regenerateHelper: false, timeoutSeconds, ct: ct);
-            steps.Add(new JsonObject { ["step"] = "resave", ["answer"] = Parse(answer) });
+            var resaveAnswer = Parse(answer);
+            steps.Add(new JsonObject { ["step"] = "resave", ["answer"] = resaveAnswer });
+            // The helper's own error out decides as much as the file does: a file that already
+            // read TypeDef passes the file test even when the helper reached nothing (measured
+            // 2026-11-20 - Error 1055 with no project active, file untouched, ok was true).
+            var helperError = CarayaRunTools.ErrorOut(resaveAnswer?["values"] as JsonObject);
+            var helperFailed = helperError?["status"]?.GetValue<bool>() == true ||
+                               helperError?["code"]?.GetValue<int?>() is { } errorCode and not 0;
+
+            if (openedHere)
+                steps.Add(new JsonObject
+                {
+                    ["step"] = "closeProject",
+                    ["answer"] = Parse(await new CloseTools(connection).CloseActiveProjectAsync(
+                        projectPath: Path.GetFullPath(projectPath!), timeoutSeconds: timeoutSeconds,
+                        ct: ct)),
+                });
 
             var after = await DescribeCtlOnDiskAsync(ctlPath, timeoutSeconds, ct);
             var wrappedAfter = after?["wrappedType"]?.GetValue<string>();
 
             return Json.Document(new JsonObject
             {
-                ["ok"] = wrappedAfter == "TypeDef",
+                ["ok"] = wrappedAfter == "TypeDef" && !helperFailed,
+                ["projectLeftOpen"] = projectPath is { Length: > 0 } ? !openedHere : null,
+                ["helperErrorOut"] = helperError?.DeepClone(),
                 ["ctlPath"] = Path.GetFullPath(ctlPath),
                 ["wrappedTypeBefore"] = before?["wrappedType"]?.GetValue<string>(),
                 ["wrappedTypeAfter"] = wrappedAfter,
@@ -1464,7 +1482,14 @@ internal sealed class TypedefTools(LvaiConnection connection)
                 ["helperAixmlPath"] = Path.GetFullPath(aixml),
                 ["helperGenerated"] = helperGenerated,
                 ["steps"] = steps,
-                ["note"] = wrappedAfter == "TypeDef"
+                ["note"] = helperFailed
+                    ? $"The helper failed (error out code {helperError?["code"]}) and the file was " +
+                      "not rewritten by it" +
+                      (helperError?["code"]?.GetValue<int?>() == 1055
+                          ? " - Error 1055: no project was open and active, so the helper reached " +
+                            "nothing. Pass projectPath."
+                          : ".")
+                    : wrappedAfter == "TypeDef"
                     ? "The saved file now reads wrappedType 'TypeDef' - LabVIEW has written it in " +
                       "its own shape and NI's accessor wizard will take it. Read from the file " +
                       "with pylabview, not from the session."

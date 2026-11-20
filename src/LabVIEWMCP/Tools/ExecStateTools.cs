@@ -33,7 +33,8 @@ internal sealed record ExecStateReading(int State, string LinkerErrors, int Code
                                         bool LinkerErrorsRead = true,
                                         IReadOnlyList<ErrorListTools.ErrorLine>? Errors = null,
                                         int? GetErrorsCode = null,
-                                        string? Instance = null)
+                                        string? Instance = null,
+                                        string? ErrorsInstance = null)
 {
     /// <summary>The VI is not executable. Only 0 means this.</summary>
     internal bool Broken => State == 0;
@@ -309,6 +310,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
             errors = ErrorsJson(reading),
             errorsRead = reading.Errors is not null,
             errorsNotReadBecause = ErrorsNotReadBecause(reading),
+            errorsFromInstance = reading.ErrorsInstance,
+            errorsInstanceNote = ErrorsInstanceNote(reading),
             code = reading.Code,
             source = reading.Source,
             note = reading.CouldNotOpen
@@ -425,6 +428,8 @@ internal sealed class ExecStateTools(LvaiConnection connection)
             errors = ErrorsJson(r),
             errorsRead = r.Errors is not null,
             errorsNotReadBecause = r.LinkerErrorsRead ? ErrorsNotReadBecause(r) : read.WhyNoHelper,
+            errorsFromInstance = r.ErrorsInstance,
+            errorsInstanceNote = ErrorsInstanceNote(r),
             linkerErrorsUnavailableBecause = read.WhyNoHelper,
             code = r.Code,
             source = r.Source,
@@ -530,6 +535,38 @@ internal sealed class ExecStateTools(LvaiConnection connection)
         r is { Errors: null, GetErrorsCode: 1026 } and { CouldNotOpen: false }
         || r is { Broken: true, Errors: null, GetErrorsCode: not null and not 0 };
 
+    /// <summary>The helper's boolean input that forces its own application instance.</summary>
+    internal const string OwnInstanceInput = "own instance";
+
+    /// <summary>
+    /// A BROKEN VI read in the PROJECT's instance whose lines Get Errors refused with 1026 - also
+    /// after the retry. Measured 2026-11-19: with a project active the lines of a broken VI were
+    /// refused, and from then on those of a second broken VI in the same project too, while both
+    /// read at once with the project closed. Such a reading is worth one more helper run in the
+    /// helper's OWN instance. Pure.
+    /// </summary>
+    internal static bool NeedsOwnInstanceRead(ExecStateReading? r) =>
+        r is { Broken: true, Errors: null, GetErrorsCode: 1026, Instance: "project" };
+
+    /// <summary>
+    /// The project reading with the error lines of the own-instance reading, marked as such - or
+    /// the project reading unchanged when the other copy gave no lines or is not broken (then
+    /// its lines would explain nothing about this one). State, linker errors and instance stay
+    /// the PROJECT's: that is the copy the IDE edits. Pure.
+    /// </summary>
+    internal static ExecStateReading WithOwnInstanceErrors(ExecStateReading project, ExecStateReading? own) =>
+        own is { Broken: true, Errors: { Count: > 0 } lines }
+            ? project with { Errors = lines, ErrorsInstance = own.Instance ?? "own" }
+            : project;
+
+    /// <summary>Said beside `errors` when they were read from another copy than the state.</summary>
+    internal static string? ErrorsInstanceNote(ExecStateReading r) =>
+        r.ErrorsInstance is not { } from || from == r.Instance ? null
+        : $"The error lines were read from the helper's {from} instance: the {r.Instance} instance refused " +
+          "them (Get Errors error 1026). It is a second copy of the VI loaded WITHOUT the project, so a line " +
+          "about something only the project resolves (a library, a project-local callee) can be an " +
+          "artefact of that copy - the state above is the project's.";
+
     /// <summary>Get Errors' own error code, or null when the helper has no such indicator.</summary>
     internal static int? GetErrorsCodeOf(Func<string, string?> read) =>
         int.TryParse(read("get errors code"), System.Globalization.NumberStyles.Integer,
@@ -598,6 +635,14 @@ internal sealed class ExecStateTools(LvaiConnection connection)
                                                       ComReadBack, timeoutSeconds, ct);
                     if (FromHelperRun(again, full).Reading is { Errors: not null } retried)
                         reading = retried;
+                }
+                // ...AND IN THE HELPER'S OWN INSTANCE when the project's still refuses them
+                if (NeedsOwnInstanceRead(reading))
+                {
+                    var own = await route.RunHelper(helper,
+                        [new LabViewCom.Input(HelperInput, full, full), new LabViewCom.Input(OwnInstanceInput, true, "true")],
+                        ComReadBack, timeoutSeconds, ct);
+                    reading = WithOwnInstanceErrors(reading!, FromHelperRun(own, full).Reading);
                 }
                 if (reading is not null) return new ComReading(reading, "helper", helper, null);
                 why = notTrusted!;

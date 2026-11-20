@@ -82,6 +82,19 @@ drops a successful entry's `steps` entirely and states a note shared by every en
 `common`; multi-VI `lvai_exec_state` does the same for executable VIs. A broken or failed entry is
 never reduced. In-process callers get the full answer (the compaction is in the MCP wrappers).
 
+**Where the time went: `stepMs`, since 2026-11-19.** Every step is stamped `atMs` (the sequence's
+clock when it was done), and the compact answer lifts `stepMs` - step name against the
+milliseconds since the step before, a repeated name summed - also in `lvai_generate_vis`, where
+the steps themselves are dropped. Symptom that led to it: a CLD benchmark build whose first two
+generate calls took 95 s and 58 s (15 s and less in the next run) answered only
+`totalElapsedMs`, so the transcript could not say whether composing, the executable check or the
+layout was slow. Cost: about 150 characters per generated VI. Measured with it the same day, two
+small VIs in one `lvai_generate_vis`: 59.7 s in a fresh LabVIEW with an empty helper cache -
+`cleanUpDiagram` of the FIRST VI 31.7 s, `tidyConstants` 6.8 s, `cleanUpPanel` 6.4 s, the second
+VI 8.7 s in all - 25.7 s repeated in the same LabVIEW, 14.4 s after a LabVIEW restart with the
+cache warm. So the first use of the layout helpers after a new build is the cost; the 95 s was
+that plus a second builder's call queued behind it (not reproduced as such).
+
 **`ok: false` with `failedAtStep: "connectorPane"` still means the `.vi` was written.** The
 generation succeeded; the pane needs another pass. The corrected `conIdx` values come back in the
 `connectorPane` step, ready to paste into the AIXML.

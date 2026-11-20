@@ -2,6 +2,8 @@
 
   <Control _name="vi path" conIdx="0" connection="required" description="Absolute path of the VI to interrogate\2C as a string." outputs="value:5000.value" type="string" uid="5000" uid_parent="root" value=""/>
 
+  <Control _name="own instance" description="TRUE reads the VI in this helper's own application instance also when a project is active. For the Error List of a broken VI that the project's instance refuses with error 1026." outputs="value:5005.value" type="bool" uid="5005" uid_parent="root" value="false"/>
+
   <FreeLabel comment="Read only: open, read, close the reference." uid="5010" uid_parent="root"/>
 
   <Node _name="String To Path" inputs="string:5000.value" outputs="path:5020.path" uid="5020" uid_parent="root"/>
@@ -11,7 +13,9 @@
   <Node _name="Property Node" fields="read+Application" type="{LV.Project}" inputs="reference:5201.proj,error in (no error):5201.error out" outputs="Application:5202.app,reference out:,error out:5202.error out" uid="5202" uid_parent="root"/>
   <Node _name="Unbundle By Name" fields="status" inputs="input cluster:5202.error out" outputs="status:5203.status" uid="5203" uid_parent="root"/>
 
-  <Structure _name="Case Structure" selectin="5203.status" uid="5210" uid_parent="root">
+  <Node _name="Or" inputs="x:5203.status,y:5005.value" outputs="x .or. y?:5204.own" uid="5204" uid_parent="root"/>
+
+  <Structure _name="Case Structure" selectin="5204.own" uid="5210" uid_parent="root">
     <Tunnel _id="In1" inputs="value:5202.app" uid="5211" uid_parent="5210"/>
     <Tunnel _id="In2" inputs="value:5020.path" uid="5212" uid_parent="5210"/>
 

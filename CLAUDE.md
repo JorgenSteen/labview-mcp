@@ -43,7 +43,7 @@ standalone VI stays loose; existing code is never moved into or out of a library
 orchestrator does it after the last wave: `lvai_create_library` with the API VIs,
 `lvai_add_to_library scope=private` for subVIs only the library calls, `lvai_move_to_folder` per
 function folder (never flat), then `lvai_exec_state` over the members and `lvai_bind_pane_typedef`
-per subVI whose pane carries a typedef (builders cannot: it needs the project). The VI agents search the
+per subVI whose pane carries a typedef (builders cannot: it needs the project). Helpers a builder added go in too, AFTER the main VI: callers in the open project are relinked (bench round 4: a library made before the main VI left its helpers loose). The VI agents search the
 PROJECT's own VIs before the palette. `docs/orchestrator-brief.md`.
 
 **LOGIC INSIDE A DQMH MODULE KEEPS ITS STATE IN THE MODULE'S DATA CLUSTER, NEVER IN AN FGV**
@@ -90,7 +90,8 @@ add-on install it needs `refresh=true` once. A hit may be a `.lvproj` - use
 **Exports of installation VIs are cached** under `%USERPROFILE%\.labviewmcp\cache\aixml` (not
 `%LOCALAPPDATA%`; `CacheDirectory.Root` is the authority). Your own code is never cached, because
 an export depends on its subVIs too. So browsing examples is cheap - browse. On the pylabview
-backend the server reads the examples into the cache in the background after a start and deletes
+backend the server composes its helper VIs in the background after a start (`HelperPrewarm`:
+they are stale after every new build, and the first generate paid for it), reads the examples into the cache in the background after a start and deletes
 reader entries of older reader code (`ReaderPrewarm`; progress in `pylv_status readerPrewarm`,
 coverage - warm, partial, cold - in `exportCache`). Triage several
 candidates in ONE `lvai_convert_vis_to_aixml`; LabVIEW serialises the work, so fanning out
@@ -357,6 +358,11 @@ VI and nothing reports it (`pylv_route` included) - check with `pylv_extract` fi
   `Bundle By Name`, a queue's element type) `lvai_swap_subvis constantsJson` with the `.ctl`;
 - a VI's own pane: `lvai_bind_pane_typedef` - with the `.lvclass` for a class member, with only
   `projectPath` for any other VI (measured 2026-11-18; it was class-only until then).
+
+**Data that carries a typedef'd enum is itself a typedef** (the user's decision of 2026-11-19): a
+cluster with such a member gets its own `.ctl`, and its constants are bound to it - not a way into
+the plain constant. An array of such an enum: `lvai_create_typedef` `elementTypedefsJson`
+`{"element": "<enum .ctl>"}` links the element (since 2026-11-20). `docs/typedef-constants.md`.
 
 Create a typedef with `lvai_create_typedef` (VI Server; nested typedefs in ONE run). A class field
 can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconnect.md`.

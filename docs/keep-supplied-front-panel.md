@@ -194,7 +194,7 @@ check with a control arm that must fail.
 | 2. loose ends | `BD.Remove Bad Wires` runs inside the rewire helper; a supplied diagram with code is refused, so it cannot remove anything of the user's |
 | 3. pairing by `" 2"` | the paste helper returns the labels BEFORE and AFTER the paste; a duplicate is a new label equal to its original plus `" "` plus digits, exactly one per scaffold control. A prefix (`Start Delay 2` is not `Start`'s) and two candidates for one label are both tested: the second is REFUSED (`pairingFailed`), never guessed |
 | 4. extra scaffold control | refused before the paste (`scaffoldControlsNotOnPanel`), with a kind or type mismatch (`controlTypeMismatch`) and a non-empty supplied diagram (`panelDiagramNotEmpty`) beside it |
-| 5. descriptions | `copyDescriptions` (default on) copies a non-empty scaffold description onto the supplied control before the duplicate is deleted |
+| 5. descriptions | `copyDescriptions` (default on) copies a non-empty scaffold description onto a supplied control that has NONE, before the duplicate is deleted. Until 2026-11-19 it replaced a supplied description too: a benchmark build's scaffold wrote one sentence for `stop` and the supplied two-sentence text was gone, with nothing in the answer. Given up: a scaffold can no longer correct a supplied description. LIVE 2026-11-19, one pair grafted by both builds: the earlier build left `stop` = the scaffold's text, this one the supplied two lines, and both filled the description-less `Gain` from the scaffold; exec state 1 in both |
 | 6. clipboard | in the description; the agents graft only when no other agent runs |
 | 7. IDE instance | `Error 1055` is answered as `noActiveProject` |
 

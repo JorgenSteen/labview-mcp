@@ -366,7 +366,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             // that does work.
             if (MalleableVi.IsMalleableTarget(viPath))
             {
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "malleableTarget",
                     ["errorCode"] = 1,
@@ -395,13 +395,13 @@ internal sealed class BulkTools(LvaiConnection connection)
                 // exactly the set where the author's intent is unknowable, and guessing there would
                 // turn a reported fault into a hidden one.
                 var (source, repairReport) = AixmlTools.Repaired(aiXmlFilePath, panePolicy);
-                if (repairReport is not null) steps.Add(Step("repair", repairReport));
+                if (repairReport is not null) AddAt(steps, total, Step("repair", repairReport));
                 aiXmlFilePath = source;
 
                 if (AixmlTools.PreCheck(aiXmlFilePath, panePolicy) is { } check
                     && check["errors"]?.GetValue<int>() > 0)
                 {
-                    steps.Add(Step("check", check));
+                    AddAt(steps, total, Step("check", check));
                     return Outcome(false, "check", steps, total, viPath, null,
                         "The AIXML has a fault LabVIEW would ACCEPT silently and that cannot be " +
                         "repaired without guessing, so nothing was written. `danglingParent` is " +
@@ -427,7 +427,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             if (choice.Name == AixmlBackend.PyLabview)
             {
                 validate = """{ "errorCode": 0 }""";
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "validate",
                     ["skipped"] = true,
@@ -441,7 +441,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             {
                 validate = await aixml.ValidateAixmlAsync(aiXmlFilePath, timeoutSeconds,
                                                           backend: choice.Name, ct: ct);
-                steps.Add(Step("validate", validate));
+                AddAt(steps, total, Step("validate", validate));
             }
 
             // THE LOADED-SUBVI ROUTE. ValidateAIXML refuses a Call to project-local code in EVERY
@@ -480,7 +480,7 @@ internal sealed class BulkTools(LvaiConnection connection)
 
             if (unresolved is not null)
             {
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "loadedSubVIs",
                     ["unresolvedAtValidate"] = new JsonArray([.. unresolved.Select(n => (JsonNode)n)]),
@@ -497,7 +497,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                                                             viPath, openVI, timeoutSeconds,
                                                             checkExecutable: composed,
                                                             backend: choice.Name, ct: ct);
-            steps.Add(Step("convert", convert));
+            AddAt(steps, total, Step("convert", convert));
             // A WRITTEN but BROKEN VI answers ok:false too, which Failed() reads as a failure, so
             // this is decided first: until 2026-10-14 such a VI was reported as "the composer
             // failed and wrote nothing: No Error" beside a file on disk and its Error List lines.
@@ -583,7 +583,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     ?? new ExecStateTools(connection).ReadAsync(
                         viPath, helperAixmlPath: null, helperViPath: null,
                         regenerateHelper: false, timeoutSeconds, ct: ct));
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "execState",
                     ["measured"] = reading is { CouldNotOpen: false },
@@ -605,7 +605,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     var brokenSize = measureDiagram
                         ? await DiagramSizeStepAsync(sourceAixml, viPath, timeoutSeconds, ct)
                         : null;
-                    if (brokenSize is not null) steps.Add(brokenSize);
+                    if (brokenSize is not null) AddAt(steps, total, brokenSize);
 
                     // AND THE PANE, for the same reason: the pane is final too, and returning here
                     // left a caller whose class seed is a path to call lvai_connector_pane itself
@@ -617,7 +617,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                         brokenPane = await new PaneTools(connection).MeasureViAsync(
                             viPath, helperViPath: null, helperAixmlPath: null,
                             regenerateHelper: false, timeoutSeconds, ct: ct);
-                        steps.Add(new JsonObject
+                        AddAt(steps, total, new JsonObject
                         {
                             ["step"] = "connectorPane",
                             ["pattern"] = brokenPane.Pattern,
@@ -655,7 +655,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     ?? new ExecStateTools(connection).ReadAsync(
                         viPath, helperAixmlPath: null, helperViPath: null,
                         regenerateHelper: false, timeoutSeconds, ct: ct));
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "execState",
                     ["measured"] = reading is { CouldNotOpen: false },
@@ -683,7 +683,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                     // is not held - ActiveX released it, measured re-read after every rewrite.
                     closeProject: !composed, verify: false, bundleDirectory: null,
                     timeoutSeconds: timeoutSeconds, ct: ct);
-                steps.Add(Step("panePattern", repair));
+                AddAt(steps, total, Step("panePattern", repair));
                 if (Parsed(repair)?["ok"]?.GetValue<bool>() is not true)
                     return Outcome(false, "panePattern", steps, total, viPath, null,
                         "THE VI WAS WRITTEN and its diagram is sound - what failed is putting it " +
@@ -703,7 +703,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             // LabVIEW's version over it (measured by both field reports).
             if (KeptForOlderLabView(viPath) is { } kept && !openVI && (measureDiagram || cleanUpPanel || cleanUp))
             {
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "savingStepsSkipped",
                     ["savedAs"] = kept.Version,
@@ -725,7 +725,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                 // below lays out their final sizes - every deliverable, the user's rule of 2026-11-11
                 var tidied = await (TidyConstants?.Invoke(viPath, choice.Name, timeoutSeconds, ct)
                     ?? new DiagramCleanup(connection).RunTidyConstantsAsync(viPath, choice.Name, timeoutSeconds, ct));
-                steps.Add(tidied);
+                AddAt(steps, total, tidied);
                 if (tidied["ok"]?.GetValue<bool>() != true)
                     cleanNote += " The block diagram constants were NOT tidied - labels may show: " +
                                  tidied["note"]?.GetValue<string>();
@@ -736,7 +736,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                 // 2026-10-12); a LabVIEW save like the diagram's, so it too precedes the size
                 var arranged = await (CleanUpPanel?.Invoke(viPath, choice.Name, timeoutSeconds, ct)
                     ?? new DiagramCleanup(connection).RunPanelAsync(viPath, choice.Name, timeoutSeconds, ct));
-                steps.Add(arranged);
+                AddAt(steps, total, arranged);
                 if (arranged["ok"]?.GetValue<bool>() != true)
                     cleanNote += " The front panel was NOT cleaned up - it is as generated: " +
                                  arranged["note"]?.GetValue<string>();
@@ -745,7 +745,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             {
                 var cleaned = await (CleanUp?.Invoke(viPath, choice.Name, timeoutSeconds, ct)
                     ?? new DiagramCleanup(connection).RunAsync(viPath, choice.Name, timeoutSeconds, ct));
-                steps.Add(cleaned);
+                AddAt(steps, total, cleaned);
                 if (cleaned["ok"]?.GetValue<bool>() != true)
                     cleanNote += " The block diagram was NOT cleaned up - the VI is as generated: " +
                                  cleaned["note"]?.GetValue<string>();
@@ -762,7 +762,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                 var strip = await (StripCompiled?.Invoke(viPath, timeoutSeconds, ct)
                     ?? new DiagramCleanup(connection).StripCompiledAsync(viPath, timeoutSeconds, ct));
                 var clean = !ContainsCompiledCode(viPath);
-                steps.Add(new JsonObject
+                AddAt(steps, total, new JsonObject
                 {
                     ["step"] = "stripCompiled",
                     ["ok"] = clean,
@@ -783,7 +783,7 @@ internal sealed class BulkTools(LvaiConnection connection)
             {
                 size = await DiagramSizeStepAsync(sourceAixml, viPath, timeoutSeconds, ct,
                                                   overCom: composed);
-                steps.Add(size);
+                AddAt(steps, total, size);
             }
             var sizeNote = (size?["note"]?.GetValue<string>() ?? "") + cleanNote;
 
@@ -800,7 +800,7 @@ internal sealed class BulkTools(LvaiConnection connection)
                 : await new PaneTools(connection).MeasureViAsync(
                     viPath, helperViPath: null, helperAixmlPath: null, regenerateHelper: false,
                     timeoutSeconds, ct: ct);
-            steps.Add(new JsonObject
+            AddAt(steps, total, new JsonObject
             {
                 ["step"] = "connectorPane",
                 ["pattern"] = verdict.Pattern,
@@ -1054,6 +1054,45 @@ internal sealed class BulkTools(LvaiConnection connection)
               "could NOT be read afterwards - so nothing here confirms the wiring of those calls. " +
               "Run lvai_exec_state on the VI before relying on it.";
 
+    /// <summary>
+    /// Adds a step and stamps it with `atMs`, the sequence's clock when the step was DONE. The
+    /// difference to the step before is what the step cost. A CLD benchmark build (2026-11-19)
+    /// had two generate calls of 95 s and 58 s whose compact answers said nothing about where
+    /// the time went, so the hold-up could not be told from the transcript.
+    /// </summary>
+    private static void AddAt(JsonArray steps, Stopwatch total, JsonNode? step)
+    {
+        if (step is JsonObject o && !o.ContainsKey("atMs")) o["atMs"] = total.ElapsedMilliseconds;
+        steps.Add(step);
+    }
+
+    /// <summary>A millisecond count as a node holds it: a long when built here, an int or a parsed
+    /// number when it came through JSON.</summary>
+    private static long? Milliseconds(JsonNode? node) =>
+        node is not JsonValue v ? null
+        : v.TryGetValue<long>(out var l) ? l
+        : v.TryGetValue<int>(out var i) ? i
+        : v.TryGetValue<double>(out var d) ? (long)d : null;
+
+    /// <summary>
+    /// What each step cost, from the `atMs` stamps: the step's name against the milliseconds since
+    /// the step before it (a name that occurs twice is summed). Null when no step is stamped.
+    /// </summary>
+    internal static JsonObject? StepMs(JsonArray steps)
+    {
+        var cost = new JsonObject();
+        long before = 0;
+        foreach (var step in steps.OfType<JsonObject>())
+        {
+            if (Milliseconds(step["atMs"]) is not { } now) continue;
+            var name = StepName(step) ?? "step";
+            var earlier = Milliseconds(cost[name]) ?? 0;
+            cost[name] = earlier + Math.Max(0, now - before);
+            before = now;
+        }
+        return cost.Count > 0 ? cost : null;
+    }
+
     /// <summary>One entry in the `steps` array: the sub-tool's own answer, kept whole.</summary>
     private static JsonObject Step(string name, string answer) => new()
     {
@@ -1170,6 +1209,9 @@ internal sealed class BulkTools(LvaiConnection connection)
         if (full["paneWarnings"] is JsonValue pw && pw.TryGetValue<int>(out var paneWarnings)
             && paneWarnings > 0 && Named("connectorPane")?["answer"] is { } paneText)
             compact["paneWarningsDetail"] = paneText.DeepClone();
+
+        // where the time went, kept even when the steps themselves are dropped
+        if (StepMs(steps) is { } stepMs) compact["stepMs"] = stepMs;
 
         var reduced = new JsonArray();
         var failedSteps = new JsonArray();

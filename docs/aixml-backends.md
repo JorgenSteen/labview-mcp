@@ -530,6 +530,29 @@ add-on location satisfies. Explorer cannot pass arguments, so that strategy open
 `.cmd` that does; it is reached only when `breakaway` is refused, which never happened here, so
 its survival is not measured.
 
+**The helper VIs are composed in the background after a start, since 2026-11-19**
+(`HelperPrewarm`; `pylv_status` `helperPrewarm`; `LABVIEWMCP_HELPER_PREWARM=0` switches it off).
+A composed helper is stale after every new build - its AIXML is newer - and the first tool call
+then composed it while the caller waited. Symptom: a benchmark build's first
+`lvai_generate_vis` took 95 s; measured afterwards with `stepMs`, two small VIs took 59.7 s on
+an empty helper cache (31.7 s of it the first VI's `cleanUpDiagram`) and 14.4 s on a warm one.
+The warm-up composes the layout engine's two helpers and every helper this station has composed
+before, one at a time, with no LabVIEW; a server started on an empty cache had both layout
+helpers 10 s after its start. A compose now holds a lock per helper (`<vi>.lock`, also across
+the servers of other sessions), so a tool call that wants a helper mid-compose waits for it
+instead of writing the same file. Given up: a few seconds of one Python worker after each
+start, and helpers composed for nothing in a session that never uses them.
+
+**What it saves, and what it does not - live A/B the same day.** Every helper made stale (13 on
+that station), LabVIEW restarted, then the same two-VI generate: 74.6 s with the warm-up off,
+45.1 s with it on (all 13 recomposed in about 23 s, none failed, no lock file left). Gone: the
+composing inside `tidyConstants` (6.6 s to 2.1 s), `cleanUpPanel` (4.2 s to 2.1 s) and the second
+VI's `cleanUpDiagram` (16.7 s to 5.0 s). NOT gone: the FIRST `cleanUpDiagram`, 32.9 s against
+27.4 s - with helpers LabVIEW had loaded before, the same step took 3.9 s. So that step does not
+wait for the composer. Not tested, the likely reading: a freshly composed helper carries no
+compiled code, and LabVIEW compiles the two layout helpers on their first load. Paying that
+ahead would need a load inside LabVIEW after it starts, which this warm-up does not do.
+
 **Caches.** The resolver's installation index is keyed on its roots AND the write times of the
 locations and chosen version folders, so an `lvpm install` is seen on the next compose instead of
 after its ten-minute lifetime. The palette and example indexes carry the selection in their key

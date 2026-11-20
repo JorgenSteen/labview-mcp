@@ -36,7 +36,13 @@ Measured facts that each cost minutes when found at run time. Plan around them f
 - **AIXML drops every typedef on a VI's own pane.** Re-bind it with `lvai_bind_pane_typedef`
   after the VI is generated: a CLASS MEMBER with its `.lvclass`; any other subVI (a library
   member, a loose one) with only `projectPath` (measured 2026-11-18: the caller's coercion dots
-  go). A CLD grader marks a typedef'd state or cluster passed as a bare type down. A typedef CONSTANT: one wired into a subVI CALL's typedef
+  go). An unbound copy does not follow the typedef: add an item to the `.ctl` and every plain
+  copy keeps the old list, in silence. **Data that CARRIES a typedef'd enum is itself a typedef**
+  - a cluster with such a member, an array of it: you have no tool to create one, so name the
+  need in your report (the orchestrator creates it with `lvai_create_typedef`), give the
+  constant a UNIQUE label and bind it with `constantsJson` below (measured 2026-11-19: enum,
+  cluster and array constants all bound and kept their values; an ARRAY typedef's element is
+  linked to the enum's `.ctl` by `lvai_create_typedef` `elementTypedefsJson` `{"element": ...}`). A typedef CONSTANT: one wired into a subVI CALL's typedef
   input is bound by `lvai_bind_typedef_constants`; any other - a cluster constant into `Bundle By
   Name`, a queue's element type - by `lvai_swap_subvis` `constantsJson`
   `[{"label":"<constant label>","class":"<the .ctl>"}]` (needs the project active; measured
@@ -45,6 +51,8 @@ Measured facts that each cost minutes when found at run time. Plan around them f
 - **Check the 1920 x 1080 budget BEFORE generating**: `lvai_check_aixml` `diagramChain`
   (10 stages). Fold a sequential stretch into a subVI while the AIXML is text - one ATM main VI came
   out 5 983 px wide and was regenerated four times. `docs/diagram-size.md` §3-§4.
+- **Which booleans latch: `lvai_describe_vi` answers `booleanActions`** (`latched` / `switch`,
+  a button inside a cluster as `Cluster.Element`) - never read the panel heap for it.
 - **A latched boolean is driven with `lvai_running_vi` `latchedAsSwitch: true`** - on the
   DELIVERED VI, no test copy: the tool switches the latches in memory for the run, a `press`
   releases them like a latch, and `stop` reverts the VI from disk (the file never changes).
