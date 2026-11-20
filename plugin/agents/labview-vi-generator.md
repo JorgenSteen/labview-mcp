@@ -36,7 +36,13 @@ Measured facts that each cost minutes when found at run time. Plan around them f
 - **AIXML drops every typedef on a VI's own pane.** Re-bind it with `lvai_bind_pane_typedef`
   after the VI is generated: a CLASS MEMBER with its `.lvclass`; any other subVI (a library
   member, a loose one) with only `projectPath` (measured 2026-11-18: the caller's coercion dots
-  go). A CLD grader marks a typedef'd state or cluster passed as a bare type down. A typedef CONSTANT: one wired into a subVI CALL's typedef
+  go). An unbound copy does not follow the typedef: add an item to the `.ctl` and every plain
+  copy keeps the old list, in silence. **Data that CARRIES a typedef'd enum is itself a typedef**
+  - a cluster with such a member, an array of it: you have no tool to create one, so name the
+  need in your report (the orchestrator creates it with `lvai_create_typedef`), give the
+  constant a UNIQUE label and bind it with `constantsJson` below (measured 2026-11-19: enum,
+  cluster and array constants all bound and kept their values; an ARRAY typedef's element is
+  not yet linked to the enum's `.ctl`, so prefer a cluster). A typedef CONSTANT: one wired into a subVI CALL's typedef
   input is bound by `lvai_bind_typedef_constants`; any other - a cluster constant into `Bundle By
   Name`, a queue's element type - by `lvai_swap_subvis` `constantsJson`
   `[{"label":"<constant label>","class":"<the .ctl>"}]` (needs the project active; measured
