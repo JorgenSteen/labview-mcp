@@ -18,7 +18,7 @@ namespace LabVIEWMcp.Tools;
 /// <summary>
 /// IN-PLACE EDITS (docs/non-grpc-gaps.md §6, from a field report: an integer widened from U16 to
 /// I32 across a typedef, constants, indicators and conversion primitives of existing code).
-/// Measured 2026-11-20 on LabVIEW 2026, docs/in-place-edits.md:
+/// Measured 2026-11-20 on LabVIEW 2026 and 2020, docs/in-place-edits.md:
 /// <list type="bullet">
 /// <item><c>Representation</c> of <c>{LV.Numeric}</c> and <c>{LV.NumericConstant}</c> is writable
 /// in edit mode; value, default and wires survive, a sink of the old type gets a coercion dot. A
@@ -479,8 +479,8 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 : !verified
                     ? "Saved, but a fresh listing does not show the counts asked for - compare fromAfter and toAfter."
                 : "Replaced and saved; a fresh listing of the saved VI shows the new counts and the VI is as " +
-                  "executable as before. A terminal only the NEW primitive has stays unwired (the second output of " +
-                  "Quotient & Remainder), and a sink typed for the old output shows a coercion dot." +
+                  "executable as before. Where the new primitive has a terminal the old one lacked, it is " +
+                  "unwired; where its output type differs, the sink shows a coercion dot (lvai_coercion_dots)." +
                   (throughProject ? " The project is left open." : ""),
 
             });

@@ -141,7 +141,7 @@ Not a backend gap: these had no tool at all. Reported from a field project (a re
 existing code on LabVIEW 2020, an integer widened from U16 to I32 across typedef, constants,
 indicators and conversion primitives). Regeneration is not an answer there: it discards the panel,
 the layout and every typedef link of code that already exists. Measured on LabVIEW 2026 and built
-into two tools; the measurement, what each tool gives up and what is still unmeasured are in
+into two tools, both live-checked on LabVIEW 2026 AND 2020; the measurement, what each tool gives up and what is still unmeasured are in
 `docs/in-place-edits.md`.
 
 | | gap | state | route |
@@ -150,5 +150,6 @@ into two tools; the measurement, what each tool gives up and what is still unmea
 | [x] | **6b. Change a numeric's REPRESENTATION in place** - a typedef field, a diagram constant, a control or indicator | `lvai_set_representation` | `Representation` on `{LV.Numeric}` / `{LV.NumericConstant}` IS writable in edit mode (this row asked whether a write is accepted; the catalogue's `read` is not a capability). A typedef's callers follow in memory only and are loaded and saved by the tool when `projectPath` is given. A MAP KEY is not covered: nothing was measured on a map |
 | [ ] | **6c. Offline (pylabview) edits that touch a TYPE** | - | Still open and still hard: a type change means rewriting the type descriptor table, the heap object and every dependent wire's type consistently. 6a/6b go through VI Server, where LabVIEW propagates the types itself, so nothing needs this today |
 
-Still to measure: both tools on LabVIEW 2020 (the version of the report), a typedef INSTANCE, a
-class member VI, growable nodes and structures as `Replace` targets.
+Still to measure: a strict typedef, a class member VI, growable nodes and structures as `Replace`
+targets, an older file edited by a newer LabVIEW. (A typedef INSTANCE is measured: error 1082,
+edit the `.ctl`.)

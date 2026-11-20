@@ -240,7 +240,30 @@ values):
 - A missing label was named `labelNotUnique`; the note after a clean replace said "same shape" for
   a primitive with an extra output; with `saveCallers: false` the note still advised `projectPath`.
 
-## 6. LabVIEW 2020
+The note after a clean replace named `Quotient & Remainder` on EVERY success in the second build;
+it is general now.
 
-Not measured yet. The helpers use nothing newer than `Traverse for GObjects.vi`, which the swap
-helper already relies on there; whether `PaletteString` takes a name in 2020 is the open point.
+## 6. LabVIEW 2020 (32-bit, branch build, 2026-11-20)
+
+The version the report came from. Fixtures regenerated with LabVIEW 2020 running (the composer
+writes 20.0), both helpers composed as 20.0 files and ran first try, pylabview backend over ActiveX
+(2020 has no NI service).
+
+| case | against 2026 |
+|---|---|
+| `Result` -> I32 and `Offset` -> I32 | same: both in the file, value 5 kept, executable |
+| typedef field with `projectPath` | same: `callersSaved` exactly the caller, still bound, coercion dot, `.lvproj` unchanged |
+| enum typedef -> U32; -> DBL | same: `UnitUInt32`; error 1077, file unchanged |
+| a numeric in a typedef instance | same: error 1082 |
+| dry run; To Unsigned Word Integer -> To Long Integer, top level and in a Case frame | same - **`PaletteString` takes the name in 2020 too**; the dry run printed the same positions |
+| Increment -> Add | same verdict; LabVIEW 2020 words the error "Contains unwired or bad terminal" without the node's name in front |
+| three `Add` with `occurrences` | same order and same node per index as on 2026 |
+| unknown `to` | same: error 1054, file unchanged |
+
+After every saving call the file still read 20.0.x: edited by LabVIEW 2020, a 2020 file stays one.
+Wall clock: representation 0.4 s warm (9.0 s for the first call of a server), a replace 0.3 s, a
+typedef with one caller 3.7 s. Also measured there, in a scratch helper: `Replace` with `Style` =
+1142 as a uint32 works on 2020 as on 2026 - the route the tool does not need.
+
+Not measured: a 2020 file edited through these tools by a NEWER LabVIEW (the save then writes the
+newer version - `saveVersionCheck`, `docs/save-version.md`).
