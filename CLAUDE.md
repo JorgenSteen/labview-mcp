@@ -373,6 +373,7 @@ can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconn
 |---|---|
 | create a NEW VI | AIXML (`lvai_generate_vi`) |
 | edit an EXISTING VI | `pylv_route` first; an AIXML edit is a FULL REGENERATION |
+| widen or change a numeric's type, or swap a primitive, in EXISTING code | `lvai_set_representation`, `lvai_replace_primitive` - in place, nothing regenerated |
 | a class, its private data, an accessor | NI's provider VIs through the class tools |
 | a DQMH module, or a vendor toolkit under `project\` | the `lvai_dqmh_*` tools (VI Server by path, generated wrappers over LOADED scripters) |
 | a property or method no RPC exposes | a generated VI Server helper - the exception; say which route and why |
@@ -534,6 +535,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | LUnit; mocks | `docs/labview-lunit-testing.md`, `docs/labview-lmock-mocking.md` | `lvai_lunit_*`, `lvai_generate_mock_class` |
 | Placeholders and swaps | `docs/labview-unit-testing.md` §3a | `lvai_placeholder_subvi`, `lvai_swap_subvis` |
 | Change one constant | `docs/cold-build-typedef-gdevcon.md` §7 | `lvai_set_constant` |
+| Change a numeric's representation, or replace a primitive, in place | `docs/in-place-edits.md` | `lvai_set_representation`, `lvai_replace_primitive` |
 | pylabview route and edits | `docs/pylabview-controls.md`, `docs/connector-pane-repair.md` | `pylv_route`, `pylv_apply` |
 | Stale compiled code | `docs/pylabview-stale-compiled-code.md` | `pylv_apply` |
 | Network streams; tag refnums; IVI on pylabview | `docs/network-streams.md`, `docs/aixml-backends.md` | — |

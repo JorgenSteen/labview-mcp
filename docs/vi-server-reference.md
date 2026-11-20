@@ -1071,6 +1071,19 @@ typedef its subVI expects.** `{LV.Constant}` is the generic class to reach for �
 `Update Typedef` without a per-class cast — and `{LV.Terminal}` carries `Name`, `Coercion Dot?`,
 `Connected Wire` and `Type Descriptor`.
 
+**And on a PRIMITIVE, where `Path` has nothing to name** (measured 2026-11-20, LabVIEW 2026;
+`docs/in-place-edits.md`). `{LV.Node}` `Replace` takes the new primitive's NAME in `PaletteString`
+(`To Long Integer`), with `Style` and `Path` unwired. `Style` is two different things: the `Style`
+PROPERTY of a node is a string, that same name, which is how the nodes to replace are found; the
+`Style` INPUT of `Replace` is a uint32 resource number (1142), so a donor node's property cannot be
+wired into it. An unknown name or number is error 1054 and changes nothing. A primitive of the same
+shape keeps every wire; `lvai_replace_primitive` is the tool.
+
+**`Representation` is writable** on `{LV.Numeric}` and `{LV.NumericConstant}` in edit mode, the
+`read` in the catalogue notwithstanding: an enum of uint32 (EXT 0, DBL 1, SGL 2, I32 3, I16 4, I8 5,
+U32 6, U16 7, U8 8, I64 12, U64 13). A number outside the enum is not refused but clamped to
+fixed-point, and the default is lost. `lvai_set_representation` is the tool.
+
 Two traps, both measured 2026-08-29. `Replace` **invalidates the reference it was called on**: the
 next Property Node on it answers `error 1055`, and a label written afterwards is silently lost. And
 its **return value cannot be consumed** — capturing the Invoke Node's `Replace` output made
