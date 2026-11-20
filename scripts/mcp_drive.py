@@ -45,6 +45,14 @@ import time
 
 
 def main(argv):
+    # Answers carry non-ASCII text (an arrow, typographic quotes). Under `python -I` the
+    # PYTHONIOENCODING variable is ignored and a cp1252 console crashed the printer on the first
+    # one (measured 2026-11-20), so the output encoding is set here rather than by the caller.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     if len(argv) < 3 or argv[1] in ("-h", "--help"):
         print(__doc__)
         return 0 if len(argv) > 1 else 2
