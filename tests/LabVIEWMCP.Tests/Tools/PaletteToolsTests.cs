@@ -381,6 +381,13 @@ public class PaletteToolsTests : IDisposable
         Assert.Equal(2, index.AddonsScanned.Count);
     }
 
+    [Theory]
+    [InlineData(@"C:\LV2020\vi.lib\dlg_ctls.llb", true)]     // a FILE in LabVIEW 2020
+    [InlineData(@"C:\LV2026\vi.lib\dlg_ctls.llb\", true)]    // a FOLDER in 2025/2026
+    [InlineData(@"C:\LV\vi.lib\vision\Basics.llb", false)]   // NI Vision's real members
+    public void ThePrimitiveStandInLlbIsRecognisedInEitherForm(string place, bool expected) =>
+        Assert.Equal(expected, PaletteIndex.IsPrimitiveStandIns(place));
+
     // ---------- the real installation, when this machine has one ----------
 
     [Fact]
