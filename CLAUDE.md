@@ -361,8 +361,8 @@ VI and nothing reports it (`pylv_route` included) - check with `pylv_extract` fi
 
 **Data that carries a typedef'd enum is itself a typedef** (the user's decision of 2026-11-19): a
 cluster with such a member gets its own `.ctl`, and its constants are bound to it - not a way into
-the plain constant. `docs/typedef-constants.md` (last section: an array typedef's element is not
-linked yet).
+the plain constant. An array of such an enum: `lvai_create_typedef` `elementTypedefsJson`
+`{"element": "<enum .ctl>"}` links the element (since 2026-11-20). `docs/typedef-constants.md`.
 
 Create a typedef with `lvai_create_typedef` (VI Server; nested typedefs in ONE run). A class field
 can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconnect.md`.

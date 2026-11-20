@@ -58,10 +58,35 @@ public sealed class CreateTypedefTests
     }
 
     [Theory]
+    [InlineData("array{uint16{Idle,Run,Stop}}")]
+    [InlineData("array.2{uint16{Idle,Run,Stop}}")]
+    public void AnArraysElementTypedefNeedsNoProject(string type)
+    {
+        var dir = Directory.CreateTempSubdirectory("td").FullName;
+        try
+        {
+            var mode = Touch(dir, "Mode.ctl");
+
+            var (request, refusal) = TypedefCreateTools.Request.Parse(
+                Path.Combine(dir, "Modes.ctl"), type, null, false,
+                new JsonObject { ["element"] = mode }.ToJsonString(), projectPath: null, overwrite: false);
+
+            Assert.Null(refusal);
+            var element = Assert.Single(request!.Elements);
+            Assert.Equal(TypedefCreateTools.Element.ArrayElementIndex, element.Index);
+            Assert.Equal(mode, element.TypedefPath);
+            Assert.Null(request.ProjectPath);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Theory]
     [InlineData("notACtl", "ending in .ctl")]
     [InlineData("exists", "already exists")]
     [InlineData("unknownElement", "not a top-level element")]
-    [InlineData("scalarType", "not a cluster")]
+    [InlineData("scalarType", "neither a cluster nor an array")]
+    [InlineData("arrayWrongKey", "exactly one entry")]
+    [InlineData("arrayMissingTypedef", "array's element is not an existing .ctl")]
     [InlineData("noProject", "needs projectPath")]
     [InlineData("missingTypedef", "Create the inner typedefs first")]
     [InlineData("notJson", "JSON OBJECT")]
@@ -87,6 +112,11 @@ public sealed class CreateTypedefTests
                     elements, project, false),
                 "noProject" => TypedefCreateTools.Request.Parse(target, Config, null, false,
                     elements, null, false),
+                "arrayWrongKey" => TypedefCreateTools.Request.Parse(target, "array{uint16{Off,On}}",
+                    null, false, elements, null, false),
+                "arrayMissingTypedef" => TypedefCreateTools.Request.Parse(target, "array{uint16{Off,On}}",
+                    null, false, new JsonObject { ["element"] = Path.Combine(dir, "Nope.ctl") }.ToJsonString(),
+                    null, false),
                 "missingTypedef" => TypedefCreateTools.Request.Parse(target, Config, null, false,
                     new JsonObject { ["Range"] = Path.Combine(dir, "Range.ctl") }.ToJsonString(),
                     project, false),

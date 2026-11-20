@@ -57,6 +57,8 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
         NESTED TYPEDEFS: `elementTypedefsJson` makes top-level cluster elements instances of EXISTING
         typedef files, all bound in one run; it NEEDS projectPath. Create the inner typedefs FIRST,
         then the cluster. Element labels are kept (`labelAfter` gates `ok`).
+        An ARRAY typedef takes one entry, {"element": "<.ctl>"}: the array's element becomes an
+        instance of that typedef (an array of a typedef'd enum); no project is needed for it.
         With projectPath the .ctl, and every element typedef inside the project's folder tree, is
         listed under folderName, and the project is left CLOSED.
         The verdict is read from the SAVED FILE (`verifiedFromFile`: isTypedef, isStrictTypedef,
@@ -77,11 +79,11 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
         [Description("""
             JSON object: cluster element label (exact, as in `type`) -> absolute path of an EXISTING
             typedef .ctl, e.g. {"Channel Mode":"C:\\T\\Channel Mode.ctl"}. Needs a cluster `type`
-            and projectPath.
+            and projectPath. For an `array{...}` type: {"element":"<.ctl path>"}, project optional.
             """)]
         string? elementTypedefsJson = null,
         [Description("""
-            The typedef's .lvproj; required with elementTypedefsJson. The .ctl is listed under
+            The typedef's .lvproj; required with a cluster's elementTypedefsJson. The .ctl is listed under
             folderName and the project is left CLOSED.
             """)]
         string? projectPath = null,
@@ -148,8 +150,39 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
                         "The .ctl was not saved - read the makeTypedef step. Error 1357 or 1051 " +
                         "means a file of that path or name is already loaded in LabVIEW.");
 
-                // ---- 3. the element typedefs, in the IDE's application instance
-                if (req.Elements.Count > 0)
+                // ---- 3a. an ARRAY's element: lvai_typedef_bind on the .ctl itself, index path 0
+                //      (the array, the only control) and child 0 (its element). Measured 2026-11-20
+                //      in LabVIEW 2026 with NO project active: the saved file carried a TDCC link to
+                //      the enum's .ctl, and a later change to that enum reached the array on resave.
+                if (req.Elements is [{ Index: Element.ArrayElementIndex } arrayElement])
+                {
+                    var binder = await HelperAsync(scripts, TypedefFlattenTools.BindHelperFileName,
+                                                   timeoutSeconds, ct);
+                    if (binder.Failure is not null) return binder.Failure;
+                    var bound = Values(await new RunTools(connection).RunViAndReadValuesAsync(
+                        binder.Vi!, new JsonObject
+                        {
+                            ["vi path"] = req.CtlPath,
+                            ["index path"] = "0",
+                            ["child index"] = "0",
+                            ["source ctl path"] = arrayElement.TypedefPath,
+                        }.ToJsonString(), timeoutSeconds: timeoutSeconds, ct: ct));
+                    var code = Int(bound, "code");
+                    steps.Add(new JsonObject
+                    {
+                        ["step"] = "bindArrayElement",
+                        ["typedef"] = arrayElement.TypedefPath,
+                        ["errorCode"] = code,
+                        ["errorSource"] = Str(bound, "source"),
+                    });
+                    if (bound is null || code is not 0)
+                        return Outcome(false, "bindArrayElement", steps, total, req,
+                            "The array typedef was saved, but its element was not linked to the " +
+                            "given typedef - read bindArrayElement. lvai_describe_ctl says whether " +
+                            "that file is itself a typedef.");
+                }
+                // ---- 3b. a cluster's element typedefs, in the IDE's application instance
+                else if (req.Elements.Count > 0)
                 {
                     var opened = await EnsureProjectActiveAsync(connection, req.ProjectPath!, timeoutSeconds, ct);
                     steps.Add(opened.Step);
@@ -230,7 +263,10 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
                     verified.Ok
                         ? $"Created{(strict ? " a STRICT" : "")} typedef '{Path.GetFileName(req.CtlPath)}'" +
                           (req.Elements.Count > 0
-                              ? $" with {req.Elements.Count} element(s) bound to their own typedefs."
+                              ? req.Elements[0].Index == Element.ArrayElementIndex
+                                  ? " with its array element bound to " +
+                                    $"'{Path.GetFileName(req.Elements[0].TypedefPath)}'."
+                                  : $" with {req.Elements.Count} element(s) bound to their own typedefs."
                               : ".") +
                           " Verified from the saved file. No pylabview wrote anything."
                         : "The file does not say what was asked for - read the verify step.");
@@ -244,7 +280,14 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
 
     // ------------------------------------------------------------------ arguments
 
-    internal sealed record Element(string Label, int Index, string TypedefPath);
+    internal sealed record Element(string Label, int Index, string TypedefPath)
+    {
+        /// <summary>The Index of the one Element an ARRAY typedef takes: its element.</summary>
+        internal const int ArrayElementIndex = -1;
+
+        /// <summary>The key that names an array's element in elementTypedefsJson.</summary>
+        internal const string ArrayElementKey = "element";
+    }
 
     internal sealed record Request(string CtlPath, string Type, string Label, bool Strict,
                                    IReadOnlyList<Element> Elements, string? ProjectPath)
@@ -284,17 +327,36 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
                     return (null, Json.Error("badArguments",
                         "elementTypedefsJson must be a JSON OBJECT of element label -> .ctl path."));
 
-                var members = TestTools.ClusterMembers(type.Trim());
-                if (members is null)
+                if (type.Trim().StartsWith("array{", StringComparison.OrdinalIgnoreCase) ||
+                    type.Trim().StartsWith("array.", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (map.Count != 1 || map[Element.ArrayElementKey] is not JsonValue av ||
+                        av.GetValueKind() != JsonValueKind.String)
+                        return (null, Json.Error("badArguments",
+                            "For an array `type`, elementTypedefsJson takes exactly one entry, " +
+                            "{\"element\": \"<absolute path of an existing typedef .ctl>\"}."));
+                    var arrayPath = Path.GetFullPath(av.GetValue<string>());
+                    if (!File.Exists(arrayPath) ||
+                        !arrayPath.EndsWith(".ctl", StringComparison.OrdinalIgnoreCase))
+                        return (null, Json.Error("fileNotFound",
+                            "The typedef for the array's element is not an existing .ctl: " +
+                            $"'{arrayPath}'. Create it first."));
+                    elements.Add(new Element(Element.ArrayElementKey, Element.ArrayElementIndex,
+                                             arrayPath));
+                }
+
+                var members = elements.Count > 0 ? null : TestTools.ClusterMembers(type.Trim());
+                if (elements.Count == 0 && members is null)
                     return (null, Json.Error("badArguments",
-                        "elementTypedefsJson binds cluster ELEMENTS, and `type` is not a cluster.",
+                        "elementTypedefsJson binds cluster ELEMENTS or an array's element, and " +
+                        "`type` is neither a cluster nor an array.",
                         new { type }));
-                foreach (var (key, value) in map)
+                foreach (var (key, value) in members is null ? Enumerable.Empty<KeyValuePair<string, JsonNode?>>() : map)
                 {
                     if (value is not JsonValue v || v.GetValueKind() != JsonValueKind.String)
                         return (null, Json.Error("badArguments",
                             $"The value for '{key}' must be a .ctl path string."));
-                    var index = members.ToList().FindIndex(m => m.Name == key);
+                    var index = members!.ToList().FindIndex(m => m.Name == key);
                     if (index < 0)
                         return (null, Json.Error("elementNotInType",
                             $"'{key}' is not a top-level element of `type`. Labels are matched " +
@@ -308,7 +370,7 @@ internal sealed class TypedefCreateTools(LvaiConnection connection)
                             "inner typedefs first."));
                     elements.Add(new Element(key, index, path));
                 }
-                if (string.IsNullOrWhiteSpace(projectPath))
+                if (members is not null && string.IsNullOrWhiteSpace(projectPath))
                     return (null, Json.Error("projectNeeded",
                         "Binding elements to typedefs needs projectPath: {LV.Control} Replace is a " +
                         "silent no-op outside the IDE's application instance, which is reached " +

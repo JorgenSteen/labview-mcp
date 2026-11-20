@@ -42,7 +42,7 @@ Measured facts that each cost minutes when found at run time. Plan around them f
   need in your report (the orchestrator creates it with `lvai_create_typedef`), give the
   constant a UNIQUE label and bind it with `constantsJson` below (measured 2026-11-19: enum,
   cluster and array constants all bound and kept their values; an ARRAY typedef's element is
-  not yet linked to the enum's `.ctl`, so prefer a cluster). A typedef CONSTANT: one wired into a subVI CALL's typedef
+  linked to the enum's `.ctl` by `lvai_create_typedef` `elementTypedefsJson` `{"element": ...}`). A typedef CONSTANT: one wired into a subVI CALL's typedef
   input is bound by `lvai_bind_typedef_constants`; any other - a cluster constant into `Bundle By
   Name`, a queue's element type - by `lvai_swap_subvis` `constantsJson`
   `[{"label":"<constant label>","class":"<the .ctl>"}]` (needs the project active; measured

@@ -397,9 +397,25 @@ Then a fourth item was added to `State.ctl` and the VI saved again, and the FILE
 | cluster | `Data.ctl` | four items in its `State` member | kept ({Run, 3}) |
 | array of enum | `States.ctl` | still three - until `States.ctl` itself was rewritten, then four | kept ([Idle, Stop]) |
 
-So all three bind and keep their values. THE GAP: `lvai_create_typedef` links a nested typedef only
-inside a CLUSTER (`elementTypedefsJson`); an ARRAY typedef's element is a plain copy of the enum,
-and the array constant follows its own `.ctl` only. Until that is closed, an enum table is better a
-cluster typedef or a constant per entry. Also measured: no tool adds an ITEM to an enum typedef
+So all three bind and keep their values. The gap that was here - `lvai_create_typedef` linked a
+nested typedef only inside a CLUSTER, so an ARRAY typedef's element was a plain copy of the enum -
+is closed since 2026-11-20: `elementTypedefsJson` `{"element": "<enum .ctl>"}` on an `array{...}`
+type links the element (see the next section). Also measured: no tool adds an ITEM to an enum typedef
 (`lvai_add_typedef_elements` appends cluster elements) - the probe overwrote the `.ctl` with
 `lvai_create_typedef overwrite: true`.
+
+## An ARRAY typedef's element linked to an enum typedef (measured 2026-11-20)
+
+Route, LabVIEW 2026, NO project active: `lvai_typedef_bind` (the helper `lvai_flatten_typedefs`
+installs with) on the array `.ctl` itself - Open VI Reference -> `{LV.VI}` `Front Panel` ->
+`{LV.Panel}` `Controls[]` index 0 -> `{LV.Array}` `Array Element` -> `{LV.Control}` `Replace`
+(the enum's `.ctl`) -> `{LV.VI}` `Save.Instrument`, path unwired. The saved file gained a TDCC link
+to the enum's `.ctl`, the element's descriptor became `Type="TypeDef"` labelled with that file,
+and the outer file stayed a typedef whose first top-level type is itself. Proof the link is live:
+an item added to the enum reached every copy of the element type after `lvai_resave_ctl`.
+
+`lvai_create_typedef` does it since that day: `type: "array{uint16{Idle,Run,Stop}}"`,
+`elementTypedefsJson: {"element": "<Mode.ctl>"}`, `projectPath` optional (step
+`bindArrayElement`). Live: ok with and without a project; with one, both files were listed and the
+project left closed. Given up: only the ELEMENT of a one-level array is reached - an array of a
+cluster whose members should be typedefs needs that cluster made a typedef first.
