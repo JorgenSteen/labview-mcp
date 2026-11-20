@@ -173,4 +173,41 @@ public sealed class BenchRound4FixesTests
         using var entered = await second.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(entered.HoldsFile);
     }
+
+    private static ExecStateReading Reading(int state, string? instance, int? getErrors, params string[] lines) =>
+        new(state, "", 0, "", Errors: lines.Length == 0 ? null : [.. lines.Select(l => new ErrorListTools.ErrorLine(l, ""))],
+            GetErrorsCode: getErrors, Instance: instance);
+
+    [Fact]
+    public void Only_a_broken_vi_refused_with_1026_in_the_project_instance_is_read_in_the_own_instance()
+    {
+        Assert.True(ExecStateTools.NeedsOwnInstanceRead(Reading(0, "project", 1026)));
+        Assert.False(ExecStateTools.NeedsOwnInstanceRead(Reading(1, "project", 1026)));      // executable: no line is missing
+        Assert.False(ExecStateTools.NeedsOwnInstanceRead(Reading(0, "own", 1026)));          // already the own instance
+        Assert.False(ExecStateTools.NeedsOwnInstanceRead(Reading(0, "project", 0, "While Loop: Conditional terminal is not wired")));
+        Assert.False(ExecStateTools.NeedsOwnInstanceRead(Reading(0, "project", 1073)));
+    }
+
+    [Fact]
+    public void The_own_instances_lines_join_the_project_reading_and_say_where_they_came_from()
+    {
+        var project = Reading(0, "project", 1026);
+        var merged = ExecStateTools.WithOwnInstanceErrors(project, Reading(0, "own", 0, "Property Node: Contains unwired or bad terminal"));
+
+        Assert.Equal("project", merged.Instance);
+        Assert.Equal("own", merged.ErrorsInstance);
+        Assert.Equal("Property Node: Contains unwired or bad terminal", Assert.Single(merged.Errors!).Error);
+        Assert.Contains("second copy", ExecStateTools.ErrorsInstanceNote(merged));
+        Assert.Null(ExecStateTools.ErrorsInstanceNote(project));
+    }
+
+    [Fact]
+    public void An_own_instance_copy_that_is_not_broken_or_gave_no_lines_explains_nothing()
+    {
+        var project = Reading(0, "project", 1026);
+
+        Assert.Same(project, ExecStateTools.WithOwnInstanceErrors(project, Reading(1, "own", 0)));
+        Assert.Same(project, ExecStateTools.WithOwnInstanceErrors(project, Reading(0, "own", 1026)));
+        Assert.Same(project, ExecStateTools.WithOwnInstanceErrors(project, null));
+    }
 }

@@ -211,3 +211,13 @@ always read. An EXECUTABLE VI in the project instance answers 1026 as well, harm
 Not found: why the project instance refuses, and why not from the first call. What works today:
 close the project and ask again. `lvai_error_list` did not help - it lists what LabVIEW holds in
 memory, and answered `brokenCount: 0` in every case.
+
+**The fallback, since 2026-11-20 (NOT yet checked live):** when a BROKEN VI read in the project's
+instance still has no lines after the retry and Get Errors answered 1026, the helper runs once
+more with its new `own instance` input TRUE and reads the VI in its own application instance.
+Lines from there join the answer as `errors`, with `errorsFromInstance: "own"` and
+`errorsInstanceNote`; `execState`, `linkerErrors` and `instance` stay the project's. Nothing is
+taken from a second copy that is not broken or gave no lines. Given up: that copy is loaded
+WITHOUT the project, so a line about something only the project resolves (a library, a
+project-local callee) can be an artefact of the copy - the note says so; and one more helper run
+(seconds) in the one case that had no lines at all before.
