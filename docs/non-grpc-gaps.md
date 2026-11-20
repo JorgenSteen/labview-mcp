@@ -134,3 +134,21 @@ run against the composer without the check, exactly the four faults fail.
 **NOT measured in LabVIEW yet**: that each refused probe really loads broken and each control
 loads executable. LabVIEW 2026 was in use and LabVIEW 2020 shares its COM registration (both
 32-bit), so ActiveX could not be aimed at 2020. Do it with only one LabVIEW running.
+
+## 6. In-place edits of an EXISTING VI - no tool on either backend (noted 2026-11-20)
+
+Not a backend gap: these have no tool at all. Reported from a field project (a refactor of
+existing code on LabVIEW 2020, an integer widened from U16 to I32 across typedef, constants,
+indicators and conversion primitives). Regeneration is not an answer there: it discards the panel,
+the layout and every typedef link of code that already exists. Nothing below is measured yet.
+
+| | gap | what exists today | feasible? | idea |
+|---|---|---|---|---|
+| [ ] | **6a. Replace a PRIMITIVE in place** (the IDE's right-click > Replace: `To Unsigned Word Integer` -> `To Long Integer`) | `lvai_swap_subvis` replaces subVI calls and constants only | likely | `{LV.GObject}` `Replace` (`Style; Path; PaletteString`) IS in the catalogue (`docs/vi-server-reference.md`, "The write primitives that exist") and is what the swap and bind tools already call on `{LV.SubVI}`/`{LV.Constant}`/`{LV.Control}`. Unmeasured: which `Style` or `PaletteString` names a primitive, and whether the wires survive. The known traps apply (the reference is invalid afterwards, the return value cannot be consumed) |
+| [ ] | **6b. Change a numeric's REPRESENTATION in place** - a typedef field, a diagram constant, a control or indicator, a map key | `lvai_add_typedef_elements` only appends; `lvai_set_constant` changes a value, not a type | likely | `Representation` on `{LV.Numeric}`, `{LV.NumericConstant}` and kin is in `docs/vi-server-properties.tsv`, listed as `read`. Whether a WRITE is accepted in edit mode is the measurement to make; if not, 6a's `Replace` with a control of the new type is the fallback. A typedef field retyped this way must be followed by saving the callers, as `lvai_add_typedef_elements` does |
+| [ ] | **6c. Offline (pylabview) edits that touch a TYPE** | `pylv_apply` has `conpane`, `retarget`, `placeLabels`; the `scripts/pylv-*.py` set edits events, strings, timed loops | hard | A type change means rewriting the type descriptor table, the heap object and every dependent wire's type consistently. Prefer 6a/6b through VI Server; LabVIEW then propagates the types itself |
+
+Order of work: measure 6b's property write and 6a's `Replace` on a throwaway VI in LabVIEW 2020
+AND 2026, write the result into `docs/vi-server-reference.md`, then one tool for each
+(scripted wires are followed by `lvai_layout_diagram`; an edited class member is saved with its
+class).
