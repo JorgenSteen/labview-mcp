@@ -166,7 +166,19 @@ Reference, with the project closed, in the default instance:
 
 LabVIEW 2026 then opened `Pin20.lvproj` with `projectBecameActive`, `execState 1` and no errors,
 nothing in memory modified, no dialog; the close answered `projectRewrite.changed: false`, and
-the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. Not measured: a
-dependency that is itself NEWER than the pin (here the typedefs were older, 17.0, and needed
-nothing) - one Save For Previous per file is the likely answer, unconfirmed. No tool does this
+the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. No tool does this
 yet; it is the route if a pinned project's files must stay at the pin.
+
+**A dependency newer than the pin: one Save For Previous PER FILE (measured 2026-11-23).** This
+section said "one Save For Previous per file is the likely answer, unconfirmed". `Pin20.lvproj`
+(pin 20.0) listing `Uses Limits.vi` and its typedef `Limits.ctl`, BOTH saved 26.0; the same probe,
+project closed:
+
+- the VI to a new folder: 20.0, and the folder holds ONLY the VI - the newer `.ctl` is not written;
+- the VI in place: 20.0, `Limits.ctl` stays 26.0. LabVIEW 2026 opens the project with the mix
+  (`projectBecameActive`, execState 1, no dialog, nothing modified) - but a LabVIEW 2020 could not
+  load the 26.0 typedef;
+- the `.ctl` through the SAME probe: Open VI Reference takes a `.ctl` with no error, and `Save.For
+  Previous` brought it to 20.0, to a new folder and in place, still a typedef with its type;
+- with both at 20.0 the project opened as before and its close answered `projectRewrite.changed:
+  false`.

@@ -230,7 +230,11 @@ internal static class SaveVersions
             else if (written < before.StartedUtc.AddSeconds(-2)) continue;
             if (Of(path) is not { } now) continue;
 
-            var was = before.Versions.GetValueOrDefault(path);
+            // A FILE THE CALL SAVED WITHOUT NAMING IT - a typedef's callers - has no version read
+            // before the call; the tool that saved it hands that version over in the answer
+            // (VersionsBeforeKey). Measured 2026-11-23: lvai_set_representation re-saved a 20.0
+            // caller of a typedef as 26.0 and saveVersionCheck named only the .ctl.
+            var was = before.Versions.GetValueOrDefault(path) ?? HandedOver(answer, path);
             // NOT LISTED YET IS NOT "NO PIN": the composer wrote a new VI at the pin of the project
             // in the folders above it (PinAbove), so the check judges it by the same rule. Measured
             // 2026-11-13: a VI generated into a 21.0 project's folder and given its icon BEFORE it was
@@ -268,6 +272,19 @@ internal static class SaveVersions
         };
     }
 
+    /// <summary>
+    /// The answer key a tool fills with the versions, read before it saved them, of files the call
+    /// did not name - `{ "<path>": "20.0" }`. The check reads it as their `was`, and
+    /// <see cref="Annotate"/> takes it out of the answer again.
+    /// </summary>
+    internal const string VersionsBeforeKey = "savedFileVersionsBefore";
+
+    /// <summary>The version a tool handed over for <paramref name="path"/>, or null.</summary>
+    private static string? HandedOver(JsonNode? answer, string path) =>
+        answer?[VersionsBeforeKey] is JsonObject map
+            ? map.FirstOrDefault(kv => string.Equals(kv.Key, path, StringComparison.OrdinalIgnoreCase)).Value?.GetValue<string>()
+            : null;
+
     /// <summary>The answer's text with `saveVersionCheck` added, or unchanged when there is nothing to say.</summary>
     internal static string Annotate(string answerText, Before before,
                                     IEnumerable<KeyValuePair<string, JsonElement>>? arguments)
@@ -275,10 +292,21 @@ internal static class SaveVersions
         JsonObject? answer;
         try { answer = JsonNode.Parse(answerText) as JsonObject; }
         catch (JsonException) { return answerText; }
-        if (answer is null || answer.ContainsKey("saveVersionCheck")) return answerText;
-        if (Check(before, answer, arguments) is not { } check) return answerText;
-        answer["saveVersionCheck"] = check;
+        if (answer is null) return answerText;
+        var handedOver = answer.ContainsKey(VersionsBeforeKey);
+        if (answer.ContainsKey("saveVersionCheck"))
+            return handedOver ? Json.Document(Without(answer, VersionsBeforeKey)) : answerText;
+        var check = Check(before, answer, arguments);
+        if (check is null && !handedOver) return answerText;
+        answer.Remove(VersionsBeforeKey);
+        if (check is not null) answer["saveVersionCheck"] = check;
         return Json.Document(answer);
+    }
+
+    private static JsonObject Without(JsonObject o, string key)
+    {
+        o.Remove(key);
+        return o;
     }
 
     /// <summary>Every rooted path to a LabVIEW file in these values: strings, lines of strings, JSON inside strings.</summary>

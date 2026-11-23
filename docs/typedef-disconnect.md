@@ -1247,6 +1247,20 @@ constant into `Set Mode.vi`'s typedef `Mode` answered `replaced: 1`, and the sav
 control, carried none. (No coercion dot either way: an enum with the typedef's own items is not
 coerced, so `coercedAfter` could not tell; the link record did.)
 
+**CORRECTED 2026-11-23: the ActiveX route BINDS.** Re-measured on LabVIEW 2026 (26.3.1f1, 32-bit)
+with the same shape of fixture - class `Heater`, enum typedef `Mode.ctl` in its private data,
+dynamic dispatch `Set Mode.vi` with a plain enum `Mode` on its pane - and a plain VI
+(`Plain Limits.vi`, pane cluster `Limits`, typedef `Limits.ctl`, only `projectPath`). With `backend:
+pylabview` (ActiveX) both answered `verified: true`, `boundOnSavedPane: true`, `savedPaneTypedefs`
+naming the `.ctl`, execState 1 - and again after a LabVIEW restart on copies LabVIEW had never
+loaded (`retriedAfterEmptyNames: false`). `pylv_extract` of every bound file shows the new `TypeDef
+To CustCtl` link record (`Set Mode.vi` 6484 -> 6956 bytes); through NI's service the files came out
+the same. LabVIEW 2020 had bound over ActiveX on 2026-11-20 too. What made the 2026-11-14 runs a
+no-op is not known. The text above said "over ActiveX this Replace answers success and binds
+nothing" and the tool ROUTED the default through NI's service for it; since 2026-11-23 the default
+route runs, and only a saved pane that does NOT show the binding (`verified` false) is bound again
+through NI's service when it answers (`TypedefTools.ShouldRetryThroughService`, `routeNote`).
+
 ### 13c. A FIRST OPEN READS EVERY CONTROL NAME AS EMPTY - 2026-09-18
 
 Measured twice on one fixture inside a minute, same inputs, nothing else changed:

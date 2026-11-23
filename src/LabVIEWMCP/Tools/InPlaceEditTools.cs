@@ -153,12 +153,16 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
             // ---- 4. A TYPEDEF'S CALLERS follow in memory only (measured: byte-identical until
             // loaded and saved, and the modification bitsets read 0, so nothing tells which need it).
             JsonArray? callersSaved = null, callersFailed = null;
+            JsonObject? callerVersions = null;
             if (isCtl && allWritten && throughProject && saveCallers)
             {
                 callersSaved = new JsonArray();
                 callersFailed = new JsonArray();
+                callerVersions = new JsonObject();
                 foreach (var caller in Callers(file, projectPath!))
                 {
+                    // read before the save, so saveVersionCheck can say a caller went up a version
+                    if (SaveVersions.Of(caller) is { } callerWas) callerVersions[caller] = callerWas;
                     var resaved = await RunAsync(helpers, helperVi!, caller, throughProject: true, [], timeoutSeconds, ct,
                                                  save: true);
                     var callerCode = resaved.Values is null ? -1 : HousekeepingHelpers.Code(resaved.Values, "error out") ?? 0;
@@ -184,6 +188,7 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 ["errors"] = broke ? ExecStateTools.ErrorsNode(after) : null,
                 ["callersSaved"] = callersSaved,
                 ["callersFailed"] = callersFailed is { Count: > 0 } ? callersFailed : null,
+                [SaveVersions.VersionsBeforeKey] = callerVersions is { Count: > 0 } ? callerVersions : null,
                 ["backupPath"] = backup,
                 ["steps"] = steps.Count > 0 ? steps : null,
                 ["note"] = RepresentationNote(code, saved, allWritten, broke, isCtl, throughProject, saveCallers) +

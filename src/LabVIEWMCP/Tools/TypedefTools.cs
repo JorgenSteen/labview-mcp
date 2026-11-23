@@ -1071,9 +1071,9 @@ internal sealed class TypedefTools(LvaiConnection connection)
         a generated subVI's pane is the bare type) - lvai_bind_typedef_constants reaches only
         constants.
         PRECONDITION: a project OPEN and ACTIVE (pass projectPath) - Replace is a SILENT no-op
-        outside the IDE's instance. CALL IT ON ANY BACKEND AND PASS NO `backend`: the tool picks
-        the route that binds by itself and says which in `routeNote`; whether it bound is
-        `verified`, never the route.
+        outside the IDE's instance. CALL IT ON ANY BACKEND AND PASS NO `backend`: when the saved
+        pane does not show the binding, the tool binds again through NI's service if it answers
+        (`routeNote`); whether it bound is `verified`, never the route.
         THE VERDICT IS `verified`, three conditions: each terminal's type on the SAVED VI's
         connector pane is its .ctl (read with pylabview - a .ctl used elsewhere in the VI does not
         count), every requested terminal is on the panel, and the helper matched as many as asked.
@@ -1106,37 +1106,39 @@ internal sealed class TypedefTools(LvaiConnection connection)
         CancellationToken ct = default) =>
         await Rpc.GuardAsync(async () =>
         {
-            var (route, routeNote) = await PaneBindRouteAsync(backend, ct);
-            var answer = await BackendRoute.WithBackendAsync(route, "lvai_bind_pane_typedef", () =>
-                BindPaneCoreAsync(viPath, lvclassPath, bindingsJson, projectPath, helperViPath, helperAixmlPath,
-                                  regenerateHelper, timeoutSeconds, ct));
-            if (routeNote is null || JsonNode.Parse(answer) is not JsonObject o) return answer;
-            o["routeNote"] = routeNote;
+            Task<string> Bind() => BindPaneCoreAsync(viPath, lvclassPath, bindingsJson, projectPath, helperViPath,
+                                                     helperAixmlPath, regenerateHelper, timeoutSeconds, ct);
+            var answer = await BackendRoute.WithBackendAsync(backend, "lvai_bind_pane_typedef", Bind);
+            if (!ShouldRetryThroughService(backend, answer)) return answer;
+            var probe = await StatusTools.ProbeServiceAsync(connection, TimeSpan.FromSeconds(5), ct);
+            if (probe["reachable"]?.GetValue<bool>() is not true) return answer;
+            var retried = await BackendRoute.WithBackendAsync(AixmlBackend.Grpc, "lvai_bind_pane_typedef", Bind);
+            if (JsonNode.Parse(retried) is not JsonObject o) return retried;
+            o["routeNote"] = "Over ActiveX the saved pane did not show the binding (`verified` false), so the " +
+                             "helper ran again through NI's service; this answer is that run's.";
             return Json.Document(o);
         });
 
     /// <summary>
-    /// THE ACTIVEX ROUTE IS A SILENT NO-OP FOR THIS REPLACE - measured 2026-11-14 on LabVIEW 2026
-    /// with a class member's enum control and an enum typedef .ctl, the project active: run over
-    /// ActiveX, the helper answered every stage 0 and `terminals bound: 1`, and the saved VI kept a
-    /// plain enum - with OUR composed helper AND with NI's build of the same helper. The same call
-    /// through NI's service (RunVIAsTopLevel, the add-on's instance) bound it, read back from the
-    /// saved pane. So on the pylabview default the helper runs through NI's service whenever it
-    /// answers, and says so; a call naming its backend gets that backend. With NI's service down the
-    /// ActiveX run stays, and the saved-file verdict reports what it did.
+    /// THE ACTIVEX ROUTE BINDS - re-measured 2026-11-23 on LabVIEW 2026 (26.3.1f1) and 2026-11-20 on
+    /// LabVIEW 2020: a class member's enum and a plain VI's cluster, `verified` true from the saved
+    /// pane, a VI LabVIEW had not loaded before included, the same as through NI's service. On
+    /// 2026-11-14 the same call over ActiveX answered success and bound NOTHING (three runs, our
+    /// helper and NI's), so on the pylabview default the tool ran through NI's service whenever it
+    /// answered. Now the default route runs, and only a saved pane that does NOT show the binding
+    /// (`verified` false - not null, which means the pane could not be read) is bound again through
+    /// NI's service when it answers. A call naming its backend gets that backend and no retry.
+    /// What it gives up: a second helper run (2-10 s) on the case 2026-11-14 measured.
     /// </summary>
-    internal async Task<(string? Route, string? Note)> PaneBindRouteAsync(string? backend, CancellationToken ct)
+    internal static bool ShouldRetryThroughService(string? backend, string answer)
     {
-        if (backend is { Length: > 0 } || AixmlBackend.ServerDefault().Name != AixmlBackend.PyLabview)
-            return (backend, null);
-        var probe = await StatusTools.ProbeServiceAsync(connection, TimeSpan.FromSeconds(5), ct);
-        return probe["reachable"]?.GetValue<bool>() is true
-            ? (AixmlBackend.Grpc, "Ran through NI's service, not over ActiveX: over ActiveX this Replace " +
-                                  "answers success and binds nothing (measured 2026-11-14). Pass backend " +
-                                  "pylabview to force the ActiveX run.")
-            : (null, "NI's service is not reachable, so the helper ran over ActiveX, where this Replace " +
-                     "was measured to answer success and bind nothing (2026-11-14) - judge by `verified`, " +
-                     "read from the saved file. With LabVIEW 2025 or newer, NI's service binds it.");
+        if (backend is { Length: > 0 } || AixmlBackend.ServerDefault().Name != AixmlBackend.PyLabview) return false;
+        try
+        {
+            return JsonNode.Parse(answer) is JsonObject o && o["verified"] is JsonValue v
+                   && v.TryGetValue<bool>(out var verified) && !verified;
+        }
+        catch (System.Text.Json.JsonException) { return false; }
     }
 
     private async Task<string> BindPaneCoreAsync(

@@ -154,11 +154,12 @@ What it gives up, and what is not measured:
   it. The `.lvproj` was byte-identical after the call and after a close.
 - **One backup folder per call that reaches the write step**, a call LabVIEW then refuses included.
   Nothing removes them.
-- Not measured: a strict typedef, a typedef-bound constant, a class's private data control
-  (`Replace` on its fields is refused with 1073, `docs/vi-server-reference.md`; use
-  `lvai_add_class_field`), a member VI of a class, callers of a VI whose PANE control changed type,
-  several callers or a nested typedef in one `callersSaved`, a file open in the IDE with unsaved
-  edits of its own, complex and fixed-point representations, a map key.
+- Measured since (§7, 2026-11-23): a strict typedef, a member VI of a class, several callers and a
+  nested typedef in one `callersSaved`, a 20.0 file edited by 2026.
+- Not measured: a typedef-bound constant, a class's private data control (`Replace` on its fields
+  is refused with 1073, `docs/vi-server-reference.md`; use `lvai_add_class_field`), callers of a VI
+  whose PANE control changed type, a file open in the IDE with unsaved edits of its own, complex and
+  fixed-point representations, a map key.
 
 ## 4. `lvai_replace_primitive`
 
@@ -197,9 +198,10 @@ What it gives up, and what is not measured:
   coercion dot at an int32 sink.
 - **With `projectPath` the project is left open**; one backup folder per call that reaches the
   replace step.
-- Not measured: growable nodes (`Build Array`, `Bundle`, `Compound Arithmetic`) as source or target,
-  structures (a While Loop into a For Loop), names in a non-English LabVIEW. The tool refuses none
-  of these - it reports what LabVIEW answered.
+- Growable nodes and a structure, measured 2026-11-23 (§7): `Add` <-> `Compound Arithmetic` works;
+  `Build Array`/`Bundle` swaps are saved broken like any other shape change; a While Loop -> For
+  Loop is refused by LabVIEW (1154), file unchanged. Not measured: names in a non-English LabVIEW.
+  The tool refuses none of these - it reports what LabVIEW answered.
 
 ## 5. Live check of the tools (LabVIEW 2026, branch build, 2026-11-20)
 
@@ -267,3 +269,27 @@ typedef with one caller 3.7 s. Also measured there, in a scratch helper: `Replac
 
 Not measured: a 2020 file edited through these tools by a NEWER LabVIEW (the save then writes the
 newer version - `saveVersionCheck`, `docs/save-version.md`).
+
+## 7. The cases §3 and §4 left open (LabVIEW 2026, main build, 2026-11-23)
+
+Driven over raw stdio, every result checked against the saved file (export, `lvai_describe_ctl`,
+`lvai_vi_terminals`, exec state, md5 of the files that should not change).
+
+| case | result |
+|---|---|
+| a STRICT typedef field U16 -> I32 with `projectPath` | PASS: still a strict typedef, `Count: NumInt32`; `callersSaved` the one caller, still bound, pane `cluster{int32.Count,double.Gain}`, executable; nothing else changed |
+| a CLASS member: two pane controls and a diagram constant U16 -> I32 | PASS in ONE call, with and without `projectPath` (without: `instance: own`); exec state 1 -> 1, the class terminals still dynamic, the `.lvclass` byte-identical |
+| two callers and a NESTED typedef in one call | PASS: `Limits.ctl` with `projectPath` -> `callersSaved [Outer.ctl, Uses Limits B.vi, Uses Limits.vi, Uses Outer.vi]`, the outer typedef first; it keeps its `Limits` element as `TypeDef Limits.ctl` with `Max NumInt32`, all callers executable |
+| the numeric written on the OUTER typedef's nested instance | error 1082, file unchanged (a backup folder is still made) |
+| `Add` <-> `Compound Arithmetic` | `ok`, executable 1 -> 1, both inputs wired (`operation="Add"`) |
+| `Build Array` -> `Bundle`; `Add` -> `Build Array` | replaced and SAVED BROKEN, `ok: false`, 1 -> 0: the inputs stay wired, the new output type no longer fits its sink - the documented verdict for a different shape |
+| `While Loop` -> `For Loop` | the dry run lists the loop; the replace is refused by LabVIEW, error 1154, `saved: false`, file unchanged |
+| a 20.0 VI / `.ctl` edited by LabVIEW 2026 | every saved file is 26.0 afterwards, executable; `saveVersionCheck` names the VI or `.ctl` with `was 20.0` |
+
+Found by the last row: the CALLER the typedef call re-saved (20.0 -> 26.0) was missing from
+`saveVersionCheck` - the check reads versions only of the files a call NAMES. Fixed the same day:
+the tool reads each caller's version before it saves it and hands it to the check
+(`SaveVersions.VersionsBeforeKey`), which reports it and takes the hand-over out of the answer.
+Closing that unpinned 20.0 project in 2026 rewrote the `.lvproj` as 26.0 (`projectRewrite`,
+`docs/save-version.md` §3). Wall clock: a VI about 1 s, a typedef with callers 4-7 s, a replace
+0.5 s.

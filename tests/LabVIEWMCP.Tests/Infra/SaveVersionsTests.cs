@@ -301,4 +301,38 @@ public sealed class SaveVersionsTests : IDisposable
         Assert.Same(text, SaveVersions.Annotate(text, before, null));
         Assert.Same("not json", SaveVersions.Annotate("not json", before, null));
     }
+    /// <summary>
+    /// A TYPEDEF'S CALLER, saved by the call without being named in it: measured 2026-11-23, a 20.0
+    /// caller re-saved as 26.0 by lvai_set_representation was missing from saveVersionCheck, which
+    /// named only the .ctl. The tool hands the caller's version over; the check reports it and the
+    /// hand-over key leaves the answer.
+    /// </summary>
+    [Fact]
+    public void A_caller_the_tool_saved_unnamed_is_reported_from_the_version_it_handed_over()
+    {
+        var caller = Vi("Caller.vi");
+        var before = new SaveVersions.Before(DateTime.UtcNow.AddSeconds(-1), new Dictionary<string, string?>());
+        File.SetLastWriteTimeUtc(caller, DateTime.UtcNow);
+        var answer = new JsonObject
+        {
+            ["ok"] = true,
+            ["callersSaved"] = new JsonArray(caller),
+            [SaveVersions.VersionsBeforeKey] = new JsonObject { [caller] = "20.0" },
+        };
+
+        var annotated = JsonNode.Parse(SaveVersions.Annotate(answer.ToJsonString(), before, null))!.AsObject();
+
+        var file = annotated["saveVersionCheck"]!["files"]![0]!;
+        Assert.Equal(caller, file["path"]!.GetValue<string>(), ignoreCase: true);
+        Assert.Equal("20.0", file["was"]!.GetValue<string>());
+        Assert.Equal("26.0", file["savedAs"]!.GetValue<string>());
+        Assert.False(annotated.ContainsKey(SaveVersions.VersionsBeforeKey));
+
+        // nothing to report: the hand-over key still leaves the answer
+        var same = new JsonObject { ["ok"] = true, [SaveVersions.VersionsBeforeKey] = new JsonObject { [caller] = "26.0" } };
+        var quiet = JsonNode.Parse(SaveVersions.Annotate(same.ToJsonString(),
+            new SaveVersions.Before(DateTime.UtcNow.AddMinutes(1), new Dictionary<string, string?>()), null))!.AsObject();
+        Assert.False(quiet.ContainsKey(SaveVersions.VersionsBeforeKey));
+        Assert.False(quiet.ContainsKey("saveVersionCheck"));
+    }
 }
