@@ -1,7 +1,7 @@
 # LabVIEW MCP: how to orchestrate LabVIEW work
 
-You are the orchestrator. These rules come from measured builds; each one exists because ignoring
-it cost real time.
+You are the orchestrator. These rules come from measured builds; each exists because ignoring it
+cost real time.
 
 ## Delegate LabVIEW work to the `labview-*` agents
 
@@ -32,23 +32,22 @@ and never re-spawn it.
 
 Before you spawn the first agent for an application of more than one VI:
 
-1. Read the specification and any supplied panel ONCE yourself.
+1. Read the specification and any supplied panel ONCE yourself, and save them in the build
+   folder as `spec.txt` and `panel.xml` (the panel's AIXML export). Agents get those paths,
+   never a PDF.
 2. Write `build-contract.json` in the build folder: every VI with its path, owner, builder,
    connector pane (terminal names, types, conIdx, connection) and the VIs it calls. A free-form
-   design document is not a substitute - no tool can check it, and every agent re-reads it.
-   The format is in `docs/build-contract.md` beside the server's exe.
+   design document is no substitute. Format: `docs/build-contract.md` beside the server's exe.
 3. Run `lvai_check_build_contract mode=plan` until it answers `ok`. It needs no LabVIEW and
    answers the build WAVES: wave 0 calls nothing in the contract, wave n only earlier waves.
-4. Spawn wave 0's builders in parallel, each with the contract path and its own VIs. At the same
-   time spawn the main-VI builder to author its scaffold against the contract; it generates only
-   once its callees exist.
+4. Spawn wave 0's builders in parallel, each with the contract path and its `builder` name (it
+   asks for its part with `forBuilder`). At the same time spawn the main-VI builder to author its
+   scaffold; it generates only once its callees exist.
 5. After each wave run `lvai_check_build_contract mode=verify` for that wave's VIs. Never build
    the next wave against a VI that differs from the contract.
-6. Test builders get the contract too: their subjects' panes and qualified call names come from
-   it, so they do not re-read what the build agents just wrote.
+6. Test builders get the contract too: subject panes and qualified call names come from it.
 
-Pass the facts an agent needs in its prompt (the spec's relevant part, the contract path). An
-agent that has to rediscover them reads long documents at runtime.
+Pass the facts an agent needs in its prompt, or it rediscovers them from long documents.
 
 ## New VIs that belong together go into a library
 
@@ -59,7 +58,8 @@ needs the project) - helpers a builder added included; callers in the open proje
 1. `lvai_create_library` beside the VIs, with the VIs other code calls (the API) as `itemsJson`;
 2. `lvai_add_to_library` `scope: "private"` with the subVIs only the library's own VIs call;
 3. `lvai_move_to_folder` once per FUNCTION folder (`API`, `Helpers`, `UI`, ...), never flat;
-4. `lvai_exec_state` over every member: membership changes each VI's qualified name;
+4. `lvai_exec_state` over every member (membership renames them). Fix every `audit` error a
+   tool answered; if one answered `deferredSourceOnly`, close the project with `projectPath`;
 5. `lvai_bind_pane_typedef` per subVI whose pane carries a typedef; a subVI's enum constants
    the builder left plain: `lvai_swap_subvis` `constantsJson`.
 
@@ -75,9 +75,9 @@ Two agents in one folder overwrite each other's files. Give each agent its own f
 
 ## Check the station with `pylv_status`
 
-`pylv_status` is the start-up check: it needs no LabVIEW and no NI service, and names the backend
-in force, the running LabVIEWs and whether NI's service answers (`grpcService`). Readiness is
-`lvai_ensure_labview`. `lvai_status` reports NI's service; it matters only on the `grpc` backend.
+`pylv_status` is the start-up check (no LabVIEW, no NI service): backend in force, running
+LabVIEWs, NI's service (`grpcService`); `lvai_status` answers the same on pylabview. Readiness is
+`lvai_ensure_labview`.
 
 ## Only you open and close projects
 
@@ -90,7 +90,8 @@ LabVIEW's copy over the `.lvproj`. So agents GENERATE files; you alone:
 
 The server enforces this. While tool calls overlap, or overlapped in the last 60 s, it refuses a
 project open or close with `projectChangeWhileParallel`. That applies to you too, so open a project
-once a wave has finished and the guard has lifted.
+once a wave has finished and the guard has lifted. Close with `projectPath`: that close also
+strips what place_handler deferred.
 
 A test agent in a parallel build passes `leaveProjectOpen: true` to the test generators: they
 then close no project and list nothing, and report the test VIs for you to list.

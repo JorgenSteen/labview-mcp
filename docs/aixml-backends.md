@@ -55,48 +55,26 @@ Highest wins:
 | 1 | `backend` argument of the call | `call` |
 | 2 | `--aixml-backend <grpc\|pylabview\|auto>` on the server's command line | `--aixml-backend` |
 | 3 | `LABVIEWMCP_AIXML_BACKEND` in the server's environment (same three values) | `LABVIEWMCP_AIXML_BACKEND` |
-| 4 | **`"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json`** - THE place to choose | `settings file <path>` |
-| 5 | nothing set | `default` (**pylabview**, since 2026-11-05) |
+| 4 | nothing set | `default` (**pylabview**, since 2026-11-05) |
 
 **pylabview is the default on every LabVIEW - the user's decision of 2026-11-05.** Before it, an
 omitted backend was grpc, and pylabview only on a LabVIEW older than 2026 (the rule of 2026-10-12,
 which the new default covers and replaces).
 
-**The settings file is the user's decision of 2026-10-13: the choice is an entry that is ALWAYS in
-a file, with every allowed value and what it means written beside it.** The server creates the file
-on its first start - with `"aixmlBackend": "pylabview"` and `"setDefaultDone": true` - and otherwise
-rewrites it ONCE (below), so an edit and its comments stay. It is read on EVERY call (cached by
-content), so a change takes effect without a restart. The comments are JSON comments, read with
-comments skipped:
+**`auto` - in the flag or the variable - makes NO choice**, so the default decides. An unknown value
+is REFUSED by name. `pylv_status` shows the default in force and where it came from.
 
-```jsonc
-{
-  //   "pylabview"  The DEFAULT. Our own composer and reader (scripts\aixml-pylabview). Needs NO NI service ...
-  //   "grpc"       NI's AI service inside LabVIEW (Nigel). ...
-  //   "auto"       The server's default - today "pylabview".
-  "aixmlBackend": "pylabview",
-  "setDefaultDone": true
-}
-```
-
-**The one-time switch (`setDefaultDone`).** An EXISTING file whose `setDefaultDone` is not `true`
-- every installation from before 2026-11-05 - is switched at the next server start:
-`"aixmlBackend"` becomes `"pylabview"` whatever it said, `"setDefaultDone": true` is added, the old
-template's comment promising grpc for `auto` is reworded, and everything else (comments,
-`labviewExe`, `labviewPref`) stays. The old file is kept as `settings.json.bak`, and the server logs
-one `info:` line to stderr. From then on the marker stops it: a user who sets `"grpc"` afterwards
-keeps it. A file that does not parse is left alone (the resolver refuses it by name anyway).
-`ServerSettings.MigrateDefaultOnce`, tested in `ServerSettingsMigrationTests`.
-
-It lives beside the cache under `%USERPROFILE%` rather than beside the exe: a plugin update replaces
-the exe's folder and would take the choice with it, and `%LOCALAPPDATA%` is redirected for a server
-the desktop app starts (`CacheDirectory`). `LABVIEWMCP_SETTINGS` points at another file - the test
-suite uses it to read none. **`auto` - in the file, the flag or the variable - makes NO choice**, so
-the default decides. A file that does not parse, an
-entry that is not a string, or a value that is none of the three is REFUSED by name with the
-file's path, like an unknown name anywhere else. Rules 2 and 3 stay as overrides for a host that
-cannot edit the profile (CI, a shared registration); `pylv_status` shows the file's path, whether it
-exists, its entry and the default in force.
+**The settings-file switch is gone (the user's decision of 2026-11-17).** From 2026-10-13 the
+backend was chosen by `"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json`, a file the
+server created at its first start and switched to pylabview once on 2026-11-05 (marker
+`"setDefaultDone"`, old file kept as `settings.json.bak`). The server no longer creates, migrates
+or reads that entry. At every start it REMOVES `aixmlBackend` and `setDefaultDone` from an old
+file (`ServerSettings.RemoveRetiredKeys`, tested in `ServerSettingsCleanupTests`): the other entries
+are written back as plain JSON, a file left with none is deleted, the old file is kept as
+`settings.json.bak`, and one `info:` line goes to stderr. A file that does not parse is left alone.
+A `"grpc"` that was in the file is gone with it - use the flag or the variable instead.
+The file itself stays OPTIONAL, for `labviewExe` and `labviewPref` only (`LabViewContext`);
+`LABVIEWMCP_SETTINGS` points at another one - the test suite uses it to read none.
 
 **The former rule 5 (2026-10-12 to 2026-11-05)** made pylabview the default on a LabVIEW older
 than 2026, even LabVIEW 2025, which HAS NI's service. The default now covers it. "In use" - the
@@ -238,14 +216,13 @@ on an older release are not. The measurement that settles it: compose with the o
 stamp and load the VI there. If a VI does not load, NI's service (`backend: "grpc"`) writes one
 for that station.
 
-The composer as the default is one edit in `%USERPROFILE%\.labviewmcp\settings.json`,
-`"aixmlBackend": "pylabview"`, effective on the next call. The variable still works as an override
-in a server registration, where a file cannot be edited:
+The composer is the default with nothing set. NI's converter as the server default is the variable
+in the server registration (or `--aixml-backend grpc`):
 
 ```json
 "labview": {
   "command": "C:\\...\\LabVIEWMCP.exe",
-  "env": { "LABVIEWMCP_AIXML_BACKEND": "pylabview" }
+  "env": { "LABVIEWMCP_AIXML_BACKEND": "grpc" }
 }
 ```
 
@@ -254,18 +231,23 @@ flag) — falling back to grpc would answer a question nobody asked. `pylv_statu
 LabVIEW, reports the server default under `aixmlBackend` and whether the composer and its parts were
 found.
 
-**The server default reaches only a tool the CLIENT called.** About forty places in this server
-call `lvai_generate_vi` or the convert tools from C# — the class tools, the test generators, the
-malleable route, the graft — and they depend on what only NI's converter does: class wires it
-writes past validation, subVIs it resolves because they are loaded. A server-wide `pylabview` must
-not reroute those in silence, so for them an omitted backend stays `grpc` and the answer says
-`backendSource: internal call …`. `DiagnosingTool` records which tool the client invoked; an
-explicit `backend` argument still reaches any tool. There is deliberately **no tool that switches
+**PYLABVIEW IS ALWAYS THE DEFAULT, for an internal call too** (the user's rule of 2026-11-22,
+"Default soll IMMER pylabview sein"). Until then this paragraph said "the server default reaches
+only a tool the CLIENT called": about forty places call `lvai_generate_vi` or the convert tools
+from C#, and an inner call that inherited no route choice fell back to `grpc`
+(`backendSource: internal call …`), on the reasoning that the class tools needed NI's converter.
+The whole class route - class, a method with an In Place Element on its private data, Caraya
+tests - has since run on pylabview alone (`docs/class-method-tooling.md` §4t). Now an inner call
+takes the route's choice in BOTH directions (`AixmlBackend.Inherited` holds `grpc` too), and with
+none it follows the same flag / variable / default chain as a client call (`AixmlBackend.InEffect`).
+An explicit `backend` argument still reaches any tool. The unit tests that drive tools against the
+FAKE of NI's service (`LvaiTestServer`) say so explicitly with `FakeGrpcBackend.Use()` - 81 of them
+had leaned on the old fallback. There is deliberately **no tool that switches
 the backend at run time**: parallel agents share one server, and one agent would switch it under
 the others.
 
-**A ROUTE TOOL HANDS ITS CHOICE DOWN** (since 2026-10-11). A tool that runs a whole route - the class
-tools, the test generators, the swap, the runner - and resolves to `pylabview` sets
+**A ROUTE TOOL HANDS ITS CHOICE DOWN** (since 2026-10-11; either backend since 2026-11-22). A tool
+that runs a whole route - the class tools, the test generators, the swap, the runner - and resolves to `pylabview` sets
 `AixmlBackend.Inherited`, and every call it makes inside that route with no `backend` of its own
 inherits it (`backendSource: inherited from <tool>`). Without that, a route promised to avoid NI's
 service had to pass `backend` to some thirty inner calls by hand, and one forgotten call would reach
@@ -414,6 +396,45 @@ Structure in one `lvai_generate_vi` call instead of the three-step gRPC route, l
 by file instead of opening callees, treat `composerRefused` as a composer gap and repeat that one
 call on `grpc` only when NI's service is up. `signalsJson` works over ActiveX since 2026-10-15.
 `PluginAgentTests.EveryAgentCarriesTheBackendRuleAndMayReadTheBackend` keeps it in all eight.
+
+**A LATCHED button and a PATH control are driven by `signalsJson` since 2026-11-21** (pylabview).
+Found by an agent verifying the event-driven GUI of a nine-VI build (`C:	emp\Hint_Projext`): its
+Load, Save Report and Stop are latched, the first signal to one stopped every signal with Error 1193,
+and it built a test copy without the latch; a path signal stopped with Error 1103 (the helper read
+the path's text as LabVIEW XML). Both answers still said `ok: true`. Measured on `t231`:
+
+- **Value (Signaling) refuses a latched Boolean (1193), and so does a change of its Mechanical
+  Action while the VI runs** (Error 1073, "not writable when VI is running"). Changing it before the
+  run would edit the user's VI in memory and leave it modified - the road to a modal save prompt.
+- **What works is what a person does**: the timed helper gives the button the key focus (`Key
+  Focus`, writable at run time) and counts it in `key presses`; the C# side polls that indicator
+  while the helper runs and POSTS a space bar to the target's panel window (`PanelKeys`), which it
+  opened for the run and closes again. Three presses counted three, with space and with Enter, on a
+  freshly opened panel and on one in front; the latch resets as it does for a click.
+- **The window is fronted only when it is not in front.** The Alt press that lets a process take
+  the foreground, sent again to a panel already in front, opened LabVIEW's menu bar and swallowed
+  every press after the first (one of three counted).
+- **And it is fronted BEFORE the helper runs.** Activating a panel resets its key focus: called from
+  the client with the client's window in front, the first of three presses was lost every time (the
+  first live run after the build counted Loads 1 of 2), because the panel was fronted at that press,
+  after the helper had focused the button. Fronted right after it is opened, before the helper
+  sets any focus: 3 of 3, four runs in a row (`PanelKeys.BringToFront`). A real keystroke (`keybd_event`) worked too,
+  but goes to whatever has the focus, so the key is posted to the window instead.
+- **And it is fronted WITHOUT a keystroke.** The Alt press that lets a process take the foreground
+  wedged LabVIEW: when its release arrived after the panel was in front, LabVIEW entered its
+  menu-bar loop, the helper's `Key Focus` property node waited on the UI thread, the run was
+  aborted after 118 s and LabVIEW sat in "Resetting VI: lvai_run_for_ms.vi" until it was killed -
+  two of four test runs, found by the gate. Joining the input of the window in front instead
+  (`AttachThreadInput`, then `SetForegroundWindow`): no hang in 15 runs, 3-4 s each; one of the
+  first five lost one press. The answer now says whether the panel was in front before the helper
+  focused anything (`signals.panelInFront`); a press on a panel that comes to the front later can be
+  lost, because activation resets the key focus.
+- A path control takes its text (`String To Path`).
+- **A signal that fails now makes `ok` false**, on both backends, and `signals.latchedPressed`
+  counts the presses; a press with no panel window to post to is `latchedNotPressed` and fails too.
+- The gRPC route runs the helper in ONE call of NI's service, with nobody to press the key: there a
+  latched Boolean is still Error 1193 (`press latched by key` is left empty), and the note says to
+  use `backend: pylabview`. `SignalLatchedTests` drives `t231` end to end when LabVIEW runs.
 
 ## Where the pylabview pieces are found
 
@@ -743,8 +764,10 @@ from `parts/static-events.json`, a survey of every static event NI's cached VIs 
 check every event kind passes before it is trusted: compose, load, compare with LabVIEW's own save
 (LabVIEW recomputes event data on load) and have NI's exporter NAME each frame's events from that
 save - a wrong type number comes back as another event's name, shown with a negative control.
-Filter events (`Panel Close?`), VI and application events are still refused by name. FINDINGS §7a,
-"Static events".
+FINDINGS §7a, "Static events". (This paragraph went on "Filter events (`Panel Close?`), VI and
+application events are still refused by name" until 2026-11-20 - true when it was written, and
+contradicted by the paragraphs below, which compose and RUN them; a model reading only this line
+gave up on `Panel Close?`.)
 
 **GRAPHS compose by default since 2026-10-11, and their events with them** - waveform graph, chart,
 XY graph and intensity graph, each for the data types a part exists for (otherwise the plain control
@@ -919,6 +942,110 @@ the structure to the text and wraps beyond 600 px. FINDINGS, "Subdiagram labels"
 for those kinds all came out zero. An In Place structure's element pair is one node straddling the
 border, and a Feedback Node's hidden half keeps diagram coordinates, leaves its output WEST and takes
 its initializer from BELOW. FINDINGS §7a, "In Place element pairs, the Feedback Node".
+
+**What the learned table really holds (measured 2026-11-21; the code follows it since the same day,
+see "One offset per primitive" below).**
+The corpus was rebuilt from NI's examples (1 792 VIs, 4 579 fan-outs, 42 239 two-ended wires; all
+saved by 26.3) and every fan-out with one source and no constant end, 3 857 of them, was tested
+against the table it carries:
+
+- **Away from primitives the base rule needs no table.** Centre of the terminal's rectangle plus
+  the DCO's own `<termHotPoint>`, nothing learned: 1 806 of the 1 830 fan-outs that touch no
+  primitive, exactly what the shipped table reaches there. The misses are mostly flat-sequence
+  tunnels.
+- **A primitive is stored as a 32 x 32 cell whatever its real size** - 11 933 of 11 933 primitive
+  ends - and its terminals span a smaller box (21 x 21 for the arithmetic family) that sits inside
+  the cell. So the base rule alone fits 281 of the 1 844 fan-outs through table-known primitives,
+  the table 1 809.
+- **The correction is ONE offset per primitive, not one per terminal**: on the wires the table
+  reproduces, all terminals of a primitive share it, 159 primitives of 159. `hotpoints.json` keys
+  it by (primResID, position) and treats a position it never saw as unknown (`_family` guesses);
+  keyed by primResID alone, an unseen terminal of a known primitive is exact.
+- **The offset is not the box centred in the cell**: that fits 84 % of the 3 857 and is 1 px off
+  on the rest (a 21 px box sits 6 down in one primitive and 5 in another), which a fan-out's table
+  does not forgive. It has to stay a measured value.
+- **The EXACT gate is narrower than the model**: `route_heap` would route 3 479 of the 3 857, the
+  shipped offsets reproduce 3 760.
+- `<termHotPoint>` and bit 0x1 of the DCO's `objFlags` are independent here: 886 ends carry a
+  hotpoint without the bit, 978 with it, and 24 410 carry the bit without a hotpoint. The bit is
+  the output flag `is_source` reads.
+
+**A branch point that would send a branch straight back along the trunk turns it instead**
+(measured the same day). `wire_tree.BRANCH` reads the codes 04-07 as absolute directions. Read
+with one exception - a branch pointing exactly against the heading the trunk arrives with goes
+NORTH off a horizontal trunk and WEST off a vertical one - the two readings place the ends
+differently on 110 of 17 940 walkable fan-outs (the examples and every fourth VI of `vi.lib`). Of
+the 96 among them with no constant end, 82 fit only with the turn, none only without it, 14 with
+neither - so it is not the whole rule, but the absolute reading never wins. `wire_tree.walk`
+(`leaving`) and the second decoder in `scripts/lvbd_backward_wires.py` read it that way now. It is
+the only way a tree carries a branch WEST; the ENCODER still writes eastward combs only.
+
+**One offset per primitive (in the code since 2026-11-21).** `parts/hotpoints.json` and
+`parts/hotpoints_exact.json` carry a key that is the primResID alone, 172 of them, written by
+`experiments/aixml-without-grpc/learn_prim_origins.py` from the two fan-out corpora above. It
+also drops what those keys and the base rule make redundant: `hotpoints.json` went from 480 keys
+to 201, `hotpoints_exact.json` from 430 to 288, and over 310 364 distinct terminal ends of both
+corpora the router answers the same point and the same exactness with either; the whole suite
+composes byte-identical wire tables. Every per-terminal offset of a node that is NOT a primitive
+was (0, 0) - centre plus the DCO's `<termHotPoint>` - so for those kinds the file only says WHICH
+are exact, and keeps a non-exact one as a stop for `Hotpoints.exact`. `Hotpoints.of` uses a (primResID, position)
+key only where that position is itself exact and the primitive's key otherwise; `Hotpoints.exact`
+is true for every terminal of such a primitive. What the router does with LabVIEW's own fan-outs,
+no constant end, before and after:
+
+| corpus | routed and right | routed and wrong | left generic |
+|---|---|---|---|
+| NI's examples, 3 857 | 3 479 -> 3 702 | 0 -> 0 | 378 -> 155 |
+| `vi.lib`, every fourth VI, 12 528 | 10 900 -> 12 174 | 10 -> 11 | 1 618 -> 343 |
+
+Those numbers are in-sample (the keys were learned from both). Learned from the examples ALONE,
+102 keys, and measured on `vi.lib`, which that learner never saw: 10 900 -> 11 600 right, 10 -> 11
+wrong. The ten wrong ones were there before and none has a primitive end; the eleventh is a wire
+through `1051`/`1110` that used to stay generic. `String Subset` (1503), `String To Byte Array`
+(1608) and `Read from Text File` (8070), the three the cold builds left generic, have a key now.
+**In LabVIEW, the same day:** every suite test composed twice, with the tables before and after
+(no LabVIEW needed for that), changed 28 wire tables in 17 tests (14 of them fan-outs); the rest
+composed identically, 8 with callees, an XControl or a stamp left out. Each pair loaded on a fresh
+LabVIEW 2026: load-time repairs ("Wiring insanity found and fixed") **86 -> 33**, ExecState and
+`Insane` lines unchanged on all 17, no DWarn of any other kind, and LabVIEW's own save KEPT all 28
+changed tables. The 17 then ran with their expected values in `selftest.py`: 17 of 17 PASS.
+`WireGeometryTests`.
+
+**A nine-VI application built by agents, the same day** (`C:\temp\Hint_Projext`, a batch
+statistics tool: line parser, statistics, limit checks, report, event-driven GUI). Its nine AIXML
+sources composed with the tables before and after: generic wires 4 -> 0, and on a fresh LabVIEW
+the load-time repairs went **19 -> 0**, LabVIEW's save keeping all 9 changed tables. What it found:
+
+- **A fan-out's start byte is a bit MASK** (01 north, 02 west, 04 south, 08 east). With several
+  bits the source is itself a branch point, walked in rising bit order. 163 fan-outs of LabVIEW's
+  own saves start with 03, 05, 06, 09, 0A, 0C or 0D; the decoders refused them (one was in the
+  application's Parse Measurement Line.vi as LabVIEW's layout save left it). Read as a mask, the
+  93 of them whose ends are all exact land on the hotpoints - in rising bit order and no other.
+  `wire_tree.starting`, and `lvbd_backward_wires.segments` / `lvbd_wire_metrics` likewise:
+  walkable corpus fan-outs 19 193 -> 19 356 of 19 653.
+- **A conditional indexing tunnel's condition terminal** (`inner:lpTunConditionDCO`) was in no
+  table, so a fan-out into one stayed generic. It sits on the base rule: 9 of 9 LabVIEW fan-outs
+  through it at (0, 0). Added to `hotpoints_exact.json`.
+- **A table whose SECOND byte is 1 marks a joint a terminal sits on** (decoded 2026-11-21, read
+  as "still not decoded" until then): `[n] [k] [k marks] [start mask] [n-2 codes] [n-1 lengths]`,
+  the common table being k = 0. With k = 1 the mark is the index of a joint (0 = the first after
+  the source) where a sink sits ON the wire - passed on a straight run, which is the new code `02`
+  (straight on), or at a bend - besides the ends the walk reaches: `03 01 00 08 02 55 74` has sinks
+  at 85 and 85 + 116 px east of the source. 223 of the 223 such tables of LabVIEW's own saves whose
+  ends are all exact read that way; k > 1 (11 tables) does not, and is still refused. A two-ended
+  table that starts north (`01`) shares that second byte and is told apart by its lengths adding
+  up - all 184 369 two-ended corpus tables decode exactly as before. Walkable corpus fan-outs
+  19 356 -> 19 625 of 19 653 (`wire_tree.parse`, `lvbd_backward_wires`, `lvbd_wire_metrics`).
+- **The Event Structure's timeout terminal** (`eventStruct/eventTimeOut`, wired since the
+  composer writes `timeoutin`) was in no table either, so the fan-out of a timeout shift register
+  stayed generic. On the base rule in every LabVIEW wire that shows it (1 fan-out, both axes; 3
+  two-ended, the one axis each fixes); added to `hotpoints_exact.json`. A second application built
+  by agents the same day (`C:\temp\UserHints1`, a producer/consumer with a user event and a
+  timeout) then composed with no generic wire, and its five VIs loaded with **23 -> 0** repairs
+  against the tables of the morning, LabVIEW's save keeping all 6 changed tables.
+- The layout step of `lvai_generate_vi` runs `CleanUpWire` on every wire and saves, so the tables
+  in a DELIVERED VI are LabVIEW's; what the router changes there is what LabVIEW meets when it
+  loads the composed file before the layout - repairs, and the risk that comes with them.
 
 **A WHOLE CLD EXAM WENT THROUGH THE COMPOSER the same night** - the ATM: 21 application VIs (an
 Event Structure producer, a queue consumer, a state machine, file I/O, panel helpers driving
@@ -1692,8 +1819,9 @@ are. Re-run over the same 865 VIs, the cache still untouched:
   `Ñ` and 0xFF as `ÿ`, cp1252's own characters occur, and the five undefined bytes appear as
   U+0081/8D/8F/90/9D. `lvheap.value_text`/`value_bytes` hold the rule, and the COMPOSER uses
   `value_bytes` for string and path constants and case-selector strings too - it wrote MacRoman,
-  so a constant `Ñ` reached LabVIEW as byte 0x84 (`„`). Labels and names are not affected by this
-  change and were not measured.
+  so a constant `Ñ` reached LabVIEW as byte 0x84 (`„`). Labels and names were left out of this
+  change and unmeasured here; they were measured on 2026-11-19 and were wrong the same way - see
+  "Text in the station's code page" below.
 - **`nan`, `-nan`, `inf`, `-inf`** in lower case, the sign of a NaN kept - NI's spelling, 26 of 26.
 
 **Result:** facts-identical VIs 427 → **457** (209 identical in every attribute), VIs with
@@ -1705,6 +1833,70 @@ worse - except the two LabVIEW 9.0 VIs whose DEFAULT constants (`0`, `false`) we
 accident before and are now reported undecoded with the rest. `ReaderShiftRegisterAndConstantTests`
 pins one case of each against NI's export, every assertion checked to fail on the old reader's
 output.
+
+## Text in the station's code page; ring values (2026-11-19)
+
+**The symptom** (a user's report): a text ring built from a table of CANopen abort codes showed
+`0503 0000h Ð Toggle bit not alternated.` - the agent had replaced each `,` of the descriptions
+with an en dash (a comma in `items=` is a separator; `\2C` is the escape), and the composer
+mis-encoded the dash. Reproduced on LabVIEW 2026 with one ring and NI's export (grpc) of it:
+
+| authored | composed on pylabview, NI's export | composed on grpc |
+|---|---|---|
+| `0503 0000h – Toggle bit` | `0503 0000h Ð Toggle bit` | as authored |
+| `0504 0001h \2C comma\2C here` | as authored | as authored |
+| `Größe 5 °C µs` | `Grš§e 5 ¡C µs` | as authored |
+| `values="[84082688,84148225,1,2]"` | **gone**; the ring answered 0, 1, 2, 3 | as authored |
+
+**Text.** pylabview writes heap and type text as MacRoman (the skeleton's `Encoding`); LabVIEW on
+Windows reads those bytes as CP1252. The en dash is MacRoman 0xD0, which CP1252 reads as `Ð`. The
+composer now hands every text from the DOCUMENT to pylabview through `lvheap.lv_text` (CP1252
+bytes, spelled as the MacRoman characters that encode to them): ring and enum items, control
+labels, control and VI descriptions, free comments, subdiagram labels, case selector captions,
+listbox strings, expression text, and every `Label`/`EnumLabel` of the type table
+(`TypeTable.vctp_section` - the control NAME lives there, which is why `Code Größe` was
+`Code Grš§e`). A donor part's quoted strings are NOT converted: they are already in that form and
+some are binary. The reader applies the inverse, `lvheap.pylv_to_text`, to the type table on load
+(`Bundle`), to labels, subdiagram labels, ring items and the VI description. Before, composer and
+reader made the same mistake in opposite directions, so OUR round trip read the broken VI back as
+authored and only NI's export showed it.
+
+**Ring values.** `_set_ring` dropped `values=` and kept the donor part's `ringSparseValues`. They
+are now written: one SIGNED heap integer per item, as few bytes as hold it (`FF` -1, `3C8C` - the
+parts), and an unsigned value at 2^31 or more as its 32-bit two's complement: LabVIEW's own save
+of `4294967295` on a uint32 ring is `FF` (the fixture below). Written as 8 bytes it left the VI
+broken, `Error 47 Unknown heap` in NI's export. A value beyond 32 bits, or a non-integer one, is
+refused by name. The reader read `FF` on a uint32 ring as 255 and on an int16 ring as 255; it
+reads the integer by its own width now and then in the type's.
+
+`PylabviewRingTextTests` pins the reader to `Fixtures/reader/ring-cp1252/Ring CP1252.vi`, generated
+by NI's converter and SAVED BY LABVIEW, and checks the composer by a round trip through that
+reader. Not covered yet: a ring CONSTANT on the diagram (the composer builds rings on the panel
+only), and the qualified names in a subVI's link are still encoded as MacRoman bytes - a subVI
+whose name holds a non-ASCII character is unmeasured.
+
+## Combo boxes (2026-11-19)
+
+Asked for after the ring fix above: does a combo box work? Measured on LabVIEW 2026 with
+`style="Combo Box" items="..."` on a string control:
+
+- **grpc**: no error, and a plain `stdString` control (read with `pylv_extract`); the items are
+  gone, only the default text remains. NI's export of a VI WITH a combo box writes it as a plain
+  `type="string"` (NI's Pulse Generation (178x Smart Camera).vi, `Pulse Selector`), so AIXML has
+  no spelling for one at all.
+- **pylabview**: refused - `items` on a non-numeric made it a ring (`a ring of String is not
+  composable yet`).
+
+The composer now builds the stdComboBox part (cut from NI's Add Actor.vi, `harvest_parts.py`):
+its items are the strings of the listbox embedded in it (`baseListboxItemStrings`, n x 1) and
+`comboBoxValues` stays empty - LabVIEW's "Values Match Items", as in the donor. The items go
+through `lv_text`. A reference to the control is ComboBox `0x001D`, untyped - NI's Pulse
+Generation reads it that way and `parts/refnum-classes.tsv` agrees; as a String reference
+`Strings []` would be no member of it. The reader writes `style="Combo Box"` and the items back.
+LabVIEW's own `{LV.ComboBox} Strings []`, read inside a composed VI, answered the three authored
+items exactly (en dash, comma, umlauts, degree sign), free text passed through, and a combo box
+INDICATOR works too (the control part with its direction flipped). `values` is refused by name.
+`PylabviewComboBoxTests` pins it on `Fixtures/reader/combo-box/Combo Box Probe.vi`.
 
 ## Diagram comments on the reader (2026-10-21)
 
@@ -2097,7 +2289,9 @@ warnings and scoped to the measured case, a double Constant.
   are left to LabVIEW, which repairs them on load - non-fatal, the VIs run. The remedy is data, not
   code: LabVIEW-saved fan-outs through those terminals fed to `learn_hotpoints_fanout.py
   --write` (the suite's LabVIEW-routed saves via `suite_corpus.py` are the source that carries the
-  composer's own terminal kinds).
+  composer's own terminal kinds). **Closed by data on 2026-11-21**: a primitive needs ONE offset,
+  not one per terminal, so any fan-out through any of its terminals teaches it - all three have a
+  key now ("One offset per primitive" above). The load in LabVIEW is not re-measured.
 
 ## An IVI instrument session (`ref{IVI.niRFSA}`) had no type, no part and no wire (fixed 2026-10-30)
 
@@ -2994,8 +3188,10 @@ primResIDs for the composer), a 3D Index Array's `index (page)`, and SET and MAP
 keeps those raw (0x73/0x74); their bytes are the element's index into the flat type list - a map
 a count, then the key's and the value's - and a Pascal label. `lvheap.Bundle(...,
 collections=True)` rewrites them as `Set`/`Map` with TypeID children, so they inline like any
-container: `set{string}`, `map{string.word,uint64.count}`. Only the READER asks for that - the
-composer copies a callee's types as they stand, and a rewritten set would not serialize.
+container: `set{string}`, `map{string.word,uint64.count}`. This paragraph said "only the READER
+asks for that - the composer copies a callee's types as they stand"; that copying WAS issue #140's
+crash, and since 2026-11-19 the composer reads callees the same way and writes maps itself - "Maps
+and sets" below.
 
 **The fifth round**: an OPTIONAL connector-pane slot - flags 0, which the reader skipped as
 unassigned; a slot is assigned when it has a TypeID - so a control there now carries its conIdx
@@ -3013,6 +3209,9 @@ composer refuses on, so no VI that times out is built as one that never does) - 
 later elements of an Array Index / Replace Elements pair, and Build Map (Class018B). Still behind
 dropped wires: Express VI data nodes (xDataNode), the Timed Loop and Timed Sequence, the External
 Node, the dynamic shared-variable open, and the Stacked Sequence.
+(2026-11-19: the Event Structure's timeout is no longer dropped - the reader writes it as
+`timeoutin="<net>"` and the composer wires it, flagged 0x8040 as LabVIEW saves a wired one;
+`docs/aixml-reference.md`, "Event Structure". The note above is no longer emitted for it.)
 
 **The seventh round**: the TIMED LOOP, read by the loop reader (its heap is a While Loop's plus
 timing terminals and data nodes): `Timed Loop` with count, Condition, tunnels and registers, the
@@ -3440,6 +3639,56 @@ runs; NI's export of it is the Call again). Wires move by slot, so each XNode ne
 terminal mapping (`XNodeCalls.cs`); only Match Regular Expression has one so far, without its grown
 capture-group outputs. docs/aixml-reference.md section 9.
 
+**XNodes composed as the code they generated (2026-11-19).** The reader still writes NI's form,
+a `Call` of the `.xnode` (parity with NI's export, `lvai_vi_terminals`, the Replace route above),
+and now ALSO, after `</VI>`, the xNode's own diagram as a one-frame Flat Sequence labelled with
+the `.xnode` (`<?lvmcp xnodeinline uid frame?>`): its xTunnels are the frame's tunnels, each naming
+the Call terminal it stands for (`xterm`); an input the outside leaves unwired but the code reads
+becomes a constant of the xTunnel's default inside. `Composer._inline_xnodes` swaps the frame into
+the Call's place, an input tunnel taking the net the Call's terminal took, an output tunnel
+becoming the source of the net the terminal fed. The generated code is what the node RUNS for
+the configuration and types it was saved with, so the Error Ring keeps its error: NI's Check
+Color Table Size.vi (three Error Rings set to error 1) answered error 1 for depth 0, 1, 4 and 8
+and none for 24, as the original did. 18 of the 24 NI examples the sweep refused on an XNode
+compose and load executable (Database Variant To Data, DFD FXP Simulation, AFT, Error Ring); the
+other six stop at a later blocker (fixed point, an Express VI, nisysapi). A VI written fresh with
+`<Call target="X.xnode">` has no generated code and still needs the Replace route.
+
+### Front-panel parts carry ABSOLUTE coordinates (2026-11-20)
+
+**Symptom.** In the palette-coverage demo project every composed slide drew its scale, fill and
+pointer below or beside its housing, a knob its scale and pointer 60 px above the dial, and the
+waveform chart and XY graph their plot area beside their frame - the VIs ran, only the panel was
+wrong. The parts' own `bounds` were right: every part sat where the part file put it relative
+to its object.
+
+**Cause, measured on the parts.** Four things in a front-panel part are in the DONOR's absolute
+panel coordinates, not relative to the object, and the composer moved none of them when it
+placed the object:
+- a scale's `scaleRMin32`/`scaleRMax32` - the pixel of each end: a vertical slide cut at panel
+  top 169 reads 371/204 (169 + 202/35), a chart's x axis at left 43 reads 119/676;
+- a graph's `GraphScaleData/ScaleData/scaleRect` - each axis' rectangle (relative (145, 54)
+  under a frame at (125, 43) reads (270, 97));
+- its PICC pictures - 12 bytes, a 4-byte header and two (y, x) int16 points, the ticks and axis
+  lines: a slide indicator cut at (283, 247) draws a tick at (317, 247..251);
+- a knob's `scaleCenter` (hex y, x) - in the frame of whatever held the donor's knob: Pulse
+  Demo.vi's knob at (197, 42) in its container has its centre at (354, 110), the middle of its
+  body (part 1) once the container's (101, 4) is added.
+
+**Fix.** `move_obj` moves scale ends and `scaleRect` with the object (`shift_scale_ends`; not on
+`internal_shift`'s compensating moves, which leave a cluster field where it is on the panel).
+`add_fp` notes where the part sat on the donor (`_donor_bounds`), and `renumber_piccs` - once each
+reference has its own PICC copy - moves every picture whose points lie on the donor object by as
+far as the object moved (`shift_picc`; a scrollbar's relative pictures are left), and sets a
+knob's centre to the middle of its body where it now sits, moving its pictures with it. Checked
+by rendering the panels (Print.VI To HTML writes `<name>p.png` beside the diagram): slides,
+knobs, chart, XY graph and the 3500-series graphs drawn whole; the panel and graph selftests
+(t107, t110, t129, t130, t140, t146, t161, t163, t166, t185, t186, t189, t200) pass on a fresh
+LabVIEW with no insanity logged.
+
+**Not fixed: a part draws its DONOR's scale range.** AIXML carries no scale range, so a knob cut
+from a 0..1 control shows 0..1 with a value of 22 413 pegged at its end.
+
 ### The sweep after the CLFN, the Stacked Sequence and the VISA refusal (2026-11-08)
 
 The same stride-3 sample of 10 878 vi.lib/add-on VIs: **8 635 compose (79.4 %), 2 243 refused** -
@@ -3449,6 +3698,116 @@ Picture constants 82, a case tunnel no typed wire reaches 79, `?Refnum.LVObjCtl`
 nodes of an unnamed class 62, fixed point 83 (`fixed` 42, `FixedConst` 41), unnamed primResIDs 49.
 The selftest suite passed except t136 (application events), which fails the same way with the
 composer of the commit before - a station state, not these changes.
+
+## Maps and sets (issue #140, 2026-11-19)
+
+**The symptom.** A caller of a subVI whose pane carries a map (a cluster with a
+`map<string, variant>` field) died in the rebuild with a Python traceback,
+`FileNotFoundError: ...\<Callee>_VCTP_td0006_0006.bin`; a map control or constant was refused as
+`not composable yet`. Reproduced with the unchanged composer of `4a8cc923` on a LabVIEW-saved
+callee before the fix.
+
+**The cause.** pylabview cannot parse type codes 0x74 (map) and 0x73 (set) and keeps them RAW: a
+`TypeDesc Type="116" Format="bin" File="<base>_VCTP_tdNNNN_NNNN.bin"`. The composer read callees
+with `lvheap.Bundle` WITHOUT the reader's collections pass and copied that element into the
+caller's VCTP as it stood - with a sidecar file of the CALLEE's extraction folder, and with bytes
+that name flat ids of the callee's type list.
+
+**The descriptor, measured on NI's Map and Set Collection examples:** a map is u16 `2`, the key's
+flat id, the value's flat id (big-endian u16 each); a set is the element's flat id alone; a
+labelled one follows with a Pascal label padded to an even length (`0002 0004 0005` +
+`20 "Map of word to occurrence count:" 00`). `HasLabel="1"` marks the label.
+
+**The fix:**
+- `lvheap.Bundle` reads every bundle with the collections pass (`collections=True` is the
+  default now), so a callee's map is a `Map` tree like any container;
+- `TypeTable` writes a `Map`/`Set` tree back as its raw descriptor with THIS VI's flat ids and
+  `vctp_section(out_dir, base)` writes the sidecar - byte-identical to NI's for "map constant";
+- any OTHER raw type is refused as `UNSUPPORTED: type N 'label' (from <callee>.vi) is stored raw
+  by pylabview ...` instead of a traceback (`lvheap.RawTypeError`, which is now also the
+  composer's `Unsupported`);
+- `map{K.k,V.v}` and `set{T}` parse in the type grammar;
+- a map CONTROL, INDICATOR and CONSTANT come from the harvested `Class0186` parts (NI's Map
+  Collection - Comparing Test Results.vi). pylabview had stored those parts' own map type as
+  `ByteStream`, so every typeDesc of the four containers - fPDCO/constant and map object = the
+  map, indArr = `array{cluster{K,V}}`, the key/value cluster - is set from the requested type, and
+  the donor's key and value objects are rebuilt for the requested types. Only an EMPTY map
+  literal composes (flattened `00000000`, the constant `0000000000`); one with entries is refused;
+- `unverified_wire_type` accepts a map whose key and value it accepts.
+
+**Measured, LabVIEW 2026 32-bit, no insanity:** t215 (`Insert Into Map` -> `Look In Map` on a
+map constant: alpha -> 42, beta `key not found?`), t216 (map control, indicator, constant,
+`cluster{string,map{string,variant}}`), t217 (a caller wiring maps into and out of a LabVIEW-saved
+subVI, `tests/map_callee/Map Attributes.vi`) - all executable and run. The reader writes an empty
+map's value as `0`, which the composer accepts, so a map VI round-trips.
+
+**How a map is DRAWN - the demo the user opened, 2026-11-19.** Everything above ran and loaded
+clean, and still the map CONSTANTS were drawn as a large orange frame with an empty white box over
+the diagram, and every map's key/value rows were missing on the panel. Nothing reported it:
+validation, execState, a run and LabVIEW's log were all clean - only the picture showed it. A map
+object (Class0186) holds an indArr of the key/value cluster, and three things in it are tied to
+WHERE the map sits, which the part carried from NI's donor:
+
+- the array's ANCHOR (nRC/oRC). `set_array_anchors` skipped an array inside another data object,
+  so the pair was stripped and never written. NI's "empty map" at (342, 708), array at (38, 4),
+  87 x 44: nRC (-755, -401), oRC (-755, -402) = -(712 + 43, 380 + 21) and -(.. , 380 + 22) - nRC
+  one pixel above the centre, oRC at it. With both at nRC's value (what every other array gets)
+  the rows were drawn one row too high, over the "Size" header: the only difference left between
+  NI's constant and ours placed at its exact spot, found by diffing the two heaps;
+- the key/value cluster's DOCUMENT coordinates - docBounds, savedSize, the pane's own objects and,
+  on a diagram constant, the pane origin and minPaneSize - are -(the array's place). They are moved
+  by the negated distance from the donor's place (`_place_map_documents`);
+- that place (`_map_frame`) is the map's top-left plus every structure around it, or for a map
+  that is a cluster's FIELD, its place in that cluster's document (own - cluster docBounds + pane
+  top-left). NI's converter (backend grpc) built the same probe and gave the reference for the
+  panel: a cluster at (469, 400) carries docBounds (-469, -400), its map field at (-446, -400) has
+  the key/value fields at -(76, 7). The composer's own panel clusters do not keep docBounds equal
+  to -(their place), so on a panel the cluster's PLACE stands in for its docBounds - three other
+  candidates (the docBounds as written, the place added to it, the map's raw bounds) all left the
+  rows undrawn.
+
+t219 composes a map control, indicator and constant, a map in a cluster control and in a cluster
+constant, and a map constant in a For Loop; rendered, each matches NI's look (constant: "Size: 0"
+above two greyed key -> value rows; panel: the rows under the header), and t215-t219, t74 and t163
+pass on a fresh LabVIEW log. NOT measured: a map inside an array, or a map field of a nested
+cluster on a panel. A map indicator's VALUE still cannot be read over ActiveX.
+
+**Sets, checked the same way (2026-11-19, the user's question).** Sets never CRASHED: a set on a
+callee's pane already went through the collections pass and TypeTable. But nothing else worked -
+a set control, indicator or constant was refused ("no fpdco part for a set"), and a set wire as
+unverified; the refusal even claimed sets composed "on wires". The set object is the map's
+construction with ONE field: Class0185 around an indArr of cluster{T} (NI's Set Collection - Word
+Counting.vi; parts `fpdco/Class0185/ind/115` and `const/Class0185/115` were already harvested), and
+the same values are tied to its place - the element at -(set + array place), (-270, -417) for NI's
+constant at (249, 414) with its array at (21, 3). So `_build_map_ddo` builds both (`SET_PARTS`),
+and the document and anchor rules apply to both (`COLLECTION_CLASSES`). One difference: NI's set
+part carries its anchor pair both AT the centre ((-427, -290) twice, 21 x 40), so the map's
+one-pixel nRC rule stays the map's - though NI's example's own, resized set constant (52 x 44)
+carries (-707, -223)/(-707, -224), the map's pattern; both draw. Measured: t220 (`Insert Into Set`
+through a shift register, `Element of Set?`: a, b found, zz not), t221 (a caller wiring a set and
+a cluster holding one into and out of a LabVIEW-saved subVI, `tests/set_callee`), t222 (a set in
+every place, rendered: the constant "Size: 0" over a greyed element row, the panel's element rows,
+also inside a cluster) - all pass on a fresh LabVIEW log. A set constant with elements is refused
+like a map's; a set's VALUE cannot be read over ActiveX either.
+
+**An element wider than the donor's** (the set demo, same day): a `set{int32}` constant drew its
+numeric clipped to a 21 px strip. The builder grew the object, its array, cluster and pane, but
+not the frame decorations INSIDE them nor the pane's docBounds, so the array's own frame stayed at
+the string donor's width. Now a decoration spanning its owner widens, one at the far edge (a second
+column's or row's cell) moves along, the index display's frame (left of the array) stays, and
+docBounds widens with the pane. t223: a `set{int32}`, a `set{path}` and a `map{string,double}`
+constant, rendered whole.
+
+**The issue's own shape, t218 (2026-11-19, through the server):** `lvai_create_typedef` built
+`Record.ctl` = `cluster{string.Id,map{string.Name,variant.Value}.Attributes}` (its carrier VI is
+composed, so that too needed the fix); a callee generated with that cluster on its pane was bound
+to the typedef by `lvai_replace_controls` and saved by LabVIEW - `TypeDef` links to Record.ctl
+and a raw 0x74 in its VCTP; a caller bundling an id with an empty map constant, calling it and
+unbundling `Id` composed through `lvai_generate_vi`, executable, `sensor-7` in and out.
+
+**Not done:** a map or set inside an array (refused); a map literal with entries; reading a map VALUE back over ActiveX -
+`lvai_run_vi_and_read_values` answers `DISP_E_TYPEMISMATCH` for a map indicator, so a test reads
+what a map holds through `Look In Map`.
 
 ## Not covered, and not measured
 
@@ -3575,3 +3934,206 @@ so `Imaq Dispose` (NI's spelling) missed Basics.llb's `IMAQ Dispose`. Suite case
 `t211_imaq_image_create_dispose`, `t212_imaqdx_session_property`. Everything else - the property
 names learned for the session's class, the round trip of the 43 examples, what is still open - is
 in docs/imaq-support.md.
+
+## A linked typedef read from the VI's stale copy (fixed 2026-11-18, issue #136)
+
+**Symptom** (reported against 2.6.8): `Inner.ctl` nested as a linked typedef in `Outer.ctl`,
+`Outer.ctl` used in `Caller.vi`; `Inner.ctl` gets a field B and is saved ALONE. LabVIEW's Context
+Help shows A and B on the caller's wire, the reader's export only A - and says nothing. Clearing
+the compiled object cache changes nothing, because the reader reads the file, not LabVIEW.
+
+**Cause.** A VI - and a `.ctl` - saves a COPY of every typedef it uses, nested ones included
+(VCTP `TypeDef` entries, the qualified name as `Label` children). LabVIEW replaces that copy from
+the `.ctl` when it loads the file; the reader flattened the copy (`aixml_type`, `TypeDef`) and
+never opened a `.ctl`. NI's converter is not affected: it loads the VI in LabVIEW.
+
+**Fix.** `vi2aixml.TypedefLinks`, hooked into `lvheap.Bundle.tree` as `typedef_resolver`:
+- each `TypeDef` is matched by its qualified name to the file's `TDCC` link record (LinkSaveFlag 2
+  completed by the file's own LIBN, as for calls; the bare `.ctl` name when it is unique), and the
+  record's path is resolved like a call's (`link_file`: relative to the file, or `<vilib>` ...);
+- the `.ctl` is read with pylabview, its own `TypeDef` found through its CONP, and ITS linked
+  typedefs resolved the same way - recursively, a cycle keeping the copy;
+- a copy whose structure (`_type_shape`: every attribute but layout and the outermost LABEL, which
+  is the instance's) equals the `.ctl`'s is kept byte for byte; a differing one is replaced by the
+  `.ctl`'s definition, the instance label kept;
+- a saved VALUE (a control's default, a constant) stays decoded against the copy it was flattened
+  with, and carried into the new type field by field as LabVIEW does on load (`mutate_value`,
+  below); what cannot be carried is the new type's empty value, with a note. (Until the issue's
+  own case was built the whole value was written empty - see the last section.)
+
+**What the export says.** Per finding an XML comment inside `<VI>` and, after `</VI>`,
+`<?lvmcp typedef name="<qualified name>" status="drift|unresolved" detail="..."?>`:
+- `drift` - the copy was stale; the `.ctl`'s definition was used. An ENCLOSING typedef whose own
+  file did not change is reported too: its copy in the VI is stale through the nested one;
+- `unresolved` - the link's `.ctl` is not there or cannot be read; the copy was used and is an
+  UNVERIFIED snapshot. A nested `.ctl` that cannot be read inside a resolved one is reported the
+  same way.
+A `TypeDef` no `TDCC` of the file names is not one of its links and is read as embedded,
+unreported: a callee's pane type or an event's data (DQMH Main.vi: 7 of 18 typedefs - the module's
+own argument clusters reached through calls, LabVIEW's `lveventtype.ctl`), which LabVIEW refreshes
+through that owner. A class's private data cluster is a `TypeDef` too, with a non-zero `Flag1`
+(Delacor's Message Queue.ctl, `0xE5C5AD3E`), and is left to the class reading.
+
+**Measured.** The fixture is DQMH's `Obtain Request Events.vi` with its fourteen argument and reply
+typedefs from the ATM build (`tests/.../Fixtures/reader/typedef-drift`): three levels of linked
+typedefs. With `Deposit Argument--cluster.ctl` replaced on disk by another real `.ctl` of the
+module, the old reader exported the stale `double.Amount`; the new one exports the new fields in
+the constant AND inside the `Request Events` cluster, and reports both typedefs as `drift`. With
+the `.ctl` deleted, `unresolved`. Over 144 VIs (the ATM build and every 25th shipping example) the
+export is byte-identical to the old reader's. Cost: each linked `.ctl` is one pylabview extraction
+(about 0.7 s as a process), run eight at a time and cached by path, size and mtime - DQMH's
+Main.vi (11 links) read in 4.1 s instead of 2.7 s before the write-time filter below. In the server's resident worker pylabview
+runs IN-PROCESS and swaps `sys.argv` and stdout, so threads failed every extraction there with an
+empty message: the worker reads them one by one (the fixture in 1.8 s). Two more things the first
+suite run found: the bundled Python has no `concurrent` package (plain `threading`), and `--` - in
+every DQMH typedef name - may not stand in an XML comment, so the notes write it `- -`; the
+`<?lvmcp typedef?>` names are exact. Suite: `ReaderTypedefDriftTests`.
+
+## A subVI call read from the caller's stale pane copy (fixed 2026-11-18, sibling of issue #136)
+
+**The same mechanism as the typedefs.** A caller saves a COPY of every callee's connector pane
+(the `VIVI` link's Function type; the call node's terms carry its labelled slot types, one per
+slot, `Void` where a slot is empty). LabVIEW relinks the call to the callee's pane on load; the
+reader named the Call's terminals from the copy, so a callee changed and saved ALONE - a terminal
+renamed, added, removed or retyped - was exported as it had been.
+
+**Fix.** `vi2aixml.callee_pane` reads the callee's pane from its file - the slot's fPDCO through
+the front panel's `cons` array (as `callee_slots` does), its direction from the fPDCO's objFlags,
+its type from the pane's Function type with the callee's own linked typedefs resolved - and
+`Reader.call` compares it slot by slot with the copy:
+- a slot whose label, type or direction differs takes the callee's name, and the difference is
+  reported (`'New Balance' is now named 'Success'`, `changed type from double to bool - a wire to
+  it may break`);
+- a slot the callee no longer has is LEFT OFF the call, its wire ending nowhere, and reported as
+  one that breaks the caller - NI's export of a caller whose callee lost a wired input does the
+  same, and LabVIEW loads that caller broken (`the type of the sink is void`);
+- a slot the callee gained is listed on the Call unwired, in SLOT order among the call's own
+  terminals, as NI's export lists it;
+- a slot that IS a linked typedef on both sides, with the same name, whose type differs is the
+  TYPEDEF changing - this VI's copy of it inside the callee's pane is stale. LabVIEW updates such a
+  wire rather than breaking it, and the report says so (`carries typedef ..., which changed since
+  this VI was saved`). The typedef check above cannot see this one: the copy is no link of the
+  caller's (no `TDCC`), it travels with the callee's pane.
+Per call: `<?lvmcp subvi uid=".." target=".." status="drift|unresolved" detail=".."?>` after
+`</VI>` and a comment inside it. `unresolved`: the callee's file is not found or cannot be read,
+and the terminals are the caller's copy.
+
+**Checked: the project's own code only.** A callee reached through an anchored path (`<vilib>`,
+`<userlib>`, `<instrlib>`, an LVAddon) is not read: NI keeps those panes stable, and an example
+calling twenty vi.lib VIs would pay twenty extractions for nothing. Not checked either: a `.vim`
+(its instance adapts its types, and the link points at an instance saved INSIDE the caller,
+`Example of JOBJ Tag.vi\<guid>.vi`), an Express VI instance, an XNode. A change of the callee's pane
+PATTERN is compared slot by slot as it stands - how LabVIEW maps the slots of a changed pattern
+was not measured.
+
+**Measured.** The fixture is the ATM build's `Controller\Deposit Amount.vi` calling the DQMH API
+VI `Account Manager.lvlib:Deposit.vi` (`tests/.../Fixtures/reader/subvi-drift`), the callee's
+file replaced by another real API VI of the module: by `Withdraw.vi` - slot 3 New Balance (double)
+becomes Success (bool), New Balance appears in slot 2; by `Verify Account.vi` - the WIRED Amount
+is gone, Found/First Name/Last Name appear; deleted - `unresolved`. Each is read as described.
+Over the same 144 VIs as the typedef check, 135 read byte-identically to the old reader and 9
+report drift - all of them REAL: nine DQMH API and helper VIs of the ATM build carry a copy of
+`Request Events--cluster.ctl` inside `Obtain Request Events.vi`'s pane from before the Withdraw
+event was added, and were not saved since. Two malleable-instance links read as `unresolved` in the
+first sweep, which is why such links are skipped. Suite: `ReaderSubviDriftTests`.
+
+**Measured against LabVIEW (2026-11-18), `C:\temp\Issue136SubVI`:** `Caller.vi` calls `Sub.vi`
+(X wired, Y unwired, Result into an indicator). Sub.vi version 2, saved alone, renamed Y to Gain
+and Result to Sum and gained Status at slot 6; version 3 also lost the wired X. After each, NI's
+export (grpc, `refresh`) and the reader's are identical in every element - LabVIEW relinks a call
+BY SLOT: a renamed terminal keeps its wire under its new name. The file swap fixtures above were
+built on that assumption; this is the measurement. The first comparison found the two rules the
+list above now states (slot order for a gained terminal, a lost one left off - the reader had
+appended the first and kept the second). Suite: `ReaderIssue136Tests`.
+
+### Linked files are read only when they are NEWER than the copy (2026-11-18)
+
+Reading every linked `.ctl` and every project subVI cost a pylabview extraction each. The user's
+proposal: decide by WRITE TIME. LabVIEW writes the current definition of a typedef, and the
+current pane of a subVI, into a file's copy when it saves that file, so a linked file written
+BEFORE the file holding the copy cannot have changed since - and is not opened
+(`vi2aixml.newer_than`). The holder is the read VI for its own links, and the `.ctl` for the
+links nested in it. A checksum cannot do this: neither a `TDCC` nor a `VIVI` carries a fingerprint
+of the linked file (a `VIVI`'s `StdViGUID` names the VI, not its version), and the reader meets
+most code for the first time, so it has no baseline to compare one against.
+
+- On the ATM build all nine real drift cases were still found: each stale VI is older than the
+  `.ctl` and the subVI it is stale against. `Main.vi` reads 4 of its 26 linked files - the four
+  `SubVIs\*.vi` the library sweep resaved after it - instead of 26.
+- Each export says how it checked: `<?lvmcp linkcheck mode="byDate|full" read="n"
+  skippedByDate="m"?>` after `</VI>`, counting distinct files.
+- **A write time says nothing after a git clone or checkout**: every file is written then, in no
+  particular order, and a stale copy committed to the repository can look current. Copying in
+  Explorer and unpacking a ZIP keep the times. `--full-link-check` on `vi2aixml.py`, or
+  `LABVIEWMCP_FULL_LINK_CHECK=1` in the server's environment, reads every linked file.
+- A typedef nested in an OLDER `.ctl` is still checked when the reader's VI links it itself (DQMH
+  callers link every nested argument and reply typedef): the older outer copy is kept and the
+  nested one resolved through the VI's own link. One the VI does not link is checked only by the
+  full check.
+
+**The caches survive the read.** `vi2aixml.py` runs as `__main__` in the resident worker, freshly
+for every call, so caches in its globals were empty on the next read. They live in
+`linkcache.py` now, an imported module the worker keeps; a key is path, size, write time and
+check mode, so a changed file is read again.
+
+| `Main.vi` of the ATM module | first read | second read |
+|---|---|---|
+| old reader, own process | 1.4 s | 1.4 s |
+| by date, own process | 2.1 s (4 files read) | 2.1 s |
+| full check, own process | 5.3 s (31 files) | 5.3 s |
+| by date, resident worker | 1.6 s | 0.8 s |
+| full check, resident worker | 3.8 s | 0.8 s |
+
+Suites: `ReaderTypedefDriftTests`, `ReaderSubviDriftTests` - each sets the fixture's write times
+as the build left them (the VI last), saves the changed file NOW, and has one case where the
+changed file is older than its caller: not read by date, found by the full check.
+
+### The issue's own case, built in LabVIEW and compared with NI's export (2026-11-18)
+
+`C:\temp\Issue136`, as reported: `Inner.ctl` (A) nested in `Outer.ctl` (Inner, Count), both made
+with `lvai_create_typedef`; `Caller.vi` an Outer typedef constant `[[1.5],7]` into Unbundle By Name
+`Count` (`lvai_generate_vi`, the constant bound with `lvai_swap_subvis constantsJson`). Then
+`Inner.ctl` saved again by LabVIEW with A and B; `Outer.ctl` and `Caller.vi` left untouched on disk
+(write times 18:10:40, 18:11:14; Inner 18:11:33). NI's converter (grpc, `refresh`) LOADS the VI, so
+its export is LabVIEW's own view.
+
+| reader | Outer constant | Unbundle field | vs NI's export |
+|---|---|---|---|
+| before the fix | `cluster{cluster{double.A}...}`, `[[1.5],7]`, no note | `Count` | the type and value differ |
+| first fix | `cluster{cluster{double.A,double.B}...}`, `[[0,0],0]` | **`Inner.B`** | field and value differ |
+| final | `cluster{cluster{double.A,double.B}...}`, `[[1.5,0],7]` | `Count` | **identical in every element** |
+
+Two things only this case showed:
+- **A position stored in the heap counts against the type AS SAVED.** Unbundle By Name's `<i>`
+  numbers the fields depth first; against the resolved type (Inner gained B) index 2 named
+  `Inner.B` instead of `Count`. LabVIEW remaps a selection by NAME on load. Bundle/Unbundle By
+  Name, Bundle, Unbundle, In Place Unbundle/Bundle and a Case selector's enum items now read their
+  labels from the snapshot (`tid_tree(..., snapshot=True)`); the wire types stay resolved.
+- **LabVIEW carries a saved value into the changed type field by field, by label**: `[[1.5],7]`
+  became `[[1.5,0],7]`. `mutate_value` does the same - same type as it is, two clusters matched
+  by label (a gained field empty, a lost one dropped), anything else empty with a note.
+
+Suite: `ReaderIssue136Tests` - these three files, the write times as above, and NI's export as the
+expected text.
+
+### Enum typedefs: LabVIEW keeps the item, else the number (measured 2026-11-18)
+
+`C:\temp\Issue136Enum`, built like the issue's case: `Caller.vi` holds State = Stop of
+`{Init,Run,Stop}` and Mode = Run of `{Off,Run,Stop}`, `Caller2.vi` Level = High of `{Low,Mid,High}`;
+then each `.ctl` was saved alone - State gained Pause before Run, Mode lost Run, Level lost High.
+NI's export after each change:
+
+| constant | saved | new items | NI writes | rule |
+|---|---|---|---|---|
+| State | 2 (Stop) | Init, Pause, Run, Stop | 3 | the ITEM, at its new place |
+| Mode | 1 (Run) | Off, Stop | 1 (Stop) | item gone: the NUMBER |
+| Level | 2 (High) | Low, Mid | 1 (Mid) | number past the end: the LAST item |
+
+`mutate_value` follows those three rows; the reader wrote 0 for the last two until then (a
+"written as the new type's empty value" note). An ARRAY is carried element by element when its
+dimension count is unchanged - written from the cluster and enum rules, NOT measured in LabVIEW.
+The three exports are the expected text of `ReaderIssue136Tests`.
+
+**The 144-VI comparison, rerun after all of this:** 135 exports identical to the old reader's
+except for the added `<?lvmcp linkcheck?>` line (77 of them carry one), and the same 9 real drift
+reports in the ATM build as before. No other difference.

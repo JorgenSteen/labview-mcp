@@ -28,11 +28,17 @@ internal static class CacheRedirect
         Directory.CreateDirectory(directory);
         Environment.SetEnvironmentVariable(CacheDirectory.OverrideVariable, directory);
 
-        // The developer's own settings file chooses the AIXML backend for every tool call, so a
-        // user who set "pylabview" there would reroute every test that expects NI's converter. The
-        // suite reads a settings file that does not exist - "no choice" - unless a test points the
-        // variable at one of its own.
+        // The developer's own settings file can pin a LabVIEW (labviewExe, labviewPref); the suite
+        // reads a settings file that does not exist unless a test points the variable at its own.
         Environment.SetEnvironmentVariable(ServerSettings.PathVariable,
                                            Path.Combine(directory, "no-settings", "settings.json"));
+
+        // Jobs that outlive their request go to disk for the NEXT server process (JobStore). The
+        // suite must neither leave its jobs in the real folder - a live server would see them - nor
+        // find an earlier run's: posed as "another process", an uncollected `t3|a` of the previous
+        // run was handed to this run's same call. So this one is PER RUN, unlike the cache.
+        var jobs = Path.Combine(Path.GetTempPath(), "lvmcp-test-jobs");
+        try { Directory.Delete(jobs, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        JobStore.Folder = Path.Combine(jobs, Environment.ProcessId.ToString());
     }
 }

@@ -34,8 +34,10 @@ Measured facts that each cost minutes when found at run time. Plan around them f
   character. `docs/aixml-backends.md`, "Compound literals".
 - **A test VI has the 1920 x 1080 budget too**: plan about THREE cases per test VI and list them
   all in one runner; `diagramSize.withinBudget: false` means split it. `docs/diagram-size.md` §5.
-- **A latched boolean cannot be driven through `signalsJson`** (`Error 1193`). Test what it
-  triggers through the handler subVI it calls, and say so. `docs/cold-build-atm-agents-7.md` §4.
+- **A latched boolean IS driven through `signalsJson` on the pylabview backend** (the default):
+  the button gets the key focus and a space bar is posted to its panel (`signals.latchedPressed`
+  counts the presses, since 2026-11-21). Only on grpc is it `Error 1193` - there, test what it
+  triggers through the handler subVI it calls, and say so. `docs/aixml-backends.md`.
 - **`Format Into String` `%g` prints 50 as `50.000000`**; `%d`, `%.0f` and `%#g` print `50`
   (measured by running, LabVIEW 2026, 2026-11-05). Derive an expected string from the format the
   subject actually uses.
@@ -130,6 +132,8 @@ green run can be meaningless.
   `chr(2)` + `C` and `ValidateAIXML` reported `Error -2628, an error occurred while parsing the
   document`, which reads like malformed XML and is a quoting bug two layers up.
 
+- **Several input sets for one VI go into ONE `lvai_run_vi_and_read_values` call**
+  (`inputSetsJson`: an array of input objects; `runs` answers one entry per set).
 - **Do not pass newline-separated lists to `lvai_run_vi_and_read_values`.** It rejects a newline
   inside a value, because its own helper separates name/value pairs that way. Use `|`, which is
   illegal in a Windows path and therefore safe.
@@ -198,12 +202,15 @@ When the task prompt names a **build contract** (`build-contract.json`, docs/bui
 the orchestrator has already settled every interface of the application. The contract is the
 specification, not a suggestion:
 
+- **Start with `lvai_check_build_contract mode=plan forBuilder=<your builder name>` and build from
+  its `slice`. Do NOT Read the contract file** - the slice is your VIs, the types they name and a
+  ready `<Call>` for every VI they call; the rest is other builders' work.
+- **Read `spec.txt` / `panel.xml` when the prompt names them, never the PDF or the supplied VI.**
 - **Names, types, `conIdx` and `connection` of every terminal come from the contract.** Author the
   AIXML from it verbatim. A named type `@X` is the literal under `types.X`.
-- **A callee's terminals come from the contract, not from its file.** Ask
-  `lvai_check_build_contract mode=plan callSkeletonsFor=<callees>` for ready `<Call>` elements -
-  one call for all of them - instead of `lvai_vi_terminals` per callee. The callee may not exist
-  yet; author against the contract anyway and generate once it does.
+- **A callee's terminals come from the contract, not from its file**: `slice.callSkeletons`, or
+  `callSkeletonsFor=<names>` for a VI outside your slice - never `lvai_vi_terminals` per callee.
+  The callee may not exist yet; author against the contract anyway and generate once it does.
 - **Call an owned VI by the qualified name the contract gives** (`Account Manager.lvlib:Deposit.vi`),
   never by its bare file name.
 - **Build only the VIs whose `builder` is you, in the folder the contract gives.**
@@ -403,8 +410,15 @@ shapes — and both came out of a measured run rather than a design:
   object the METHOD returned**. That is what proves the class wire threads the method instead of
   being dropped and rebuilt, and it is the assertion a dispatch mistake fails.
 
-**A method that errors is not a failing test.** The tool feeds the method's `error in` a `no error`
-constant and never chains its `error out` into Caraya's chain, because a method under test is
+- **`errorIn`** feeds the METHOD's error input a given cluster instead of `no error` -
+  `{"method":"Increment Fruits","errorIn":"[true,5000,upstream]","expectErrorCode":5000}` is the
+  "an incoming error passes through" case. It needs no accessor, so on a class WITHOUT accessors
+  (the class agent creates none unasked) it is often, with the method's own error code, all there
+  is to assert. Never hand-edit AIXML for it: before 2026-11-22 there was no key, and a run did.
+  Not together with `setup`.
+
+**A method that errors is not a failing test.** Without `errorIn` the tool feeds the method's
+`error in` a `no error` constant and never chains its `error out` into Caraya's chain, because a method under test is
 expected to fail without hardware and chaining it would fail every assertion after it.
 
 **An error-code case will FAIL BY DESIGN the day the hardware appears.** Say so in your report —
@@ -618,9 +632,9 @@ State, in this order:
 
 ## The AIXML backend - grpc or pylabview - a standing rule
 
-The server converts AIXML two ways: NI's gRPC service (`grpc`, the default) and our own pylabview
+The server converts AIXML two ways: NI's gRPC service (`grpc`) and our own pylabview
 composer (`pylabview`, no NI service at all). The user switches the SERVER DEFAULT
-(`"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json`, overridden by `LABVIEWMCP_AIXML_BACKEND` and `--aixml-backend`); you do not pick one on your own. **A LabVIEW
+(pylabview unless `LABVIEWMCP_AIXML_BACKEND` or `--aixml-backend` names another); you do not pick one on your own. **A LabVIEW
 OLDER than 2026 in use makes `pylabview` the default by itself** - and there every compose WARNS
 (`versionWarning`): the VI carries the composer's LabVIEW 2026 version stamp, which an older
 LabVIEW may refuse to open - not measured. It is still written; quote the warning in your

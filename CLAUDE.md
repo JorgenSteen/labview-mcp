@@ -35,6 +35,7 @@ server's MCP `instructions`. Keep that brief in step with every change to this s
 agent** (the user's decision of 2026-11-01). `build-contract.json` in the build folder names every
 VI with its path, owner, builder, connector pane and callees; `lvai_check_build_contract mode=plan`
 checks it without LabVIEW and answers the build WAVES. Every builder gets the contract path and
+its `builder` name, asks for its own part with `forBuilder` (never reads the whole file) and
 implements against it, the main-VI agent authors its scaffold in parallel with wave 0, and
 `mode=verify` gates each wave before the next is built. `docs/build-contract.md`.
 
@@ -46,12 +47,28 @@ function folder (never flat), then `lvai_exec_state` over the members and `lvai_
 per subVI whose pane carries a typedef (builders cannot: it needs the project). Helpers a builder added go in too, AFTER the main VI: callers in the open project are relinked (bench round 4: a library made before the main VI left its helpers loose). The VI agents search the
 PROJECT's own VIs before the palette. `docs/orchestrator-brief.md`.
 
+**THE HOUSE RULES OF SAVED FILES ARE CHECKED WHERE A FILE IS WRITTEN, NOT AT THE END OF A BUILD**
+(the user's decision of 2026-11-23). Every WRITING tool's answer gets an `audit` field when a file
+it wrote breaks an ERROR rule - compiled code, automatic error handling, orphaned file (2026-11-22):
+REPORT-ONLY - `ok` is never changed, a clean answer is unchanged, and a deliberately unfinished VI
+is no finding (runnability is `lvai_exec_state`'s). It must help more than it disturbs; if it
+disturbs, narrow it (`InlineAudit`). `lvai_audit_files` (no LabVIEW, ported from wirelint, upstream
+pinned in `docs/offline-audit-evaluation.md`) is ON DEMAND - existing or foreign code, a review -
+and no longer a build's closing step: what it found (3 grafted main VIs with automatic error
+handling, 54 DQMH files with compiled code) is fixed at the source, and its warnings changed no
+result. A build whose tools answered `deferredSourceOnly` ends with `lvai_close_active_project`
+with `projectPath`, which does those strips.
+
 **LOGIC INSIDE A DQMH MODULE KEEPS ITS STATE IN THE MODULE'S DATA CLUSTER, NEVER IN AN FGV**
 (user feedback of 2026-11-12, the Hampel Soft DQMH conventions). Fields are added with
 `lvai_dqmh_add_module_data` (in place - an overwritten `.ctl` leaves the library and breaks
 Main.vi); a handler reads `<field> in` and writes `<field> out`, and `lvai_dqmh_place_handler`
 wires both on the shift-register wire. A reply's error goes to the requester only.
 `docs/dqmh-patterns.md` §12.
+
+**THE SPEC AND A SUPPLIED PANEL ARE PREPARED ONCE, BY THE ORCHESTRATOR**: `spec.txt` and `panel.xml`
+(the panel's AIXML export) in the build folder, and agents get those paths. Agents read a PDF 40
+times in 94 runs (2026-11-18), about 139 k characters each time. `docs/build-contract.md` §5.
 
 **ONE AGENT, ONE OUTPUT DIRECTORY.** Two agents in one folder overwrite each other's files. Give
 each its own folder (`<project>\Tests\<ClassName>\`) and say so in its prompt.
@@ -62,7 +79,11 @@ orchestrator opens projects, SWAPS and lists VIs (`lvai_add_vis_to_project`, nev
 Build by DEPENDENCY: leaf VIs in parallel with no project open, then one agent for the callers.
 The server ENFORCES it: `lvai_open_file` with a project and `lvai_close_active_project` are
 refused (`projectChangeWhileParallel`) while top-level tool calls overlap or overlapped in the last
-60 s (`ParallelCalls`; an agent's project open crashed LabVIEW on 2026-11-11).
+60 s (`ParallelCalls`; an agent's project open crashed LabVIEW on 2026-11-11). A tool's INTERNAL close
+obeys it too (`ProjectChangeRefusalFromInside`): `lvai_graft_diagram` is refused, and
+`lvai_dqmh_place_handler` and the AF hook tools defer their source-only strip to the next
+`lvai_close_active_project` with `projectPath` (`deferredSourceOnly`) - place_handler's close under
+four other agents raised a modal dialog that stalled them all on 2026-11-18.
 Restart LabVIEW between two builds of the same application: a same-named VI of the earlier build,
 still in memory, captures a bare-name `Call` in silence.
 
@@ -112,7 +133,9 @@ report as information and call it.
   VI that calls it, or settle both spellings in one throwaway validate. Never rebuild it.
 - NI Vision's `.llb` members carry NO extension: `target="IMAQ Create"`. An IMAQ Image
   (`ref{GenClassTagFlatten.IMAQImage.IMAQImage}`) composes only on the pylabview backend - NI's
-  converter builds it as `Generic Tag Thing` and breaks the VI. `docs/imaq-support.md`.
+  converter builds it as `Generic Tag Thing` and breaks the VI. `style="Image Display"` on it
+  gives NI Vision's Image Display, placed by `lvai_generate_vi` (`{LV.Control} Replace` with NI's
+  `.ctl` - composing the plug-in object directly does not load). `docs/imaq-support.md`.
 - **A VI inside an `.llb` is not a reason to give up** - search for it and try the call.
 - **A path never resolves**, in any spelling.
 - **Project-local code resolves by bare name once it is LOADED** (`lvai_open_file`, through its
@@ -123,6 +146,14 @@ report as information and call it.
 
 Every validation leaves a scratch `LVMCP Validate.vi` (numbered `…2`, `…3`) in memory that cannot
 be closed; "Don't Save - All" at exit is always safe. `docs/scratch-vis-in-memory.md`.
+
+**A SKELETON BEFORE A LOOKUP**: `scripts/aixml-skeletons/README.md` indexes whole VIs that were
+generated on both backends and run - clusters in a loop, a text file read and written, a search by
+key, a record changed in place, a control group, a queue with a string case, a log appended through
+a refnum, an error case, a path beside the VI. A VI agent that read the index made no lookup at all
+(2026-11-18). One read replaces the lookups for every node in
+it. A new one is added only after it was generated on BOTH backends and RUN (a `Release Queue`
+wired from `Obtain Queue` passed validation and execState and released the queue first).
 
 **Look terminal names up, never guess them** (`lvai_vi_terminals`, or the contract's
 `callSkeletonsFor`). They are literal and surprising (`x > y?`). Batch every lookup into ONE call:
@@ -145,7 +176,9 @@ full size; the composer writes an error constant as NI's brown icon. `docs/aixml
 unwired. `lvai_check_aixml` repairs the output case.
 
 **AIXML values:** a backslash in `value=` is `\5C` (a raw one refuses the whole file, `Error 42`);
-a line break is `&#10;`; commas inside a `value` are structure. A mode attribute can change a
+a line break is `&#10;`; commas inside a `value` are structure. TEXT attributes - `description`,
+a `FreeLabel`'s `comment`, a structure's `label` - take a RAW comma and colon on both backends
+(measured 2026-11-18); `\2C` there is only how an export spells them, not something to write. A mode attribute can change a
 node's output type only together with its wiring (`Read from Text File` `readLines` needs `count`)
 - copy a variant already in the state you want.
 
@@ -191,7 +224,8 @@ still wrote the VI. `docs/bulk-operations.md`, `docs/diagram-layout.md`.
 it is STRICTER than conversion (convert writes, validate refuses). Run with
 `lvai_run_vi_and_read_values`: inputs go in as text and land as the control's type (numeric,
 boolean, path, string; an enum by name or index; an array or cluster as LabVIEW's XML); a value
-must not contain a line break. A VI that does not end runs only with `runForMs` - the untimed
+must not contain a line break. Several input sets go into ONE call (`inputSetsJson`), never one
+call per set. A VI that does not end runs only with `runForMs` - the untimed
 helper blocks the whole gRPC service. An event-driven VI is verified by DRIVING its events
 (`signalsJson`), not by a start-up snapshot. Never report success from an empty answer.
 
@@ -380,10 +414,13 @@ can carry a default (`double.Gain=1`) and may be a `path`. `docs/typedef-disconn
 | `.ctl`, icon, layout, decorations, read with no LabVIEW | pylabview (`pylv_*`) |
 
 **The AIXML tools have two backends**, NI's gRPC service and our pylabview composer, chosen by
-`"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json` (or `--aixml-backend`,
-`LABVIEWMCP_AIXML_BACKEND`). **pylabview is the default** (the user's decision of 2026-11-05; it
-was grpc, pylabview only below LabVIEW 2026); an existing settings file is switched to it once,
-marked by `"setDefaultDone": true`. The composer writes the file version of the LabVIEW in use. What needs a running LabVIEW goes over ActiveX there, which
+the call's `backend`, `--aixml-backend` or `LABVIEWMCP_AIXML_BACKEND`; with none of them,
+**pylabview** (the user's decision of 2026-11-05; it was grpc, pylabview only below LabVIEW 2026) -
+ALWAYS, for a tool's internal calls too (the user's rule of 2026-11-22; they fell back to grpc
+before). A test against the fake gRPC service says so with `FakeGrpcBackend.Use()`.
+`"aixmlBackend"` in `%USERPROFILE%\.labviewmcp\settings.json` chooses NOTHING any more (removed
+2026-11-17; the server strips both retired keys from an old file at start, `.bak` kept); that
+file is optional and holds only `labviewExe`/`labviewPref`. The composer writes the file version of the LabVIEW in use. What needs a running LabVIEW goes over ActiveX there, which
 only ATTACHES, never starts LabVIEW. Pass `backend` only when you mean it.
 `docs/aixml-backends.md`.
 
@@ -458,6 +495,12 @@ the argument, so defaults are folded into descriptions. **A new parameter cannot
 session that added it**: the client fetched the tool list at session start.
 `docs/tool-argument-errors.md`.
 
+**NO CALL MAY REACH THE CLIENT'S 60 s**: past it the client drops the connection, every call in
+flight fails with `Connection closed`, and a NEW server process takes over (measured 2026-11-22).
+So every tool answers `stillRunning` after 50 s (`LateCalls`) and the SAME call collects it; jobs
+go to disk (`JobStore`) so the next process can hand them out, and a server waits for its jobs
+before it exits. `docs/dqmh-scripting.md` §9g.
+
 **Write down what was measured and leave the "cannot" out** - an impossibility stated as fact stops
 anyone looking again. When a description explains a mechanism, check the mechanism.
 
@@ -498,13 +541,16 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Question | Document | Tool |
 |---|---|---|
 | Read or write AIXML | `docs/aixml-reference.md` | `lvai_aixml_reference` |
+| Whole VIs to copy shapes from | `scripts/aixml-skeletons/README.md` | — |
 | What validation does NOT catch; lint with no LabVIEW | `docs/aixml-reference.md`, `docs/aixml-lint.md` | `lvai_check_aixml`, `scripts/aixml_lint.py` |
+| What the pylabview composer cannot build yet, ranked by use | `docs/pylabview-palette-coverage.md` | `experiments/palette-sweep/` |
 | AIXML without NI's service; which LabVIEW and INI the server uses | `docs/aixml-backends.md` | `backend`, `lvai_list_labview_installations` |
 | What the non-gRPC setup still lacks (a tracking list - re-check a row against the code first) | `docs/non-grpc-gaps.md` | — |
 | A multi-VI build by several agents | `docs/build-contract.md` | `lvai_check_build_contract` |
 | Where tokens and time go | `docs/token-economy.md`, `docs/workflow-economics.md`, `docs/ideen-schneller-und-weniger-tokens.md` | — |
 | Tool descriptions before shortening; this file before the rewrite | `docs/tool-descriptions-archive.md`, `docs/claude-md-archive.md` | — |
 | VI Server properties and methods | `docs/vi-server-reference.md` | `lvai_vi_server_reference` |
+| A graph's plots, scales, cursors (`Plot.Plot Name`, sub-object fields) | `docs/aixml-reference.md` §8, `scripts/aixml-skeletons/graph-plot-names.xml` | `lvai_vi_server_reference query=`, `lvai_check_aixml` |
 | Call targets; NI examples | `docs/example-corpus.md` | `lvai_palette_index`, `lvai_example_index` |
 | Terminal names; pane positions | `docs/aixml-reference.md` §2/§8 | `lvai_vi_terminals`, `lvai_connector_pane` |
 | Calling loaded project code | `docs/aixml-call-loaded-vi.md` | `lvai_generate_vi` |
@@ -512,11 +558,13 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Run a VI and read every value; drive events | `docs/vi-server-reference.md` | `lvai_run_vi_and_read_values` |
 | Start a VI, drive it while it runs (press, set, read), stop it | `docs/running-vi.md` | `lvai_running_vi` |
 | Is a VI broken, and why | `docs/error-list.md` | `lvai_exec_state`, `lvai_error_list` |
+| House rules of SAVED files, no LabVIEW; wirelint upstream version | `docs/offline-audit-evaluation.md` | `lvai_audit_files` |
 | LabVIEW's outside state; VIs in memory | `docs/labview-state.md` | `lvai_labview_state`, `lvai_vis_in_memory` |
 | Close or restart LabVIEW without losing work; answer a known dialog | `docs/labview-restart.md` | `lvai_restart_labview` (never kills), `lvai_answer_dialog` (allowlisted dialogs, own LabVIEW only) |
 | Diagram size; layout | `docs/diagram-size.md`, `docs/diagram-layout.md` | `lvai_layout_diagram` |
 | Diagram comments; rendering | `docs/diagram-comments.md` | `lvai_render_diagrams` |
 | Keep a supplied front panel | `docs/keep-supplied-front-panel.md` | `lvai_graft_diagram`, `lvai_bind_control_references` |
+| Custom controls; Fuse Design System (NXG) look | `docs/custom-controls.md` | `controlStyle`, AIXML `ctl=`, `lvai_replace_controls` |
 | Control references | `docs/control-reference-binding.md` | — |
 | Event structures, user events, `.vit` templates | `docs/labview-vit-templates.md`, `scripts/aixml-skeletons/user-event-two-loops.md` | `lvai_generate_vi_with_events`, `lvai_wire_dynamic_events`, `lvai_set_event_data_fields` |
 | Malleable VIs | `docs/malleable-vis.md` | `lvai_make_malleable` |

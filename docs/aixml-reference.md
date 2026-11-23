@@ -517,8 +517,19 @@ ref{LV.TreeControl}{array{string}}             (NI writes it for a reference mad
 ref{LV.VI}                                     VI refnum
 ref{UDClassInst}                               reference to a user-defined class instance
 tag{14}                                        IO name control (a DAQmx physical channel)
+map{string.Name,variant.Value}                 MAP: key type, value type (pylabview only)
+set{string}                                    SET: element type (pylabview only)
 {LV.VI} | {LV.Control} | {LV.String}           VI/control class references
 ```
+
+**Maps compose on the pylabview backend since 2026-11-19 (issue #140)**: a map control,
+indicator or EMPTY constant (`value=""`), a map inside a cluster, map wires, `Insert Into Map` /
+`Look In Map`, and a subVI whose pane carries a map. A map literal WITH entries is refused - fill
+it on the diagram. Sets compose the same way since the same day: a set control, indicator or EMPTY
+constant, a set in a cluster, set wires, `Insert Into Set` / `Element of Set?`, a subVI whose pane
+carries a set (before, every one of them was refused). VCTP holds both raw (0x74, 0x73); the
+composer writes the descriptor itself - docs/aixml-backends.md, "Maps and sets". Measured:
+t215-t222.
 
 `ref{UDClassInst}` carries no payload in the type string — the class identity is not encoded,
 so two unrelated class references are indistinguishable by type alone. Frameworks that thread
@@ -661,10 +672,14 @@ Note the validator's own wording says "escaped with another backslash". Both spe
 accepted and decodes back to `:`, so escaping it is harmless, but it is not required the way the
 backslash is. An absolute Windows path is conventionally written `C\3A\5Ctemp\5Cout.txt`.
 
-Both `:` and `,` are separators inside `inputs`/`outputs`, which is why they are escaped
-everywhere — including in free text. You may write a literal comma in a `comment` and
-LabVIEW will accept it, but it comes back as `\2C` on the next export, so emit `\2C`
-yourself if you want authored and exported files to match.
+Both `:` and `,` are separators inside `inputs`/`outputs`, which is why an EXPORT escapes them
+everywhere — including in free text. **When you AUTHOR free text - `description`, a `FreeLabel`'s
+`comment`, a structure's `label` - write the comma and the colon RAW.** Measured 2026-11-18 on
+both backends with one probe carrying `Name,Quantity` in all three: generated, executable, and
+read back with the same text (spelt `\2C` / `\3A` by the export). The old advice here - "emit
+`\2C` yourself so authored and exported files match" - cost a VI agent three failed `sed` edits
+on the Bausteine build for no gain: a shell treats `\2` as a back-reference. Match an export only
+when you diff against one.
 
 **What is accepted is wider than what is emitted.** `\3B` for a semicolon was accepted on
 input and came back as a plain `;`. So the decoder handles the general `\XX` form, while the
@@ -1138,7 +1153,7 @@ trailing spaces as part of the string**. Three distinct forms occur:
 |---|---|
 | `&quot;<Control>&quot;\3A Value Change` | static front-panel control event |
 | `&lt;<RegRef>.<Field>&gt;\3A User Event` | **dynamic** user event from a registration refnum |
-| `Panel Close?` | filter event — no control, no payload reference |
+| `Panel Close?` | filter event — no control, no payload reference; with an `Event Filter Node` (`Discard?`). **pylabview backend only**: NI's converter refuses the frame (`One or more event cases have no events defined`, 2026-11-20). Skeleton: `scripts/aixml-skeletons/panel-close-event.xml` |
 
 The dynamic form is the one that is easy to miss: the angle brackets are XML-escaped, the
 name inside is `<registration terminal>.<cluster field>`, and the trailing text is literally
@@ -1147,21 +1162,25 @@ name inside is `<registration terminal>.<cluster field>`, and the trailing text 
 `Event Data Node` exposes event fields (`NewVal`, `Source`, `code`, …) via `fields`; expect
 one per frame. Filter events additionally use an `Event Filter Node`.
 
-**The Timeout value: `timeoutin` (pylabview backend only, since 2026-10-28).** NI's AIXML has no
-attribute for the Timeout terminal at the top-left corner, so a generated Event Structure waits for
-ever (-1) and its Timeout frame never runs. The pylabview composer reads `timeoutin="<net>"` on the
-`<Structure _name="Event Structure">` - a net, as a Case Structure's `selectin` - and wires it to
-that terminal; the pylabview reader writes it back. A constant inside the loop or a control through
-an input tunnel both work:
+**The TIMEOUT terminal: `timeoutin="<net>"` - pylabview backend only** (2026-11-19). NI's format
+has no attribute for the structure's timeout terminal (154 of 154 Event Structures in NI's
+exports carry none, and NI's exporter drops the wire). Our composer takes `timeoutin`, spelled
+like a Case Structure's `selectin`: one bare net name, read on the structure's OWN diagram - from
+inside a loop, through a loop tunnel. The pylabview reader writes it back on export. Measured by
+running it: a 50 ms timeout handled three times in 186 ms, 100 ms ten times in 1087 ms; unwired,
+the timeout stays -1 and a Timeout frame never fires. On grpc the attribute costs the whole
+document (`Error -2628`, closed schema) - `lvai_check_aixml` warns `eventTimeoutPylabviewOnly`.
 
 ```xml
-<Constant _name="wait" type="int32" value="300" outputs="value:5024.value" uid="5024" uid_parent="5020"/>
-<Structure _name="Event Structure" timeoutin="5024.value" uid="5030" uid_parent="5020">
-  <CaseFrame selector=" Timeout " uid="5031" uid_parent="5030"> ... </CaseFrame>
+<Structure _name="Event Structure" timeoutin="4211.value" uid="4220" uid_parent="4210">
+  <CaseFrame selector=" Timeout " uid="4222" uid_parent="4220">
+    <Node _name="Event Data Node" fields="Source,Type,Time" outputs="Source:,Type:,Time:" uid="4224" uid_parent="4222"/>
+  </CaseFrame>
 </Structure>
 ```
 
-NI's converter (grpc) is not known to read it (untested); on grpc set the value by hand.
+Until 2026-11-19 this section said nothing and the rest of these documents said the terminal
+"does not exist in the format"; that stays true of NI's format and of the grpc backend.
 
 ## 8. Multi-terminal nodes
 
@@ -1173,13 +1192,58 @@ NI's converter (grpc) is not known to read it (untested); on grpc set the value 
 | `Bundle By Name` | `Field A,Field B` | which fields to replace |
 | `Event Data Node` | `NewVal` | event data items |
 | `Property Node` | `write+Disabled` | property, `write+` prefix = write access |
-| `Property Node` | `write+Front Panel Window\3ACloseable` | nested property class |
+| `Property Node` | `read+Value` | property, `read+` prefix = read access |
+| `Property Node` | `write+Front Panel Window\3ACloseable` | property with a CATEGORY (`:` written `\3A`) |
+| `Property Node` | `write+Active Plot,write+Plot.Plot Name` | a SUB-OBJECT's property: owner property, dot, the sub-object's property |
 
-A `Property Node` without the `write+` prefix reads; `read+Disabled` says so explicitly, and the
-pylabview composer accepts a bare `Disabled` as a read since 2026-11-17 (it refused it before, as
-"declares no property ''"). `Index Array` with two `index:`
+**Write `read+` or `write+` on EVERY field** - NI's exports always carry the prefix. A field
+without one READS: the pylabview composer (the default backend) takes a bare `Disabled` as
+`read+Disabled` since 2026-11-17 (it refused it before, as "declares no property ''"). Until
+2026-11-20 this said only "a `Property Node` without the `write+` prefix reads". `Index Array` with two `index:`
 entries in `inputs` returns two `element` outputs — repeated terminal names are how
 expandable nodes are described.
+
+### Sub-object properties: a graph's plots, scales and cursors
+
+A graph's plot, axis or cursor - and any control's label or caption - is a SUB-OBJECT with its own
+class, and the catalogue lists its properties under that class: `{LV.Plot} Plot Name`,
+`{LV.GraphScale} Range:Maximum`, `{LV.Text} Text`. On the graph's node the field is the owner's
+property, a DOT, and the sub-object's property; the terminal carries the same name:
+
+```xml
+<Node _name="Property Node" fields="write+Active Plot,write+Plot.Plot Name,write+Y Scale.Range\3AMaximum"
+      inputs="reference:4206.Graph,error in (no error):,Active Plot:4310.value,Plot.Plot Name:4311.value,Y Scale.Range\3AMaximum:4312.value"
+      outputs="reference out:,error out:4316.error out" type="{LV.WaveformGraph}" uid="4316" uid_parent="4300"/>
+```
+
+- `lvai_vi_server_reference query='Plot Name' cls='LV.WaveformGraph'` answers the dotted field
+  under NESTED PROPERTIES; `lvai_check_aixml` names it for a bare `Plot Name`
+  (`propertyOnSubObject`), and `fix` / `lvai_generate_vi` write it when only one sub-object fits
+  (`Range:Maximum` fits both scales and stays a warning naming both). The join comes from
+  `docs/vi-server-subobjects.tsv` (`scripts/harvest_nested_vi_server_properties.py`).
+- **A plot's or cursor's field acts on the ACTIVE one**: write `Active Plot` (`Active Cursor`)
+  first, in the same node - fields run top to bottom. Renaming every plot is one loop over the names,
+  the iteration counter into `Active Plot` and the name into `Plot.Plot Name`
+  (`scripts/aixml-skeletons/graph-plot-names.xml`).
+- Two levels nest the same way: `Y Scale.Name Label.Text` (the axis caption).
+
+**Measured 2026-11-20** (`experiments/graph-property-sweep/`): every nested field of the waveform
+graph, waveform chart, XY graph and intensity graph - Plot, Cursor, X/Y/Z Scale, Label, Caption, 21
+to 52 fields each, 952 in 23 VIs - composed on pylabview into one node per sub-object and loaded
+executable; NI's exporter (grpc) read all 952 back, field for field. The catalogue is what was
+harvested, so a sub-object's list is not complete (21 `{LV.Cursor}` properties). Written and read back at run time: plot
+name, line width, colour, visibility and point style, a scale's range and its name label, on all
+four. What LabVIEW itself refuses at RUN time, each seen once:
+
+| field | error | why |
+|---|---|---|
+| `Active Plot` past the last plot | 1077 | a graph with no data has plot 0 only |
+| `Label.Text` | 1073 | writable in EDIT mode only; use `Caption.Text` at run time |
+| `Caption.Text` | 1320 | the object has no caption - make it visible first (`Caption Visible`) |
+
+A chart has no cursors, so `Cursor.*` is not offered on `{LV.WaveformChart}`. The XY, digital and
+mixed-signal graphs were missing from the catalogue; they carry their parent's rows since
+2026-11-20 (`source` says so), and their OWN properties beyond the parent's are not listed.
 
 **BUT NOT EVERY EXPANDABLE NODE EXPANDS FROM AIXML, and `Format Into String` is the one that
 matters.** Read as a general rule this sentence cost a session about 330 s of wall clock, so the
@@ -1255,6 +1319,7 @@ catalogue holds display names and misses half of our own working helpers' names 
 | `propertyNameNotKnown`, `methodNameNotKnown` (WARNING) | unknown, no such match | the nearest known name is offered; both lists are incomplete, so verify by exporting a VI that uses the name |
 | `viServerClassUnknown` (WARNING) | an `{LV.*}` type outside LabVIEW's 296 classes | — |
 | `classPropertyNodeNotComposable` (WARNING) | a Property Node on a LabVIEW CLASS, `type="{UDClassInst}"` (NI's export spelling; DQMH's `Module ID`) | its fields are the class's own accessor names, so no name check runs on it. The pylabview composer, the default backend, refuses the node (no part harvested); call the accessor per field instead - `<Class>.lvclass:Read <field>.vi` / `Write <field>.vi` by NI's default naming, `lvai_describe_class` for the real names - with the class and error wires chained through. The composer's own refusal names the class off the wired refnum. NI's converter on grpc was not measured on it |
+| `propertyOnSubObject` (WARNING) | a sub-object's property written bare on its owner, `Plot Name` on a graph | names `Plot.Plot Name`; `fix` and `lvai_generate_vi` write it when only one sub-object fits (§8, "Sub-object properties") |
 
 A nested property written with a dot (`Label.Text`) passes when its head (`Label`) is a known
 property — that is the working form, measured 2026-09-09. `scripts/aixml_lint.py` runs the same
@@ -1312,8 +1377,9 @@ export: inputs `reference`, `error in (no error)`, `JavaScript`, `arg`, `Wait fo
 The script is a FUNCTION BODY and needs `return`. At run time it needs the control's panel OPEN in
 the instance that runs the VI, and the first call right after `FP.Open` can still answer `Error 53`
 while the browser initialises - measured twice on cold starts, a second call clean - so poll or
-retry rather than calling once. **Not in an Event Structure Timeout frame on grpc**, where it has no
-terminal (pylabview: `timeoutin`, §7): `scripts/aixml-skeletons/web-browser-title-poll.xml` is the measured shape, a second loop
+retry rather than calling once. On grpc **not in an Event Structure Timeout frame**, whose
+terminal NI's format lacks (pylabview wires it, `timeoutin` under "Event Structure");
+`scripts/aixml-skeletons/web-browser-title-poll.xml` is the measured shape on both, a second loop
 paced by `Wait on Notification` with a 250 ms timeout and stopped by the notifier. A run leaves the
 panel the program opened OPEN, which keeps the VI in memory (`Error 1357` on the next convert);
 `lvai_run_vi_and_read_values` closes it afterwards (`panelClosedAfterRun`).
@@ -2608,6 +2674,73 @@ Note the difference from an enum, which encodes its labels inside the *type*
 (`uint8{Label A,Label B}`, §5): a Ring keeps `type` plain and lists the labels separately,
 because its values need not be consecutive.
 
+A comma INSIDE an item is `\2C` (`items="0504 0001h \2C comma"`) - never replace it with another
+character. Both backends keep the item text and `values` as written, any character of the
+station's code page included (pylabview since 2026-11-19; `docs/aixml-backends.md`, "Text in the
+station's code page"). A pylabview ring value must fit 32 bits; a uint32 one may use all of them.
+
+### A combo box: `style="Combo Box"` (pylabview only)
+
+NI's AIXML has no combo box: NI's export writes one as a plain `type="string"` control and NI's
+converter builds a plain string control from the spelling below, dropping the items WITHOUT an
+error (measured 2026-11-19). The pylabview composer builds a real combo box from it, and its
+reader writes it back the same way:
+
+```xml
+<Control _name="Abort Code" style="Combo Box" type="string"
+         items="0503 0000h – Toggle bit not alternated.,0607 0010h – Data type does not match\2C length too high."
+         value="0503 0000h – Toggle bit not alternated." outputs="value:4200.value" uid="4200" uid_parent="root"/>
+```
+
+- The type is `string`; `items` as in a ring, a comma inside an item `\2C`. The value is the
+  TEXT, and free text is accepted as in any combo box.
+- An Indicator takes the style too.
+- `values` (Values Match Items off) is refused by name - the items are the values.
+- A reference to it (`link=`, `VI Server Reference`) is `{LV.ComboBox}`, so `Strings []` can be
+  read or written at run time - NI's Pulse Generation (178x Smart Camera).vi fills its combo
+  boxes that way.
+- Never generate it with `backend="grpc"`: the result is a plain string control.
+
+### An IMAQ Image that SHOWS the image: `style="Image Display"`
+
+An IMAQ Image control or indicator, `type="ref{GenClassTagFlatten.IMAQImage.IMAQImage}"`, is by
+default the plain refnum control - it shows the image's NAME, not its pixels. For NI Vision's
+Image Display (zoom, ROI tools, overlays drawn by IMAQ Overlay ...) add the style:
+
+```xml
+<Indicator _name="Image" inputs="value:4203.Image Out" style="Image Display"
+           type="ref{GenClassTagFlatten.IMAQImage.IMAQImage}" uid="4205" uid_parent="root" value=""/>
+```
+
+`Image Display (Classic)` and `Image Display (Silver)` are NI's other two looks. **pylabview only**:
+the composer writes the plain refnum and `lvai_generate_vi` replaces it with NI's `.ctl` from
+`vi.lib\vision\Image Display Controls.llb` (step `imageDisplay`), so it needs a running LabVIEW and
+NI Vision Common. NI's export carries no style for the display; our reader writes this one. Draw
+boxes and text into the image with the IMAQ Overlay VIs rather than a 2D Picture. Measured
+2026-11-17, `t214_imaq_image_display`; docs/imaq-support.md.
+
+### Any custom control, and the Fuse Design System: `ctl="..."` and `controlStyle`
+
+A Control or Indicator may name a CUSTOM CONTROL file - also one that is NOT a typedef, such as
+the Fuse Design System's `vi.lib\NXG_controls` (issue #139):
+
+```xml
+<Control _name="error in" ctl="vi.lib\5CNXG_controls\5CArrayMatrixCluster\5CError In NI_NXG.ctl"
+         type="cluster{bool.status,int32.code,string.source}" value="[false,0,]" .../>
+```
+
+The path is absolute or relative to the LabVIEW folder (backslashes as `\5C`). `lvai_generate_vi`
+removes the attribute before either backend sees it (NI's schema is closed), composes the plain
+control and then REPLACES it from the `.ctl` in LabVIEW (step `controlLook`). `controlStyle:
+"fuse"` on `lvai_generate_vi` / `lvai_generate_vis` does the same for every terminal by type and
+direction; `lvai_replace_controls` does it for a VI that already exists. Measured 2026-11-19 on
+LabVIEW 2026: `{LV.Control} Replace` keeps label, data type (an int32 stays I32 against the NXG
+numeric, a DBL), direction, pane slot, enum items, latch and default value, and the NXG colours
+arrive in the saved panel - EXCEPT for arrays, whose element comes from the `.ctl`
+(`array{int32}` became `array{double}`), so arrays and clusters are not mapped. The step checks
+every replaced control's type before and after and refuses a change (`typeKept: false`).
+docs/custom-controls.md.
+
 ### A waveform indicator is not a graph, and a wrong `style` is dropped in silence
 
 `type="doublewaveform"` alone produces the **cluster** display — t0, dt and the Y array as
@@ -3147,8 +3280,8 @@ NI's exports), and the harvested parts' own type labels gave each away:
 | 2456 | `Insert Into Map` | 1: `map out` -> `value unchanged?` (Boolean); 3: the reverse (map) |
 
 NI validated a document wiring each pair; on the composer `Move` and `New VI` were broken with the
-old table and executable with the fixed one (`Insert Into Map` cannot be composed: the composer
-has no map type yet). The reader names terminals from the same tables, so its exports of VIs using
+old table and executable with the fixed one (`Insert Into Map` could not be composed then: the
+composer had no map type until issue #140, 2026-11-19; t215 now runs it). The reader names terminals from the same tables, so its exports of VIs using
 these four were consistently wrong too - a round trip could not show it. `TerminalNameTableTests`
 now fails on any slot whose part type is labelled with another slot's name and a different kind of
 type.

@@ -186,6 +186,14 @@ The recommendation above was carried out. Helpers `scripts/lvbd_graft_paste.xml`
 `GraftToolsTests.cs` against the three exports of the §2 run (`tests/.../Fixtures/graft/`), each
 check with a control arm that must fail.
 
+**Automatic error handling is cleared in the output (2026-11-21).** The CLD templates carry
+Enable automatic error handling ON, and the copy kept it. `lvai_audit_files` found the setting on
+in every grafted main VI of the ATM and Car Wash builds. The pylabview pass after the rewire, which
+writes the event registrations back, now also sets `Execution2.DefaultErrorHandling` to 0. With no
+Event Structure, the pass runs for that alone. The answer's `automaticErrorHandling` shows the
+supplied value, the output's value and `kept`. `keepAutomaticErrorHandling` leaves the setting as
+supplied. `docs/offline-audit-evaluation.md`.
+
 ### What §4 became
 
 | §4 item | now |
@@ -262,8 +270,9 @@ frames are not touched. `docs/cold-build-carwash-pc.md`.
 were found by a field user rebuilding a VI with a Web Browser control, and both cost a redesign
 there; written down so the next build plans for them instead of discovering them.
 
-- **A Timeout frame has no terminal in AIXML**, so a frame that reads its own timeout or polls on
-  it cannot be authored. The measured replacement is a second loop paced by `Wait on
+- **A Timeout frame has no terminal in NI's AIXML** (grpc). On pylabview `timeoutin="<net>"` wires
+  it (2026-11-19, `docs/aixml-reference.md` "Event Structure"); before that this said it could not
+  be authored at all. The replacement measured on both backends is a second loop paced by `Wait on
   Notification` with a timeout and stopped by the notifier -
   `scripts/aixml-skeletons/web-browser-title-poll.xml`.
 - **The event chain registers `Value Change` and nothing else.** Measured 2026-10-03: a frame
@@ -290,7 +299,9 @@ Three findings of `docs/cold-build-carwash-pc.md` became code the same day:
   (`switchActionNotABooleanControl`); the answer carries `switchActions`, read from the export
   (`style` no longer `latched`), and gates `ok`. Accepted on `C:\Temp\GraftSwitchAccept`:
   `ok: true` in 3.0 s, `switchActions {stop: true}`, and a `signalsJson` run then signalled `stop`
-  - which `Error 1193` had refused on the latched original.
+  - which `Error 1193` had refused on the latched original. **Since 2026-11-21 the pylabview
+  backend drives a latched button as it is** (key focus plus a posted space bar,
+  `docs/aixml-backends.md`), so `switchActionControls` is needed only to drive one over grpc.
 
 **Scope, the user's rule of the same day: the graft is for the MAIN GUI only.** The call is
 seconds; the route around it is minutes, and a subVI's panel is not worth them.

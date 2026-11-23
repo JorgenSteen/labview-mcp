@@ -27,6 +27,7 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # the bundle's ._pth leaves it off
 import aixml2vi  # noqa: E402
+import linkcache  # noqa: E402
 import lvheap  # noqa: E402
 
 TYPE_TO_AIXML = {v[0]: k for k, v in aixml2vi.SCALARS.items()}
@@ -439,6 +440,79 @@ def _flat_decode(tree, b, pos):
     raise ValueError("no flattened form known for %s" % t)
 
 
+def _unwrap(tree):
+    while tree is not None and tree.get("Type") == "TypeDef" and tree.find("TypeDesc") is not None:
+        tree = tree.find("TypeDesc")
+    return tree
+
+
+def _label(tree):
+    return tree.get("Label") or (_unwrap(tree).get("Label") if _unwrap(tree) is not None else None)
+
+
+def mutate_value(old, new, b, pos):
+    """A value flattened against type `old`, as LabVIEW carries it into type `new` - the same
+    type: as it is; two clusters: field by field, MATCHED BY LABEL, a field `new` gained written
+    as its empty value, one it lost dropped; two enums: the same ITEM at its new place, else the
+    number clamped to the new list;
+    two arrays of as many dimensions: element by element; anything else: None (not carried).
+    -> (text, next position in b)."""
+    if aixml_type(old) == aixml_type(new):
+        return _flat_decode(old, b, pos)
+    o, n = _unwrap(old), _unwrap(new)
+    if o is None or n is None:
+        return None, _flat_decode(old, b, pos)[1]
+    o_items = [e.text or "" for e in o.findall("EnumLabel")]
+    n_items = [e.text or "" for e in n.findall("EnumLabel")]
+    if o_items and n_items:
+        # an ENUM: LabVIEW keeps the ITEM where the new list still has it, else the NUMBER,
+        # clamped to the new list's last item - measured on Issue136Enum, NI's export after each
+        # .ctl was saved alone (2026-11-18): Stop of {Init,Run,Stop} in {Init,Pause,Run,Stop} is 3;
+        # Run (1) of {Off,Run,Stop} in {Off,Stop} is 1 (Stop); High (2) of {Low,Mid,High} in
+        # {Low,Mid} is 1 (Mid)
+        v, end = _flat_decode(o, b, pos)
+        if not v.lstrip("-").isdigit():
+            return None, end
+        k = int(v)
+        item = o_items[k] if 0 <= k < len(o_items) else None
+        return str(n_items.index(item) if item in n_items else max(0, min(k, len(n_items) - 1))), end
+    if o.get("Type") == "Array" and n.get("Type") == "Array" and \
+            len(o.findall("Dimension")) == len(n.findall("Dimension")):
+        # an ARRAY: its sizes as saved, each element carried over on its own
+        dims = len(o.findall("Dimension")) or 1
+        sizes = list(struct.unpack(">%di" % dims, b[pos:pos + 4 * dims]))
+        pos += 4 * dims
+        total = 1
+        for x in sizes:
+            total *= x
+        ok, ek = _wrapped(o), _wrapped(n)
+        items = []
+        for _ in range(total):
+            v, pos = mutate_value(ok, ek, b, pos)
+            items.append(v)
+        if any(v is None for v in items):
+            return None, pos
+
+        def nest(xs, ds):
+            if len(ds) == 1:
+                return "[%s]" % ",".join(xs)
+            step = len(xs) // ds[0] if ds[0] else 0
+            return "[%s]" % ",".join(nest(xs[i * step:(i + 1) * step], ds[1:]) for i in range(ds[0]))
+        return ("[]" if total == 0 else nest(items, sizes)), pos
+    if o.get("Type") != "Cluster" or n.get("Type") != "Cluster":
+        return None, _flat_decode(old, b, pos)[1]
+    fields = {}
+    for k in (c for c in o if c.tag == "TypeDesc"):
+        fields.setdefault(_label(k), (k, pos))
+        pos = _flat_decode(k, b, pos)[1]
+    parts = []
+    for k in (c for c in n if c.tag == "TypeDesc"):
+        hit = fields.get(_label(k)) if _label(k) else None
+        v = mutate_value(hit[0], k, b, hit[1])[0] if hit is not None else None
+        parts.append(v if v is not None else empty_value(k))
+    return "[%s]" % ",".join(parts), pos
+
+
 # an EMPTY variant flattened, after its 4-byte version word (0x26008000 in LabVIEW 2026): one type,
 # void (`0004 0000`), then `0001 0000`, no data and no attributes
 EMPTY_VARIANT_TAIL = bytes.fromhex("00000001000400000001000000000000")
@@ -720,6 +794,327 @@ def callee_slots(path):
     return out
 
 
+def qualify_link(qual, flag, caller_libs):
+    """A link record's qualified name, completed by the caller's own libraries (LIBN) where its
+    LinkSaveFlag says it was saved RELATIVE to them (Reader._relative_to_caller has the cases)."""
+    if not caller_libs or not qual:
+        return qual
+    if flag == "2" and len(qual) == 1:
+        return caller_libs + qual
+    if flag == "2":
+        if qual[0] in caller_libs:
+            return caller_libs[:caller_libs.index(qual[0])] + qual
+        return caller_libs + qual
+    if flag == "3":
+        return caller_libs[:1] + qual
+    return qual
+
+
+# A linked TYPEDEF as its .ctl holds it now, per file state (_file_key) -> _ctl_typedef's answer.
+# In linkcache, so the resident worker keeps it across reads: each .ctl is extracted once.
+_TYPEDEF_CACHE = linkcache.TYPEDEFS
+
+# Whether every linked file is read, or only one written AFTER the file that holds its copy
+# (newer_than). `--full-link-check` or LABVIEWMCP_FULL_LINK_CHECK=1 sets it, per read (main).
+FULL_LINK_CHECK = False
+LINK_STATS = {"read": set(), "skippedByDate": set()}   # linked FILES, normcased
+
+
+def _file_key(path):
+    """A file's state as a cache key: path, write time, size - and the link-check mode, since the
+    answer for a file depends on which of ITS links were read."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (os.path.normcase(os.path.abspath(path)), st.st_mtime_ns, st.st_size, FULL_LINK_CHECK)
+
+
+def newer_than(linked, holder):
+    """Whether `linked` - a typedef's .ctl, a subVI - may have changed since `holder`, the file
+    that saved a copy of it, was saved. LabVIEW writes the CURRENT definition into the copy when it
+    saves the holder, so a linked file written BEFORE the holder needs no reading (the user's
+    proposal of 2026-11-18). Every one of the nine stale DQMH callers of the ATM build has an older
+    write time than the .ctl and subVI it is stale against, and its Main.vi, newer than all 11 of
+    its links, then reads none. A write time says nothing after a git checkout, which writes every
+    file anew in no particular order: FULL_LINK_CHECK reads them all. Unknown times read."""
+    if FULL_LINK_CHECK or not holder:
+        return True
+    try:
+        return os.stat(linked).st_mtime_ns > os.stat(holder).st_mtime_ns
+    except OSError:
+        return True
+
+
+def _type_shape(tree, top=True):
+    """A type's structure for comparing an embedded typedef copy with its .ctl: every attribute but
+    how pylabview laid it out (Format) and the outermost label - that one belongs to the INSTANCE
+    (a typedef'd control relabelled in its caller keeps the typedef), not to the typedef."""
+    attrs = tuple(sorted((k, v) for k, v in tree.attrib.items()
+                         if k not in ("Format", "Nested") and not (top and k in ("Label", "HasLabel"))))
+    kids = tuple(_type_shape(c, False) if c.tag == "TypeDesc" else (c.tag, tuple(sorted(c.attrib.items())))
+                 for c in tree)
+    return (attrs, kids)
+
+
+def _wrapped(typedef):
+    return next((c for c in typedef if c.tag == "TypeDesc"), None)
+
+
+def _ctl_typedef(path, chain=()):
+    """(the TypeDef a .ctl defines, fully inlined with ITS linked typedefs resolved from disk too,
+    or None; {qualified name: finding} of those nested typedefs; why it is None, else None). Its
+    CONP points at that TypeDef (Reader.pane_flags)."""
+    key = _file_key(path)
+    if key is None:
+        return None, {}, "the file is gone"
+    if key in _TYPEDEF_CACHE:
+        return _TYPEDEF_CACHE[key]
+    if key in chain:
+        return None, {}, "it contains itself through its links"
+    tmp = tempfile.mkdtemp(prefix="typedef_")
+    result = (None, {}, None)
+    try:
+        b = lvheap.Bundle(lvheap.extract(path, tmp), collections=True)
+        libs = [l.text.strip() for l in b.main.findall("LIBN/Section/Library") if (l.text or "").strip()]
+        links = TypedefLinks(b, path, libs, chain + (key,))
+        b.typedef_resolver = links
+        cons = b.main.find("CONP/Section/TypeDesc")
+        tree = b.tree(b.flat_of_consolidated(int(cons.get("TypeID")))) if cons is not None else None
+        result = (tree if tree is not None and tree.get("Type") == "TypeDef" else None, dict(links.findings),
+                  None if tree is not None else "it has no connector pane type")
+    except Exception as ex:
+        result = (None, {}, "%s: %s" % (type(ex).__name__, str(ex)[:300]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    _TYPEDEF_CACHE[key] = result
+    return result
+
+
+def typedef_name(tree):
+    """The qualified name of the linked typedef a type IS, else None."""
+    if tree is None or tree.get("Type") != "TypeDef":
+        return None
+    return ":".join(l.get("Text") or "" for l in tree.findall("Label")) or None
+
+
+def link_target_text(path, caller_file):
+    """Where a link points, for a message: a relative one resolved from the caller's file."""
+    kind, comps = path
+    if kind == 1 and caller_file:
+        where = caller_file
+        for c in comps:
+            where = os.path.dirname(where) if c == "" else os.path.join(where, c)
+        return where
+    return "\\".join(comps)
+
+
+def read_files_at_once(files, read):
+    """`read(file)` for each file, eight at a time where each pylabview extraction is its own
+    PROCESS (about 0.7 s each, mostly the start). Not in the server's resident worker
+    (worker.py): it swaps lvheap.run_pylabview for an in-process run that swaps sys.argv and
+    stdout, and threads there failed every extraction with an empty message (2026-11-18) - there
+    they are read one by one, with no process start to save. Plain threads: the bundled Python
+    ships no `concurrent` package (13 suite failures, ModuleNotFoundError, 2026-11-18)."""
+    files = list(files)
+    if len(files) < 2 or getattr(lvheap.run_pylabview, "__module__", None) != lvheap.__name__:
+        for f in files:
+            read(f)
+        return
+    import threading
+    lock = threading.Lock()
+
+    def work():
+        while True:
+            with lock:
+                if not files:
+                    return
+                f = files.pop()
+            read(f)
+    threads = [threading.Thread(target=work) for _ in range(min(8, len(files)))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+
+# A subVI's connector pane as its FILE defines it now, per file state (_file_key): (slot ->
+# (label, is an output, AIXML type), or None; why it is None). Cached for the read like typedefs.
+_CALLEE_PANES = linkcache.CALLEE_PANES
+
+
+def callee_pane(path):
+    """A callee file -> ({slot: (label, is an output, AIXML type, typedef name or None)}, None) or
+    (None, why).
+    The slot's fPDCO comes from the front panel's `cons` array as in callee_slots, its type from
+    the pane's Function type - with the callee's OWN linked typedefs resolved from disk."""
+    key = _file_key(path)
+    if key is None:
+        return None, "the file is gone"
+    if key in _CALLEE_PANES:
+        return _CALLEE_PANES[key]
+    tmp = tempfile.mkdtemp(prefix="callee_pane_")
+    result = (None, "unread")
+    try:
+        b = lvheap.Bundle(lvheap.extract(path, tmp), collections=True)
+        libs = [l.text.strip() for l in b.main.findall("LIBN/Section/Library") if (l.text or "").strip()]
+        b.typedef_resolver = TypedefLinks(b, path, libs)
+        cons = b.main.find("CONP/Section/TypeDesc")
+        func = b.tree(b.flat_of_consolidated(int(cons.get("TypeID")))) if cons is not None else None
+        if func is None or func.get("Type") != "Function":
+            result = (None, "it has no connector pane")
+        else:
+            types = [c for c in func if c.tag == "TypeDesc"]
+            dcos = {e.get("uid"): e for e in b.fp.iter("SL__arrayElement") if e.get("class") == "fPDCO"}
+            pane, cursor = {}, 0
+            cl = next(b.fp.iter("cons"), None)
+            for c in (cl if cl is not None else []):
+                if c.get("index") is not None:
+                    cursor = int(c.get("index"))
+                dco = c.find("ConnectionDCO")
+                f = dcos.get(dco.get("uid")) if dco is not None else None
+                if f is not None and f.find("ddo") is not None and cursor < len(types)                         and types[cursor].get("Type") not in (None, "Void"):
+                    t = types[cursor]
+                    pane[cursor] = (label_text(f.find("ddo")), bool(int(f.findtext("objFlags") or 0) & 1),
+                                    aixml_type(t) or lvheap.type_key(t), typedef_name(t))
+                cursor += 1
+            result = (pane, None)
+    except Exception as ex:
+        result = (None, "%s: %s" % (type(ex).__name__, str(ex)[:300]))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    _CALLEE_PANES[key] = result
+    return result
+
+
+class TypedefLinks:
+    """Resolves the LINKED TYPEDEFS a file embeds from their .ctl files on disk (issue #136).
+
+    A VI - and a .ctl - saves a COPY of every typedef it uses, nested ones too, and LabVIEW
+    replaces that copy from the .ctl when it loads the file. A .ctl edited and saved on its own
+    leaves its callers' copies stale until they are saved again: Context Help then shows the new
+    fields, and a reader of the copy the old ones. So each TypeDef is matched by its qualified
+    name (its Label children) to the file's TDCC link record, the .ctl is read - its own nested
+    typedefs resolved the same way, recursively - and the TypeDef is answered as the .ctl defines
+    it. What does not resolve keeps the copy, and both cases are recorded in `findings`:
+      drift      - the copy differs from the .ctl; the .ctl's definition is the one used,
+      unresolved - the link's .ctl is not there or cannot be read; the copy is used and is an
+                   UNVERIFIED snapshot.
+    A TypeDef no TDCC of the file names is not one of its links (a callee's pane type, an event's
+    data) and is read as embedded, unreported.
+    A class's private data cluster is a TypeDef too, with a non-zero Flag1 (Delacor's Message
+    Queue.ctl in every DQMH Main.vi, 0xE5C5AD3E) and no TDCC: it is left to the class reading."""
+
+    def __init__(self, bundle, file_path, caller_libs, chain=()):
+        self.file_path = file_path
+        self.chain = chain
+        self.by_qual = {}
+        self.by_name = {}
+        for rec in bundle.main.iter("TDCC"):
+            qual = [s.text or "" for s in rec.findall("LinkSaveQualName/String")]
+            pr = rec.find("LinkSavePathRef")
+            if not qual or pr is None:
+                continue
+            path = (int(pr.get("TpVal") or "0"), [s.text or "" for s in pr.findall("String")])
+            self.by_qual.setdefault(tuple(qualify_link(qual, rec.get("LinkSaveFlag"), caller_libs)), path)
+            self.by_name.setdefault(qual[-1], []).append(path)
+        self.findings = {}
+        self._files = {}
+        self._prefetch(bundle)
+
+    @staticmethod
+    def _names(src):
+        return [l.get("Text") or "" for l in src.findall("Label")]
+
+    def _is_linked_typedef(self, src, names):
+        if not names or not names[-1].lower().endswith((".ctl", ".ctt")):
+            return False
+        try:
+            if int(src.get("Flag1") or "0", 16) != 0:
+                return False         # a class's private data
+        except ValueError:
+            return False
+        # a .ctl's OWN TypeDef is the definition, not a copy of one
+        return not (self.file_path and names[-1].lower() == os.path.basename(self.file_path).lower())
+
+    def _link(self, names):
+        path = self.by_qual.get(tuple(names))
+        if path is None:
+            cands = {(k, tuple(c)) for k, c in self.by_name.get(names[-1], [])}
+            if len(cands) == 1:
+                k, c = next(iter(cands))
+                path = (k, list(c))
+        return path
+
+    def _file(self, names):
+        key = tuple(names)
+        if key not in self._files:
+            path = self._link(names)
+            self._files[key] = (path, link_file(path, self.file_path) if path is not None else None)
+        return self._files[key]
+
+    def _prefetch(self, bundle):
+        """Read every linked .ctl of this file at once: an extraction is a pylabview process of
+        about 0.7 s, and a DQMH Main.vi links a dozen typedefs."""
+        files = set()
+        for td in bundle.flat:
+            names = self._names(td)
+            if td.get("Type") == "TypeDef" and self._is_linked_typedef(td, names):
+                f = self._file(names)[1]
+                if f and _file_key(f) not in _TYPEDEF_CACHE and newer_than(f, self.file_path):
+                    files.add(f)
+        read_files_at_once(sorted(files), lambda f: _ctl_typedef(f, self.chain))
+
+    def __call__(self, src, snap):
+        names = self._names(src)
+        if not self._is_linked_typedef(src, names):
+            return None
+        name = ":".join(names)
+        path, f = self._file(names)
+        if path is None:
+            # not a link of THIS file: a copy inside a callee's pane type or an event's data
+            # (DQMH Main.vi's Show Panel Argument, LabVIEW's lveventtype.ctl - 7 of 18 there,
+            # 2026-11-18), which LabVIEW refreshes through that owner, not through a .ctl link
+            return None
+        if f is None:
+            self.findings.setdefault(name, ("unresolved", "its .ctl was not found at %s"
+                                            % link_target_text(path, self.file_path)))
+            return None
+        if not newer_than(f, self.file_path):
+            LINK_STATS["skippedByDate"].add(os.path.normcase(f))
+            return None          # saved before this file: its copy here is the current one
+        LINK_STATS["read"].add(os.path.normcase(f))
+        disk, nested, why = _ctl_typedef(f, self.chain)
+        for k, v in nested.items():
+            # a nested typedef the .ctl could not resolve leaves that part of the type unverified;
+            # one it resolved is current here whatever the .ctl's own copy says
+            if v[0] == "unresolved":
+                self.findings.setdefault(k, v)
+        inner = _wrapped(disk) if disk is not None else None
+        if inner is None:
+            self.findings.setdefault(name, ("unresolved", "its .ctl could not be read: %s (%s)" % (f, why)))
+            return None
+        own = _wrapped(snap)
+        if own is not None and _type_shape(own) == _type_shape(inner):
+            return None          # the copy is current: keep it exactly as embedded
+        self.findings.setdefault(name, ("drift", "the copy this file embeds differs from what %s "
+                                        "defines now, its own linked typedefs included; that "
+                                        "definition is used, as LabVIEW does on load" % f))
+        out = ET.Element("TypeDesc", dict(snap.attrib))
+        fresh = copy.deepcopy(inner)
+        for k in ("Label", "HasLabel"):
+            # the INSTANCE's label lives on the wrapped type and stays the caller's
+            if own is not None and own.get(k) is not None:
+                fresh.set(k, own.get(k))
+            elif k in fresh.attrib:
+                del fresh.attrib[k]
+        out.append(fresh)
+        for c in snap:
+            if c.tag != "TypeDesc":
+                out.append(copy.deepcopy(c))
+        return out
+
+
 def label_text(ddo):
     parts = ddo.find("partsList")
     for part in (parts if parts is not None else []):
@@ -730,7 +1125,9 @@ def label_text(ddo):
             # pylabview writes an unquoted [NULL] for a label with no text at all, and a NUL
             # BYTE as the literal text `&#x00;` - NI's export of DW Test Change Info.vi has an
             # empty label there
-            return "" if t in (None, "[NULL]") else t.replace("&#x00;", "")
+            # in CP1252, as LabVIEW wrote it (lvheap.pylv_to_text) - `Code Größe` came back as
+            # `Code Grˆﬂe` until 2026-11-19
+            return "" if t in (None, "[NULL]") else lvheap.pylv_to_text(t.replace("&#x00;", ""))
     return ""
 
 
@@ -740,7 +1137,7 @@ INT_MIN, INT_MAX = -2 ** 31, 2 ** 31 - 1
 # internal until 2026-11-06)
 # the LVSR Execution attributes carried after </VI> (`exec`) and set back by the composer
 EXEC_KEPT = ("IsReentrant", "PooledReentrancy", "IsSubroutine", "Priority", "PrefExecSyst", "SaveParallel")
-INTERNAL_TERMS = {"#cond", "#count", "#maxin", "#maxout", "#selectin", "#selectout"}
+INTERNAL_TERMS = {"#cond", "#count", "#maxin", "#maxout", "#selectin", "#selectout", "#timeoutin"}
 IGNORED, MISSING = object(), object()     # term_owner sentinels: an end AIXML has no terminal for
 
 
@@ -754,7 +1151,7 @@ def sublabel_text(diag):
             t = o.findtext("textRec/text")
             if t and len(t) > 1 and t.startswith('"') and t.endswith('"'):
                 t = t[1:-1]
-            return "" if t in (None, "[NULL]") else t.replace("&#x00;", "")
+            return "" if t in (None, "[NULL]") else lvheap.pylv_to_text(t.replace("&#x00;", ""))
     return None
 
 
@@ -841,6 +1238,12 @@ def escape_illegal_xml_chars(root):
         root.append(ET.Comment(" vi2aixml: control character written as \\XX in %s " % h))
     return hits
 
+
+# XNodes read as the code they generated (xnode_inline) - on by default; LABVIEWMCP_INLINE_XNODES=0
+# writes NI's form, a Call of the .xnode, which the composer refuses. XNodes lvai_generate_vi puts
+# in place itself through {LV.SubVI} Replace (XNodeCalls.cs) keep that Call
+INLINE_XNODES = os.environ.get("LABVIEWMCP_INLINE_XNODES", "1").strip() not in ("0", "false", "off", "no")
+XNODE_REPLACE_ROUTES = {"Match Regular Expression.xnode"}
 
 # heap class of a fixed-shape node -> its AIXML name; the terminal names come from the
 # composer's template parts (parts/tnode__*.xml), which name every terminal (harvest_templates.py)
@@ -962,7 +1365,18 @@ class Reader:
         # the libraries the VI itself belongs to (LIBN), outermost first: a link record saved
         # RELATIVE to them (LinkSaveFlag 2) names its target without them
         self.caller_libs = [l.text.strip() for l in self.b.main.findall("LIBN/Section/Library") if (l.text or "").strip()]
+        # linked typedefs as their .ctl files define them NOW, not as this file's copy (issue
+        # #136); only with the file itself - a bundle read alone has no place to resolve from
+        self.typedef_links = TypedefLinks(self.b, vi_path, self.caller_libs) if vi_path else None
+        self.b.typedef_resolver = self.typedef_links
         self.call_targets = self._call_targets()
+        # subVI calls whose callee's pane changed on disk since this file was saved (issue #136's
+        # sibling): {call uid: (target, drift | unresolved, [details])}
+        self.subvi_findings = {}
+        if vi_path:
+            read_files_at_once(sorted({f for f in (self._checked_callee(p) for p in self.call_paths.values())
+                                       if f and newer_than(f, vi_path) and _file_key(f) not in _CALLEE_PANES}),
+                               callee_pane)
         self.instance_names = self._express_instances()
         self.prop_items = {}     # property node uid -> its items' code paths, in field order
         self.diags = []         # every diagram walked, for wiring
@@ -974,11 +1388,38 @@ class Reader:
         self.term_net = {}
 
     # ---- helpers ---------------------------------------------------------------------------
-    def tid_tree(self, el):
+    def typedef_findings(self):
+        """{qualified typedef name: (drift | unresolved, detail)} over every type read so far."""
+        return dict(self.typedef_links.findings) if self.typedef_links is not None else {}
+
+    def tid_tree(self, el, snapshot=False):
+        """The type of a heap object; `snapshot` as the file embeds it, which is what its saved
+        DATA is flattened against, else with linked typedefs as their .ctl files define them."""
         e = lvheap.typeid_elements(el)
         if not e:
             return None
-        return self.b.heap_type_tree(int(lvheap.TYPEID_RE.fullmatch(e[0].text.strip()).group(1)))
+        return self.b.heap_type_tree(int(lvheap.TYPEID_RE.fullmatch(e[0].text.strip()).group(1)), snapshot)
+
+    def stored_value(self, tree, snap, hexstr, what):
+        """A saved value, decoded against the type it was SAVED with. Where a linked typedef's
+        .ctl changed that type, LabVIEW MUTATES the value on load, keeping each cluster field BY
+        NAME and giving a new one its default: NI's export of Issue136's Caller.vi wrote
+        `[[1.5,0],7]` for the constant saved as `[[1.5],7]` once Inner gained B (2026-11-18).
+        `mutate_value` does the same; what it cannot carry over is the new type's empty value,
+        with a note."""
+        if snap is None or aixml_type(snap) == aixml_type(tree):
+            return decode_value(snap if snap is not None else tree, hexstr)
+        try:
+            v = mutate_value(snap, tree, bytes.fromhex(hexstr) if hexstr else b"", 0)[0]
+        except (ValueError, IndexError, struct.error):
+            v = None
+        if v is not None:
+            self.notes.append("%s: its saved value was carried into the changed typedef as LabVIEW "
+                              "does on load (see the typedef notes)" % what)
+            return v
+        self.notes.append("%s: its saved value belongs to an older version of a linked typedef "
+                          "(see the typedef notes) - written as the new type's empty value" % what)
+        return empty_value(tree)
 
     def _call_targets(self):
         """node uid -> {link record tag: qualified name} from the diagram's link records: IUVI
@@ -1053,25 +1494,12 @@ class Reader:
         3 - to its OUTERMOST library only: Send Normal Stop.vi (Actor Framework.lvlib, Stop
             Msg.lvclass) calls `Message Enqueuer.lvclass:Enqueue.vi`, NI exports `Actor
             Framework.lvlib:Message Enqueuer.lvclass:Enqueue.vi` - Message Maker's the same.
-        The flag is per record: Pry.vi's calls into vi.lib carry 0. Flag 2 holds for a name of
-        several parts too: DQMH's Start Module.vi (Device Under Test_Cloneable_DQMH.lvlib) calls
-        `Clone Registration.lvlib:Init.vi`, a library NESTED in its own, and NI exports `Device
-        Under Test_Cloneable_DQMH.lvlib:Clone Registration.lvlib:Init.vi` (2026-10-30)."""
-        if not self.caller_libs or not qual:
-            return qual
-        if flag == "2" and qual[0] != self.caller_libs[0]:
-            return self.caller_libs + qual
-        if flag == "2":
-            # a NESTED library or class of the caller's chain: DQMH's Close Module.vi (in Device
-            # Under Test_Cloneable_DQMH.lvlib) calls `Clone Registration.lvlib:Remove.vi`, NI exports
-            # `Device Under Test_Cloneable_DQMH.lvlib:Clone Registration.lvlib:Remove.vi`
-            # (2026-11-06). A name that already starts INSIDE the chain is completed only above it.
-            if qual[0] in self.caller_libs:
-                return self.caller_libs[:self.caller_libs.index(qual[0])] + qual
-            return self.caller_libs + qual
-        if flag == "3":
-            return self.caller_libs[:1] + qual
-        return qual
+        The flag is per record: Pry.vi's calls into vi.lib carry 0. A NESTED library or class of
+        the caller's chain: DQMH's Close Module.vi (in Device Under Test_Cloneable_DQMH.lvlib)
+        calls `Clone Registration.lvlib:Remove.vi`, NI exports `Device Under
+        Test_Cloneable_DQMH.lvlib:Clone Registration.lvlib:Remove.vi` (2026-11-06). A name that
+        already starts INSIDE the chain is completed only above it."""
+        return qualify_link(qual, flag, self.caller_libs)
 
     def _express_instances(self):
         """Instance name (`1`, a GUID) -> the name NI's export gives its call. The VI's VINS
@@ -1358,18 +1786,29 @@ class Reader:
                 self._ring(el, ring, t)
             elif cls == "tableControl":
                 el.set("style", "Table")
+            elif cls == "stdComboBox":
+                # a COMBO BOX: NI's export writes a plain string and loses the items; the style
+                # and items keep it a combo box through a round trip (aixml2vi._set_combo_box,
+                # 2026-11-19). Its own values (Values Match Items off) are not read
+                self._combo_box(el, ddo)
+            elif cls == "plugInDDO" and bytes.fromhex(ddo.findtext("className") or "").startswith(b"ImageControl"):
+                # NI Vision's IMAGE DISPLAY (a plug-in object of nivision.dll): NI's export writes
+                # it as a plain IMAQ Image refnum; the style keeps it an Image Display through a
+                # round trip, where lvai_generate_vi places NI's .ctl (2026-11-17). Which of NI's
+                # three looks (plain, Classic, Silver) is not read - it comes back as the plain one
+                el.set("style", "Image Display")
             elif cls == "xControl":
                 # an XCONTROL INSTANCE: NI's export writes it as a plain control of its data type;
                 # which .xctl it is goes after </VI> (`xcontrol`), read off the panel's XCXI link
                 self.xcontrol_fp = getattr(self, "xcontrol_fp", [])
                 self.xcontrol_fp.append((el, ddo.get("uid")))
-            elif cls in ("listbox", "mcListbox", "scenegraphdisplay"):
+            elif cls in ("listbox", "mcListbox", "scenegraphdisplay") + aixml2vi.FPCLASS_PLAIN_DATA:
                 # a LISTBOX is an int32 in AIXML too, a 3D PICTURE CONTROL a plain scene refnum; the
                 # object class goes after </VI> (`fpclass`) - its control reference is typed by it
                 self.fp_classes = getattr(self, "fp_classes", [])
                 annex = next((p for p in (ddo.find("partsList") if ddo.find("partsList") is not None else [])
                               if p.get("class") == "annex"), None)
-                self.fp_classes.append((el, cls, self._listbox_strings(ddo) if cls != "scenegraphdisplay" else None,
+                self.fp_classes.append((el, cls, self._listbox_strings(ddo) if cls in ("listbox", "mcListbox") else None,
                                         annex.findtext("rsrcID") if annex is not None else None))
             elif cls == "stdGraph":
                 rid = next((pt.findtext("rsrcID") for pt in (ddo.find("partsList") if ddo.find("partsList") is not None else [])
@@ -1379,7 +1818,7 @@ class Reader:
             el.set("uid", ddo.get("uid"))
             el.set("uid_parent", "?")
             dd = fpdco.findtext("DefaultData")
-            el.set("value", self.default_value(tree, dd) if t else "")
+            el.set("value", self.default_value(tree, dd, self.tid_tree(fpdco, True), "%s %r" % (el.tag, el.get("_name"))) if t else "")
             con = fpdco.findtext("conNum")
             con = "0" if con is None else con
             if con != "-1" and con in pane:
@@ -1538,8 +1977,18 @@ class Reader:
                                       % (uid, text[:60]))
                 else:
                     e.set("comment", escape_description(text))
+        for name, (status, detail) in sorted(self.typedef_findings().items()):
+            self.notes.append("typedef %s: %s - %s" % (
+                name, "DRIFT, the embedded copy is stale" if status == "drift"
+                else "UNVERIFIED snapshot, read from the copy this file embeds", detail))
+        for uid, (target, status, details) in sorted(self.subvi_findings.items()):
+            self.notes.append("subVI call %s (%s): %s - %s" % (
+                uid, target, "DRIFT, the callee's pane changed since this VI was saved, read from "
+                "the callee" if status == "drift" else "UNVERIFIED, read from the caller's copy",
+                "; ".join(details)))
         for n in self.notes:
-            self.out.append(ET.Comment(" vi2aixml: " + n + " "))
+            # `--` ends an XML comment, and DQMH names every typedef `...--cluster.ctl`
+            self.out.append(ET.Comment(" vi2aixml: " + n.replace("--", "- -") + " "))
         return self.out
 
     def walk(self, diag, parent_uid, container):
@@ -1650,7 +2099,7 @@ class Reader:
                                                       "uid": o.get("uid"), "uid_parent": parent_uid}))
 
     # ---- elements ----------------------------------------------------------------------------
-    def default_value(self, tree, dd):
+    def default_value(self, tree, dd, snap=None, what="default"):
         if dd is None:
             return empty_value(tree)
         # pylabview renders DefaultData as MacRoman text with &#x..; escapes for unprintables
@@ -1665,7 +2114,17 @@ class Reader:
             else:
                 out.extend(raw[i].encode("mac_roman"))
                 i += 1
-        return decode_value(tree, out.hex()) or ""
+        return self.stored_value(tree, snap, out.hex(), what) or ""
+
+    @staticmethod
+    def _combo_box(el, ddo):
+        """A combo box's style and items: the strings of the listbox inside it
+        (baseListboxItemStrings), in the station's code page, a comma escaped as in a ring."""
+        el.set("style", "Combo Box")
+        elems = ddo.find(".//baseListboxItemStrings/multiDimArrayElems")
+        labels = [heap_text(x.text) for x in (elems if elems is not None else [])]
+        if labels:
+            el.set("items", ",".join(escape(x).replace(",", "\\2C") for x in labels))
 
     @staticmethod
     def _ring(el, ring, t):
@@ -1676,7 +2135,9 @@ class Reader:
         plain number (83 over NI's shipping examples) and no ring carried its values (42)."""
         buf = next((p.findtext("buf") for p in ring.iter("SL__arrayElement")
                     if p.get("class") == "multiLabel" and p.find("buf") is not None), None)
-        labels = re.findall(r'"([^"]*)"', buf or "")
+        # the items in the station's code page, as heap_text reads every other heap string: an en
+        # dash came out `Ð` until 2026-11-19
+        labels = [heap_text('"%s"' % x) for x in re.findall(r'"([^"]*)"', buf or "")]
         if not labels:
             # a ring with NO items is written as its plain number (Simple Polar Plot.vi, Change
             # Cursor Icon.vi, 2026-11-06)
@@ -1685,12 +2146,18 @@ class Reader:
         el.set("style", "Ring")
         sparse = ring.find("ringSparseValues")
         if sparse is not None and len(sparse):
-            bits = {"int8": 8, "int16": 16, "int32": 32, "int64": 64}.get(t)
+            # each value a SIGNED heap integer of as few bytes as hold it (`FF` is -1); an
+            # unsigned ring's value is that integer in the type's width (`FF` on a uint32 ring is
+            # 4294967295 - read as 255 until 2026-11-19)
+            ubits = {"uint8": 8, "uint16": 16, "uint32": 32, "uint64": 64}.get(t)
             vals = []
             for x in sparse:
-                v = int((x.text or "0").strip() or "0", 16)
-                if bits and v >= 1 << (bits - 1):
-                    v -= 1 << bits
+                hx = (x.text or "0").strip() or "0"
+                v = int(hx, 16)
+                if v >= 1 << (4 * len(hx) - 1):
+                    v -= 1 << (4 * len(hx))
+                if ubits and v < 0:
+                    v += 1 << ubits
                 vals.append(str(v))
             el.set("values", "[%s]" % ",".join(vals))
 
@@ -1723,7 +2190,8 @@ class Reader:
                               "before LabVIEW 11 keeps it in compiled code) - not decoded" % ddo.get("uid"))
             self.term_owner[term.get("uid")] = (el, "value", False)
             return el
-        v = decode_value(tree, dco.findtext("ConstValue") or "") if t else None
+        v = self.stored_value(tree, self.tid_tree(term, True), dco.findtext("ConstValue") or "",
+                              "constant %s" % ddo.get("uid")) if t else None
         el.set("value", v if v is not None else "")
         if v is None:
             self.notes.append("constant %s: value of type %s not decoded" % (ddo.get("uid"), lvheap.type_key(tree)))
@@ -2079,6 +2547,7 @@ class Reader:
         target = next((v for v in recs.values() if v and v.lower().endswith(".xnode")), None) or \
             next(iter(recs.values()), None) or "?.xnode"
         el = ET.Element("Call", {"uid": node.get("uid"), "uid_parent": parent_uid, "target": target})
+        names = {}
         for t in node.find("termList"):
             d = t.find("dco")
             if d is None or d.get("class") != "xTunnel":
@@ -2094,6 +2563,12 @@ class Reader:
                     name = "?"
             out = bool(int(d.findtext("objFlags") or 0) & 1)
             self.term_owner[t.get("uid")] = (el, name, not out)
+            names[t.get("uid")] = name
+        if INLINE_XNODES and target.split(":")[-1] not in XNODE_REPLACE_ROUTES \
+                and node.find("diagramList/SL__arrayElement") is not None:
+            # and the code it GENERATED, for the composer to put in its place (<?lvmcp xnodeinline?>)
+            self.xnode_inlines = getattr(self, "xnode_inlines", [])
+            self.xnode_inlines.append((el, self.xnode_inline(node, parent_uid, target, names)))
         # the node ITSELF - its generated code, state and links - goes after </VI> (<?lvmcp xnode?>);
         # its DSIM images are read NOW, while the extracted files still exist (main() removes them
         # before the payload is written)
@@ -2116,6 +2591,80 @@ class Reader:
                         self.xnode_images.setdefault(node.get("uid"), {})[int(sec.get("Index"))] = f.read().hex().upper()
         self.xnode_nodes = getattr(self, "xnode_nodes", [])
         self.xnode_nodes.append((el, node))
+        return el
+
+    def _wired_terms(self):
+        """uids of every terminal a wire (heap `signal`) ends at, anywhere on the diagram."""
+        w = getattr(self, "_wired", None)
+        if w is None:
+            w = set()
+            for s in self.b.bd.iter("SL__arrayElement"):
+                if s.get("class") == "signal" and s.find("termList") is not None:
+                    w.update(t.get("uid") for t in s.find("termList") if t.get("uid"))
+            self._wired = w
+        return w
+
+    def xnode_inline(self, node, parent_uid, target, names):
+        """An XNODE read as the code it GENERATED: a one-frame Flat Sequence holding the xNode's
+        own diagram, each xTunnel a tunnel of that frame, labelled with the .xnode it came from.
+        The xNode cannot be composed (its state, image and links: docs/aixml-backends.md, "XNodes:
+        carried, NOT composed"), and LabVIEW's {LV.SubVI} Replace builds one only in its DEFAULT
+        state - an Error Ring would lose the error it names. The generated code is what the node
+        RUNS, for exactly the types and the configuration it was saved with, so a VI holding one
+        round-trips with the same behaviour, the XNode drawn as its code (palette sweep,
+        2026-11-19: 24 NI examples refused on an XNode call). Built as flatseq builds a frame:
+        the xTunnel's inner half is a term of the diagram's sRN naming the same dco. The Call stays
+        what NI's export writes and owns the OUTER terms; this frame is DETACHED, each tunnel naming
+        the Call terminal it stands for (`xterm`), and goes after </VI> - the composer swaps it in
+        where it would refuse the XNode, so the reader's parity with NI's export is kept."""
+        el = ET.Element("Structure", {"_name": "Flat Sequence Frame", "uid": node.get("uid"), "uid_parent": parent_uid,
+                                      "label": target.split(":")[-1].replace(",", "\\2C").replace(":", "\\3A")})
+        diag = node.find("diagramList/SL__arrayElement")
+        owner = node.get("uid")
+        srn = next((n for n in self.node_defs(diag) if n.get("class") == "sRN"), None)
+        inner = {}
+        for t in (srn.find("termList") if srn is not None else []):
+            d = t.find("dco")
+            if d is not None:
+                inner.setdefault(d.get("uid"), []).append(t)
+        n_in = n_out = 0
+        tunnels = []
+        for term in node.find("termList"):
+            d = term.find("dco")
+            if d is None or d.get("class") != "xTunnel":
+                continue
+            out = int(d.findtext("objFlags") or 0) & 1
+            xterm = names.get(term.get("uid"))
+            if not out and term.get("uid") not in self._wired_terms():
+                # an input left UNWIRED outside that the generated code still reads (Database
+                # Delete.vi's DB Tools Delete Data): a tunnel no wire reaches has no type, so the
+                # value the code sees - the xTunnel's own default - becomes a constant inside
+                tree = self.tid_tree(term)
+                t = aixml_type(tree) if tree is not None else None
+                v = self.default_value(tree, d.findtext("DefaultData"), self.tid_tree(term, True),
+                                       "XNode input %s" % d.get("uid")) if t else None
+                if t and v is not None:
+                    c = ET.Element("Constant", {"type": t, "uid": d.get("uid"), "uid_parent": owner, "value": v})
+                    for it in inner.get(d.get("uid"), []):
+                        self.term_owner[it.get("uid")] = (c, "value", False)
+                    el.append(c)
+                    continue
+            if out:
+                n_out += 1
+            else:
+                n_in += 1
+            tun = ET.Element("Tunnel", {"_id": ("Out%d" % n_out) if out else ("In%d" % n_in),
+                                        "uid": d.get("uid"), "uid_parent": owner, "xterm": xterm or ""})
+            for t in inner.get(d.get("uid"), []):
+                self.term_owner[t.get("uid")] = (tun, "value", bool(out))
+            # the inner half may also be listed on the xTunnel itself (its termList: inner, outer)
+            for ref in (d.find("termList") if d.find("termList") is not None else []):
+                if ref.get("uid") and ref.get("uid") != term.get("uid"):
+                    self.term_owner.setdefault(ref.get("uid"), (tun, "value", bool(out)))
+            tunnels.append(tun)
+        self.walk(diag, owner, el)
+        for t in tunnels:
+            el.append(t)
         return el
 
     # heap fields holding a type as a hex heap integer, not TypeID(n)
@@ -2222,11 +2771,45 @@ class Reader:
             el.set("instance", recs["IUVI"])
         el.set("target", target)
         slots = None
+        cpath = self.call_paths.get(node.get("uid")) or (self.call_paths.get(link.get("uid")) if link is not None else None)
+        disk, changes, seen = None, [], set()
+        cfile = None if target in self.instance_names.values() or target.lower().endswith(".vim") \
+            else self._checked_callee(cpath)
+        if cfile and not newer_than(cfile, self.vi_path):
+            # saved before this caller: its pane copy here is the current one
+            LINK_STATS["skippedByDate"].add(os.path.normcase(cfile))
+            cfile = None
+        elif cfile:
+            LINK_STATS["read"].add(os.path.normcase(cfile))
+            disk, why = callee_pane(cfile)
+            if disk is None:
+                self.subvi_findings[node.get("uid")] = (target, "unresolved", [
+                    "its file %s could not be read (%s): the terminals are the caller's copy" % (cfile, why)])
+        elif cpath is not None and self.vi_path and not target.lower().endswith(".vim") \
+                and self._checked_callee(cpath, exists=False):
+            self.subvi_findings[node.get("uid")] = (target, "unresolved", [
+                "its file was not found at %s: the terminals are the caller's copy" % link_target_text(cpath, self.vi_path)])
+        gained = []
+        if disk is not None:
+            # slots the callee GAINED, which the call shows unwired: listed IN SLOT ORDER among
+            # the call's own terminals, as NI's export lists them (Issue136SubVI's Caller.vi:
+            # `Sum:..,Status:,error out:..` for a Status added at slot 6, 2026-11-18)
+            present = {i for i, t in enumerate(node.find("termList"))
+                       if (lambda tt: tt is not None and tt.get("Type") != "Void")(self.tid_tree(t))}
+            gained = [i for i in sorted(disk) if i not in present]
+
+        def add_gained(below):
+            while gained and (below is None or gained[0] < below):
+                j = gained.pop(0)
+                lab, is_out, typ, _ = disk[j]
+                changes.append("new %s %r (%s)" % ("output" if is_out else "input", lab, typ))
+                self.term_owner["%s#slot%d" % (node.get("uid"), j)] = (el, lab, not is_out)
         for i, term in enumerate(node.find("termList")):
             d = term.find("dco")
             tree = self.tid_tree(term)
             if tree is None or tree.get("Type") == "Void":
                 continue
+            add_gained(i)
             # a typedef'd terminal is labelled on the type it wraps (Read Plot Array.vi's `Plot
             # Property Array` - the XControl sweep, 2026-10-22)
             name = self._field_name(tree)
@@ -2242,8 +2825,62 @@ class Reader:
                 # neither terminal, and NI's export writes them as ""
                 name = slots[i] if i in slots else "?"
             out = int(d.findtext("objFlags") or 0) & 1
+            if disk is not None:
+                seen.add(i)
+                name = self._compare_slot(disk.get(i), name, bool(out), tree, changes)
+                if disk.get(i) is None:
+                    # a terminal the callee LOST: NI's export leaves it off the call and the wire
+                    # to it ends nowhere, as LabVIEW loads the caller - broken, `the type of the
+                    # sink is void` (Issue136SubVI's Caller.vi once Sub.vi lost X, 2026-11-18)
+                    self.term_owner[term.get("uid")] = IGNORED
+                    continue
             self.term_owner[term.get("uid")] = (el, name, not out)
+        if disk is not None:
+            add_gained(None)
+            if changes:
+                self.subvi_findings[node.get("uid")] = (target, "drift", changes)
         return el
+
+    def _checked_callee(self, path, exists=True):
+        """A call link's file when its pane is to be checked against the caller's copy: the
+        project's own code, a .vi or .vit. Not a callee in the LabVIEW installation (an anchored
+        `<vilib>`... path): NI keeps those panes stable, and checking them would read every vi.lib
+        VI an example calls - the cost of the check, not its point. With `exists` False: whether
+        the link is one to check at all, found or not."""
+        if not path or not path[1] or not self.vi_path:
+            return None
+        comps = path[1]
+        if comps[0].startswith("<") or not comps[-1].lower().endswith((".vi", ".vit")):
+            return None
+        if link_target_text(path, self.vi_path).lower().startswith(self.vi_path.lower() + os.sep):
+            # an instance saved INSIDE the caller - a malleable VI's: `Example of JOBJ Tag.vi`
+            # calling JSONtext's To JSON Text.vim links `<itself>\8c90...-...vi` (2026-11-18)
+            return None
+        if not exists:
+            return True
+        return link_file(path, self.vi_path)
+
+    @staticmethod
+    def _compare_slot(d, name, is_out, tree, changes):
+        """One call terminal against the callee's slot on disk; the name LabVIEW shows now."""
+        mine = aixml_type(tree) or lvheap.type_key(tree)
+        if d is None:
+            changes.append("%r is no longer on the callee's pane - left off the call; a wire to it "
+                           "breaks the caller, as LabVIEW loads it" % name)
+            return name
+        lab, d_out, typ, td = d
+        if d_out != is_out:
+            changes.append("%r is now an %s" % (lab, "output" if d_out else "input"))
+        if lab != name and not name.startswith("?"):
+            changes.append("%r is now named %r" % (name, lab))
+        if typ != mine and td is not None and td == typedef_name(tree):
+            # the TYPEDEF changed, and this VI's copy of it inside the callee's pane is stale
+            # (DQMH callers of Obtain Request Events.vi saved before the module's last event was
+            # added, 2026-11-18): LabVIEW updates such a wire, it does not break it
+            changes.append("%r carries typedef %s, which changed since this VI was saved" % (lab, td))
+        elif typ != mine:
+            changes.append("%r changed type from %s to %s - a wire to it may break" % (lab, mine, typ))
+        return lab
 
     def loop(self, node, parent_uid):
         cls = node.get("class")
@@ -2420,7 +3057,7 @@ class Reader:
                 pl = x.find("partsList")
                 for part in pl if pl is not None else []:
                     if part.get("class") == "label" and part.findtext("partID") == "16" and part.findtext("textRec/text"):
-                        lab = unquote(part.findtext("textRec/text")).replace("&#x00;", "").strip()
+                        lab = lvheap.pylv_to_text(unquote(part.findtext("textRec/text")).replace("&#x00;", "").strip())
                         return lab if lab and lab != "[NULL]" else None
                 return None
             for e in self.b.fp.iter():
@@ -2487,7 +3124,7 @@ class Reader:
                 for sp in pl:
                     if sp.get("class") != "stdSubPanel" or not sp.get("uid"):
                         continue
-                    lab = next((unquote(p.findtext("textRec/text") or "").replace("&#x00;", "").strip()
+                    lab = next((lvheap.pylv_to_text(unquote(p.findtext("textRec/text") or "").replace("&#x00;", "").strip())
                                 for p in (sp.find("partsList") if sp.find("partsList") is not None else [])
                                 if p.get("class") == "label"), "") or "Subpanel"
                     self._subpanels[sp.get("uid")] = (lab, g.findtext("bounds") or "")
@@ -2501,7 +3138,7 @@ class Reader:
                 if e.get("class") == "pane" and e.get("uid"):
                     for part in e.find("partsList") if e.find("partsList") is not None else []:
                         if part.get("class") == "label" and part.findtext("textRec/text"):
-                            lab = unquote(part.findtext("textRec/text")).replace("&#x00;", "").strip()
+                            lab = lvheap.pylv_to_text(unquote(part.findtext("textRec/text")).replace("&#x00;", "").strip())
                             if lab and lab != "[NULL]":
                                 self._panes[e.get("uid")] = lab
                             break
@@ -2644,17 +3281,19 @@ class Reader:
                         self.term_owner[t.get("uid")] = IGNORED
                 continue
             if dc == "eventTimeOut":
-                # the Timeout terminal reads `timeoutin` (a net, as `selectin`); NI's exporter
-                # drops it, so a wired timeout came back as a loose constant (B4, 2026-10-28)
-                # (upstream, 2026-11-06, dropped this end and refused a wired timeout instead; the fork's
-                # composer carries it, so the end stays registered and no wire is lost)
+                # the TIMEOUT input. NI's export carries no attribute for it (154 of 154 Event
+                # Structures) and drops that wire end; this reader writes it as `timeoutin="<net>"`,
+                # like a Case Structure's `selectin`, which the composer wires (2026-11-19; a wired
+                # timeout came back as a loose constant before, 2026-10-28). The terminal's ends
+                # inside the frames carry no AIXML terminal and are dropped
                 self.term_owner[term.get("uid")] = (el, "#timeoutin", True)
                 for ts in frame_srn_terms:
                     for t in ts.get(d.get("uid"), []):
                         self.term_owner[t.get("uid")] = IGNORED
                 continue
             if dc == "caseSel":
-                sel_tree = self.tid_tree(term)
+                # SNAPSHOT: the frames' selector values are item NUMBERS of the type as saved
+                sel_tree = self.tid_tree(term, snapshot=True)
                 self.term_owner[term.get("uid")] = (el, "#selectin", True)
                 for i, ts in enumerate(frame_srn_terms):
                     for t in ts.get(d.get("uid"), []):
@@ -3004,7 +3643,8 @@ class Reader:
             agg = agg_el.get("uid") if agg_el is not None else None
             agg_term = next((t for t in half.find("termList") if t.find("dco") is not None
                              and t.find("dco").get("uid") == agg), None)
-            ct = self.tid_tree(agg_term.find("dco")) if agg_term is not None else None
+            # SNAPSHOT: <index> counts the fields of the type as saved (Reader.nmux)
+            ct = self.tid_tree(agg_term.find("dco"), snapshot=True) if agg_term is not None else None
             ct = self._class_data_or_self(ct)
             labels = [p for p, _ in aixml2vi.field_paths(ct)] if ct is not None else []
             for t in half.find("termList"):
@@ -3362,7 +4002,11 @@ class Reader:
         el = self._node_el(node, parent_uid, name)
         terms = list(node.find("termList"))
         agg = terms[0]
-        ct = self.tid_tree(agg)
+        # SNAPSHOT: <i> indexes the type AS THIS FILE SAVED IT. Against a linked typedef resolved
+        # from a changed .ctl it named the wrong field - Issue136's Caller.vi unbundled `Count` of
+        # Outer {Inner {A}, Count} and read `Inner.B` once Inner gained B (2026-11-18); LabVIEW
+        # remaps the selection by NAME when it loads the file
+        ct = self.tid_tree(agg, snapshot=True)
         # <i> counts every element depth-first, a nested cluster's fields included, and NI's
         # export names a nested one by its dotted path (`Description.Name`)
         labels = WAVEFORM_FIELDS if wave else [p for p, _ in (aixml2vi.field_paths(ct) if ct is not None else [])]
@@ -3407,7 +4051,8 @@ class Reader:
         terms = list(node.find("termList"))
         agg, cref = terms[0], terms[1]
         # a CLASS wire's fields are its private data (`Cashier Index` in NI's Coffee Shop messages)
-        ct = self._class_data_or_self(self.tid_tree(agg))
+        # SNAPSHOT: one terminal per field of the type as saved (Reader.nmux)
+        ct = self._class_data_or_self(self.tid_tree(agg, snapshot=True))
         # a typedef'd field is labelled on the type it wraps (Control Ref Queue in the Math Plots)
         labels = [self._field_name(c) or "element" for c in (aixml2vi.fields(aixml2vi.typedef_inner(ct)) if ct is not None else [])]
         self.term_owner[agg.get("uid")] = (el, "output cluster", False)
@@ -3429,7 +4074,8 @@ class Reader:
         el = self._node_el(node, parent_uid, "Unbundle")
         terms = list(node.find("termList"))
         agg = terms[0]
-        ct = self._class_data_or_self(self.tid_tree(agg))
+        # SNAPSHOT: one terminal per field of the type as saved (Reader.nmux)
+        ct = self._class_data_or_self(self.tid_tree(agg, snapshot=True))
         # a typedef'd field is labelled on the type it wraps (Control Ref Queue in the Math Plots)
         labels = [self._field_name(c) or "element" for c in (aixml2vi.fields(aixml2vi.typedef_inner(ct)) if ct is not None else [])]
         self.term_owner[agg.get("uid")] = (el, "cluster", True)
@@ -3598,7 +4244,30 @@ class Reader:
                     return "GenClass.%s.%s" % (tree.get("Ident"), tree.get("TypeName"))
                 return {"AutoRef": "ActiveX", "DotNet": "DotNet", "39": "DotNetCore"}.get(rt)
         # no reference input: an implicit node on a control, This VI, the application
-        return learned.get("nodeNames", {}).get(node_name.replace(" (strict)", ""))
+        short = node_name.replace(" (strict)", "")
+        return learned.get("nodeNames", {}).get(short) or self.class_by_node_name().get(short)
+
+    _CLASS_BY_NODE_NAME = None
+
+    @classmethod
+    def class_by_node_name(cls):
+        """The VI Server class whose property node carries this nodeName, read off the harvested
+        table (vi-server-props.json: every LV.* class with its nodeName - unique per class), plus
+        the two short forms a node bound to a control writes that the table spells longer (`Arr`,
+        `Clust`). class-ids-learned.json knew 11 names; the other implicit nodes of the NI examples
+        - `Bool` 166 times, `DigNum` 37, `Str` 12, `IntChart`, `Pict`, `LstBox`, `SubPnl`, `Enum`,
+        `XYGraph` - were written type="{?}" and refused (palette sweep, 2026-11-19)."""
+        if cls._CLASS_BY_NODE_NAME is None:
+            p = os.path.join(aixml2vi.OWN_PARTS, "vi-server-props.json")
+            table = json.load(open(p, encoding="utf-8")).get("classes", {}) if os.path.exists(p) else {}
+            seen = {}
+            for c, row in table.items():
+                if c.startswith("LV.") and row.get("nodeName"):
+                    seen.setdefault(row["nodeName"].replace(" (strict)", ""), []).append(c)
+            out = {n: cs[0] for n, cs in seen.items() if len(cs) == 1}
+            out.update({"Arr": "LV.Array", "Clust": "LV.Cluster"})
+            cls._CLASS_BY_NODE_NAME = out
+        return cls._CLASS_BY_NODE_NAME
 
     _PROP_NAMES = None
     _EXPORT_PROP_NAMES = None
@@ -3831,7 +4500,7 @@ class Reader:
                 el.set("element", ctl.get("_name") if ctl is not None else "?")   # escaped, as NI writes it
                 name = label_of(ctl.get("_name")) if ctl is not None else "?"
         else:
-            name = unquote(node.findtext("label/textRec/text") or "This VI")
+            name = lvheap.pylv_to_text(unquote(node.findtext("label/textRec/text") or "This VI"))
             tree = self.tid_tree(node.find("termList/SL__arrayElement"))
             cls = ref_class_name(tree.get("CtlFlags")) if tree is not None else None
             el.set("type", "{%s}" % (cls or "LV.VI"))
@@ -3889,7 +4558,7 @@ class Reader:
 
     def expr(self, node, parent_uid):
         el = self._node_el(node, parent_uid, "Expression Node",
-                           text=unquote(node.findtext("textNodeLabel/textRec/text") or ""))
+                           text=lvheap.pylv_to_text(unquote(node.findtext("textNodeLabel/textRec/text") or "")))
         terms = list(node.find("termList"))
         for t in terms:
             self.term_owner[t.get("uid")] = (el, "output" if self._is_out(t) else "input", not self._is_out(t))
@@ -4077,6 +4746,8 @@ class Reader:
             for el, term, sink in ends:
                 if term == "#selectin":
                     el.set("selectin", net)
+                elif term == "#timeoutin":
+                    el.set("timeoutin", net)
                 elif term == "#maxin":
                     el.set("maxin", net)
                 elif term == "#cond":
@@ -4102,8 +4773,11 @@ class Reader:
         if sec.get("Format") == "bin" and sec.get("File"):
             data = open(os.path.join(self.b.dir, sec.get("File")), "rb").read()
             n = int.from_bytes(data[:4], "big") if len(data) >= 4 else 0
-            return data[4:4 + n].decode("mac_roman")
-        return string_block_text(sec.find("String"))
+            return lvheap.value_text(data[4:4 + n])
+        # in the station's code page, as LabVIEW wrote it: `Ring repro – Größe` was read back
+        # as written in MacRoman until 2026-11-19 - right only for a VI the composer had
+        # mis-encoded the same way
+        return lvheap.pylv_to_text(string_block_text(sec.find("String")))
 
     def pane_flags(self):
         """conIdx (as text) -> connection, read off the pane's Function type.
@@ -4137,10 +4811,16 @@ class Reader:
 def main(argv):
     # --labview-root / --addon-locations (issue #99); the resolver of an earlier read in the same
     # worker may have been built for another LabVIEW
-    global _RESOLVER
+    global _RESOLVER, FULL_LINK_CHECK
     import resolve
     argv = resolve.parse_args(argv)
     _RESOLVER = None
+    # every linked .ctl and subVI read, whatever its write time (newer_than) - for a tree whose
+    # write times say nothing, a fresh git checkout above all
+    FULL_LINK_CHECK = "--full-link-check" in argv or \
+        os.environ.get("LABVIEWMCP_FULL_LINK_CHECK", "").strip().lower() in ("1", "true", "on", "yes")
+    argv = [a for a in argv if a != "--full-link-check"]
+    LINK_STATS.update(read=set(), skippedByDate=set())
     src = argv[0]
     tmp = None
     if src.lower().endswith(".xml"):
@@ -4183,6 +4863,21 @@ def main(argv):
         text += '\n<?lvmcp booleans latched="%s" switch="%s"?>' % (
             html.escape("|".join(n for n, latched in acts if latched), quote=True),
             html.escape("|".join(n for n, latched in acts if not latched), quote=True))
+    for name, (status, detail) in sorted(reader.typedef_findings().items()):
+        # a linked typedef whose embedded copy is stale (drift: the .ctl's definition was used) or
+        # could not be checked against its .ctl (unresolved: the copy was used) - issue #136
+        text += '\n<?lvmcp typedef name="%s" status="%s" detail="%s"?>' % (
+            html.escape(name, quote=True), status, html.escape(detail, quote=True))
+    if LINK_STATS["read"] or LINK_STATS["skippedByDate"]:
+        # how the linked files were checked: a skipped one was written BEFORE this file, so its
+        # copy here is taken as current (newer_than) - `--full-link-check` reads them all
+        text += '\n<?lvmcp linkcheck mode="%s" read="%d" skippedByDate="%d"?>' % (
+            "full" if FULL_LINK_CHECK else "byDate", len(LINK_STATS["read"]), len(LINK_STATS["skippedByDate"]))
+    for uid, (target, status, details) in sorted(reader.subvi_findings.items()):
+        # a subVI call whose callee's connector pane differs from the copy this VI saved (drift:
+        # names, new terminals and types are the callee's) or could not be checked (unresolved)
+        text += '\n<?lvmcp subvi uid="%s" target="%s" status="%s" detail="%s"?>' % (
+            uid, html.escape(target, quote=True), status, html.escape("; ".join(details), quote=True))
     dyn = [e.get("uid") for e in getattr(reader, "dynamic_fp", []) if e.get("uid")]
     if dyn:
         text += '\n<?lvmcp dynamic uids="%s"?>' % ",".join(dyn)
@@ -4263,6 +4958,12 @@ def main(argv):
         if el.get("uid"):
             text += '\n<?lvmcp xnode uid="%s" node="%s"?>' % (
                 el.get("uid"), html.escape(reader.xnode_payload(el, node), quote=True))
+    for el, frame in getattr(reader, "xnode_inlines", []):
+        # the code an XNODE generated, as a one-frame Flat Sequence the composer puts in the Call's
+        # place (Reader.xnode_inline); its tunnels name the Call terminals they stand for (xterm)
+        if el.get("uid"):
+            text += '\n<?lvmcp xnodeinline uid="%s" frame="%s"?>' % (
+                el.get("uid"), html.escape(ET.tostring(frame, encoding="unicode"), quote=True))
     for el, node, nexf in getattr(reader, "clfn_nodes", []):
         # a CALL LIBRARY FUNCTION NODE's configuration - library, function, signature, calling
         # convention, thread - which AIXML has no attribute for (Reader.clfn_payload)

@@ -65,18 +65,19 @@ public sealed class AixmlBackendTests
     }
 
     /// <summary>
-    /// The class tools call lvai_generate_vi from C# and depend on what only NI's converter does,
-    /// so a server-wide pylabview must not reach them. Only an explicit argument does.
+    /// The user's rule of 2026-11-22, "Default soll IMMER pylabview sein": an internal call with no
+    /// route choice follows the same chain as a client call - it used to fall back to grpc.
     /// </summary>
     [Fact]
-    public void The_server_default_reaches_only_the_tool_the_client_invoked()
+    public void An_internal_call_takes_the_server_default_never_grpc_by_omission()
     {
-        var nested = Resolve(null, clientTool: "lvai_create_class", environment: "pylabview");
-        Assert.Equal("grpc", nested.Name);
-        Assert.StartsWith("internal call", nested.Source);
-
-        Assert.Equal("pylabview", Resolve("pylabview", clientTool: "lvai_create_class").Name);
-        Assert.Equal("grpc", Resolve(null, clientTool: null, flag: "pylabview").Name);
+        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"),
+                     Resolve(null, clientTool: "lvai_create_class"));
+        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"), Resolve(null, clientTool: null));
+        Assert.Equal(new AixmlBackend.Choice("pylabview", AixmlBackend.Variable),
+                     Resolve(null, clientTool: "lvai_create_class", environment: "pylabview"));
+        Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Flag),
+                     Resolve(null, clientTool: null, flag: "grpc"));
     }
 
     private static AixmlBackend.Choice ResolveWith(int? labviewInUse, string? perCall = null,
@@ -91,7 +92,7 @@ public sealed class AixmlBackendTests
     /// <summary>
     /// The user's decision of 2026-11-05: pylabview is the default on EVERY LabVIEW - it replaced
     /// "grpc, except pylabview on a LabVIEW older than 2026". An explicit grpc anywhere above still
-    /// wins, and an internal call still stays grpc.
+    /// wins; an internal call takes the default too (2026-11-22).
     /// </summary>
     [Fact]
     public void Pylabview_is_the_default_on_every_LabVIEW()
@@ -102,7 +103,7 @@ public sealed class AixmlBackendTests
         Assert.Equal(new AixmlBackend.Choice("grpc", "call"), ResolveWith(2026, perCall: "grpc"));
         Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Flag), ResolveWith(2026, flag: "grpc"));
         Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Variable), ResolveWith(2026, environment: "grpc"));
-        Assert.Equal("grpc", ResolveWith(2026, clientTool: "lvai_create_class").Name);
+        Assert.Equal("pylabview", ResolveWith(2026, clientTool: "lvai_create_class").Name);
     }
 
     /// <summary>
@@ -172,137 +173,21 @@ public sealed class AixmlBackendTests
         Assert.Equal("pylabview", Resolve(" PyLabVIEW ").Name);
     }
 
-    // ------------------------------------------------------------ the settings file (2026-10-13)
-
-    private static AixmlBackend.Choice ResolveFile(ServerSettings.BackendEntry? entry, int? labviewInUse = 2026,
-                                                   string? flag = null, string? environment = null,
-                                                   string? clientTool = Tool)
-    {
-        Assert.True(AixmlBackend.TryResolve(null, Tool, clientTool, flag, environment, null,
-                                            () => entry, () => labviewInUse, out var choice, out var error), error);
-        return choice;
-    }
-
-    private static ServerSettings.BackendEntry Entry(string? value) =>
-        new(@"C:\u\.labviewmcp\settings.json", value, null);
+    // ------------------------------------------------ no settings-file switch (removed 2026-11-17)
 
     /// <summary>
-    /// The user's decision of 2026-10-13: the choice is an entry in a file. It sits BELOW the call,
-    /// the flag and the variable, which stay overrides, and ABOVE the older-LabVIEW rule, which
-    /// only "auto" leaves in force.
+    /// The user's decision of 2026-11-17: the settings file no longer chooses the backend. With the
+    /// call, the flag and the variable silent - or saying "auto" - the default decides, and its
+    /// source says so.
     /// </summary>
     [Fact]
-    public void The_settings_file_chooses_below_the_overrides_and_above_the_automatic_rules()
+    public void Nothing_named_or_auto_falls_to_the_pylabview_default()
     {
-        var fromFile = ResolveFile(Entry("pylabview"));
-        Assert.Equal("pylabview", fromFile.Name);
-        Assert.Equal(@"settings file C:\u\.labviewmcp\settings.json", fromFile.Source);
-
-        Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Variable),
-                     ResolveFile(Entry("pylabview"), environment: "grpc"));
-        Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Flag),
-                     ResolveFile(Entry("pylabview"), flag: "grpc"));
-
-        // "grpc" in the file holds; "auto", no entry and no file all fall to the default
-        Assert.Equal("grpc", ResolveFile(Entry("grpc"), labviewInUse: 2025).Name);
-        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"), ResolveFile(Entry("auto")));
-        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"), ResolveFile(Entry(null)));
-        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"), ResolveFile(null));
-
-        // and it is a SERVER default: an internal call still stays on NI's converter
-        Assert.Equal("grpc", ResolveFile(Entry("pylabview"), clientTool: "lvai_create_class").Name);
-    }
-
-    [Fact]
-    public void Auto_in_the_flag_or_the_variable_makes_no_choice()
-    {
-        Assert.Equal("pylabview", ResolveFile(Entry("pylabview"), flag: "auto").Name);
-        Assert.Equal("pylabview", ResolveFile(Entry("pylabview"), environment: "AUTO").Name);
-        Assert.Equal("pylabview", ResolveFile(Entry("auto"), labviewInUse: 2025, flag: "auto", environment: "auto").Name);
-    }
-
-    [Fact]
-    public void A_bad_settings_entry_is_refused_by_name_rather_than_ignored()
-    {
-        Assert.False(AixmlBackend.TryResolve(null, Tool, Tool, null, null, null,
-                                             () => Entry("nigel"), () => 2026, out _, out var unknown));
-        Assert.Contains("nigel", unknown);
-        Assert.Contains(@"C:\u\.labviewmcp\settings.json", unknown);
-        Assert.Contains("grpc, pylabview, auto", unknown);
-
-        var broken = new ServerSettings.BackendEntry("x.json", null, "x.json is not valid JSON (eof).");
-        Assert.False(AixmlBackend.TryResolve(null, Tool, Tool, null, null, null,
-                                             () => broken, () => 2026, out _, out var unreadable));
-        Assert.Contains("not valid JSON", unreadable);
-
-        // a call that names its backend never reads the file, so a broken file cannot stop it
-        Assert.True(AixmlBackend.TryResolve("grpc", Tool, Tool, null, null, null,
-                                            () => broken, () => 2026, out var named, out _));
-        Assert.Equal("call", named.Source);
-    }
-
-    /// <summary>
-    /// The user's requirement: the FILE shows which values exist and what each one means. So the
-    /// template must parse with its comments, carry the entry, and explain every accepted value.
-    /// </summary>
-    [Fact]
-    public void A_new_settings_file_explains_every_value_and_starts_on_pylabview_with_the_marker()
-    {
-        var dir = Directory.CreateTempSubdirectory("lvmcp-settings-").FullName;
-        try
-        {
-            var path = Path.Combine(dir, "sub", "settings.json");
-            Assert.True(ServerSettings.EnsureExists(path));
-            var entry = ServerSettings.ReadBackend(path);
-            Assert.Null(entry.Error);
-            Assert.Equal("pylabview", entry.Value);
-            // a new file is never switched over: it carries the marker from the start
-            Assert.Equal(ServerSettings.Migration.AlreadyDone, ServerSettings.MigrateDefaultOnce(path));
-
-            var text = File.ReadAllText(path);
-            foreach (var value in AixmlBackend.SettingNames)
-                Assert.Matches($"//\\s+\"{value}\"\\s+\\S", text);   // each value on a comment line WITH its meaning
-            Assert.Contains(AixmlBackend.Variable, text);              // and what still overrides it
-
-            // never rewritten once it exists: the user's edit and comments stay. The edit keeps the
-            // template's write time, as it did on the release runner where both writes fell into one
-            // timestamp tick - a cache keyed on that time served the template's "auto" back.
-            var stamp = File.GetLastWriteTimeUtc(path);
-            File.WriteAllText(path, "{ // mine\n \"aixmlBackend\": \"pylabview\" }");
-            File.SetLastWriteTimeUtc(path, stamp);
-            Assert.False(ServerSettings.EnsureExists(path));
-            Assert.Equal("pylabview", ServerSettings.ReadBackend(path).Value);
-        }
-        finally
-        {
-            Directory.Delete(dir, recursive: true);
-        }
-    }
-
-    [Fact]
-    public void A_settings_file_without_the_entry_makes_no_choice_and_a_wrong_type_is_an_error()
-    {
-        var dir = Directory.CreateTempSubdirectory("lvmcp-settings-").FullName;
-        try
-        {
-            var path = Path.Combine(dir, "settings.json");
-            Assert.Equal(new ServerSettings.BackendEntry(path, null, null), ServerSettings.ReadBackend(path));
-
-            File.WriteAllText(path, "{ \"other\": 1, }");
-            Assert.Equal(new ServerSettings.BackendEntry(path, null, null), ServerSettings.ReadBackend(path));
-
-            File.WriteAllText(path, "{ \"aixmlBackend\": 3 }");
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(1));   // past the write-time cache
-            Assert.Contains("must be a string", ServerSettings.ReadBackend(path).Error);
-
-            File.WriteAllText(path, "{ \"aixmlBackend\": ");
-            File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(2));
-            Assert.Contains("not valid JSON", ServerSettings.ReadBackend(path).Error);
-        }
-        finally
-        {
-            Directory.Delete(dir, recursive: true);
-        }
+        Assert.Equal(new AixmlBackend.Choice("pylabview", "default"), ResolveWith(2026));
+        Assert.Equal("pylabview", ResolveWith(2026, flag: "auto").Name);
+        Assert.Equal("pylabview", ResolveWith(2025, environment: "AUTO").Name);
+        Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Variable), ResolveWith(2026, environment: "grpc"));
+        Assert.Equal(new AixmlBackend.Choice("grpc", AixmlBackend.Flag), ResolveWith(2026, flag: "grpc"));
     }
 
     [Fact]
@@ -340,12 +225,7 @@ public sealed class AixmlBackendTests
         Assert.Equal("grpc", Res.Str(named, "backend"));
         Assert.Equal("call", Res.Str(named, "backendSource"));
 
-        // From C#, as every internal caller reaches it: no client tool, so never the server default.
-        var internalCall = await tools.ValidateAixmlAsync(xml);
-        Assert.Equal("grpc", Res.Str(internalCall, "backend"));
-        Assert.StartsWith("internal call", Res.Str(internalCall, "backendSource"));
-
-        Assert.Equal(2, server.Service.CountOf("ValidateAIXML"));
+        Assert.Equal(1, server.Service.CountOf("ValidateAIXML"));
     }
 
     // ------------------------------------------------------------ the tools, pylabview side

@@ -102,17 +102,27 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         (codeNeededTextsAfter) and Main.vi's exec state before and after is reported. Then the
         WHOLE Main.vi is laid out with lvai_layout_diagram (`cleanUpDiagram`; put back when it does
         not finish) and made source only (`sourceOnly`: the project is closed for the strip and
-        opened again). Use `dryRun` first.
+        opened again - DEFERRED to the orchestrator's next lvai_close_active_project while other
+        agents share LabVIEW, `sourceOnly.deferred`). Use `dryRun` first.
         Needs the module's project OPEN and ACTIVE.
         """)]
     public async Task<string> PlaceHandlerAsync(
         [Description("Module, e.g. 'Bank' or 'Bank.lvlib'")] string moduleName,
-        [Description("Event whose message frame gets the handler, e.g. 'Verify Account'")] string eventName,
-        [Description("Absolute path of the handler subVI")] string handlerViPath,
+        [Description("Event whose message frame gets the handler, e.g. 'Verify Account'. Empty with handlersJson")]
+        string eventName = "",
+        [Description("Absolute path of the handler subVI. Empty with handlersJson")] string handlerViPath = "",
         [Description("Report what would be wired and change nothing")] bool dryRun = false,
         [Description("Lay out the whole Main.vi after wiring. Default true; false only when asked")] bool cleanUpDiagram = true,
         [Description("Local budget in seconds")] int timeoutSeconds = 300,
         [Description(DqmhTools.BackendDescription)] string? backend = null,
+        [Description("""
+            SEVERAL HANDLERS IN ONE CALL, instead of eventName/handlerViPath:
+            [{"eventName":"Verify Account","handlerViPath":"C:\\...\\Verify Account Core.vi"}, ...].
+            Each is placed in order; Main.vi is laid out and made source only ONCE, after the last.
+            Stops at the first handler that fails, and before the client's time limit (`nextHandler`).
+            moduleDataIn, moduleDataOut and allowExistingCode apply to every handler of the call.
+            """)]
+        string? handlersJson = null,
         CancellationToken ct = default,
         [Description("The handler input that takes the frame's module data; omit for 'Module Data in'")]
         string? moduleDataIn = null,
@@ -128,6 +138,74 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         {
             var dataIn = string.IsNullOrWhiteSpace(moduleDataIn) ? DefaultModuleDataIn : moduleDataIn.Trim();
             var dataOut = string.IsNullOrWhiteSpace(moduleDataOut) ? DefaultModuleDataOut : moduleDataOut.Trim();
+            if (string.IsNullOrWhiteSpace(handlersJson))
+                return await PlaceOneAsync(moduleName, eventName, handlerViPath, dryRun, cleanUpDiagram,
+                                           finish: true, timeoutSeconds, ct, dataIn, dataOut, allowExistingCode);
+            if (!string.IsNullOrWhiteSpace(eventName) || !string.IsNullOrWhiteSpace(handlerViPath))
+                return Json.Error("badArguments",
+                    "Pass eventName and handlerViPath (one handler) or handlersJson (several), not both.");
+            List<DqmhBatch.Handler> handlers;
+            try { handlers = DqmhBatch.ParseHandlers(handlersJson); }
+            catch (ArgumentException bad) { return Json.Error("badArguments", bad.Message, new { handlersJson }); }
+
+            var wall = Stopwatch.StartNew();
+            var placed = new JsonArray();
+            string? mainVi = null;
+            int? nextHandler = null;
+            var allOk = true;
+            for (var i = 0; i < handlers.Count; i++)
+            {
+                var before = wall.ElapsedMilliseconds;
+                var one = JsonNode.Parse(await PlaceOneAsync(moduleName, handlers[i].EventName, handlers[i].HandlerViPath,
+                    dryRun, cleanUpDiagram: false, finish: false, timeoutSeconds, ct,
+                    dataIn, dataOut, allowExistingCode)) as JsonObject;
+                mainVi ??= (one?["mainVi"] ?? one?["detail"]?["mainVi"])?.GetValue<string>();
+                var entry = DqmhBatch.CompactHandler(handlers[i], one);
+                placed.Add(entry);
+                if (entry["ok"]?.GetValue<bool>() != true)
+                {
+                    allOk = false;
+                    nextHandler = i;   // the failed one is the first to retry
+                    break;
+                }
+                if (i + 1 < handlers.Count &&
+                    DqmhBatch.NextWouldOverrun(wall.ElapsedMilliseconds, wall.ElapsedMilliseconds - before))
+                {
+                    nextHandler = i + 1;
+                    break;
+                }
+            }
+
+            // ONE layout and ONE source-only pass for the whole batch - per handler they were the
+            // larger part of each call, and the project was closed and reopened every time.
+            JsonObject? cleanUp = null, sourceOnly = null;
+            int? mainAfter = null;
+            var anyPlaced = !dryRun && mainVi is not null && placed.Any(e => e?["ok"]?.GetValue<bool>() == true);
+            if (anyPlaced)
+            {
+                if (cleanUpDiagram)
+                    cleanUp = await new DiagramCleanup(connection).RunAsync(mainVi!, DqmhTools.OnPyLabview
+                        ? AixmlBackend.PyLabview : AixmlBackend.Grpc, timeoutSeconds, ct, includeDqmhMain: true);
+                var (_, _, projectPath) = await new ActionTools(connection).ProjectIsActiveAsync(timeoutSeconds, ct);
+                if (!string.IsNullOrEmpty(projectPath))
+                {
+                    sourceOnly = await new DiagramCleanup(connection).SourceOnlyInProjectAsync(mainVi!, projectPath, timeoutSeconds, ct);
+                    DiagramCleanup.NoteStripped(cleanUp, sourceOnly);
+                }
+                mainAfter = await new DqmhHeadless(connection).ExecStateAsync(mainVi!, timeoutSeconds, ct);
+            }
+            return Json.Document(DqmhBatch.HandlersAnswer(moduleName, handlers.Count, placed, nextHandler, allOk,
+                dryRun, mainVi, cleanUp, sourceOnly, mainAfter, wall.ElapsedMilliseconds));
+        }));
+
+    /// <summary>
+    /// One handler into one frame. <paramref name="finish"/> false leaves the layout and the
+    /// source-only pass to the caller - the batch does both once, after its last handler.
+    /// </summary>
+    private async Task<string> PlaceOneAsync(string moduleName, string eventName, string handlerViPath,
+        bool dryRun, bool cleanUpDiagram, bool finish, int timeoutSeconds, CancellationToken ct,
+        string dataIn, string dataOut, bool allowExistingCode)
+        {
             var handler = Path.GetFullPath((handlerViPath ?? "").Trim());
             if (!File.Exists(handler))
                 return Json.Error("fileNotFound", $"No handler VI at {handler}.");
@@ -246,7 +324,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             if (nodeClasses.Contains("SubVI"))
                 return await PlaceAtEntryAsync(headless, dqmh, scripts, projectPath, mainVi, frameName,
                     handler, inputs, outputs, moduleData, texts, nodeClasses, detail, steps, dryRun,
-                    cleanUpDiagram, stopwatch, timeoutSeconds, ct);
+                    cleanUpDiagram, finish, stopwatch, timeoutSeconds, ct);
             if (plan.Problems.Count > 0)
                 return Json.Error("namesDoNotMatch",
                     "The handler's terminals do not match the frame's fields - " +
@@ -419,7 +497,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             }
             // ---- 6. source only: Delacor's Main.vi carries compiled code, and the saves above kept it
             JsonObject? sourceOnly = null;
-            if (error is null)
+            if (finish && error is null)
             {
                 sourceOnly = await new DiagramCleanup(connection).SourceOnlyInProjectAsync(mainVi, projectPath, timeoutSeconds, ct);
                 steps.Add(sourceOnly.DeepClone());
@@ -479,7 +557,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
             if (plan.Warnings.Count > 0) answer["warnings"] = new JsonArray([.. plan.Warnings.Select(w => JsonValue.Create(w))]);
             foreach (var (key, value) in detail) answer[key] = value?.DeepClone();
             return Json.Document(answer);
-        }));
+        }
 
     /// <summary>
     /// D7: the handler placed with NOTHING wired by the place helper (no argument, error, reply or
@@ -492,7 +570,7 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
         string projectPath, string mainVi, string frameName, string handler, List<string> inputs,
         List<string> outputs, ModuleData moduleData, List<string> texts, List<string> nodeClasses,
         JsonObject detail, JsonArray steps,
-        bool dryRun, bool cleanUpDiagram, Stopwatch stopwatch, int timeoutSeconds, CancellationToken ct)
+        bool dryRun, bool cleanUpDiagram, bool finish, Stopwatch stopwatch, int timeoutSeconds, CancellationToken ct)
     {
         var chains = new List<(string Name, string In, string Out, string Sink)>();
         if (inputs.Contains("error in") && outputs.Contains("error out"))
@@ -590,16 +668,21 @@ internal sealed class DqmhFrameTools(LvaiConnection connection)
                 ? AixmlBackend.PyLabview : AixmlBackend.Grpc, timeoutSeconds, ct, includeDqmhMain: true)
             : null;
         if (cleanUp is not null) steps.Add(cleanUp.DeepClone());
-        var sourceOnly = await new DiagramCleanup(connection).SourceOnlyInProjectAsync(mainVi, projectPath, timeoutSeconds, ct);
-        steps.Add(sourceOnly.DeepClone());
-        DiagramCleanup.NoteStripped(cleanUp, sourceOnly);
+        // not in a batch (finish false): the caller makes Main.vi source only once, after its last handler
+        JsonObject? sourceOnly = null;
+        if (finish)
+        {
+            sourceOnly = await new DiagramCleanup(connection).SourceOnlyInProjectAsync(mainVi, projectPath, timeoutSeconds, ct);
+            steps.Add(sourceOnly.DeepClone());
+            DiagramCleanup.NoteStripped(cleanUp, sourceOnly);
+        }
         var mainAfter = await headless.ExecStateAsync(mainVi, timeoutSeconds, ct);
         var visible = PlacedInside(placement);
         var answer = new JsonObject
         {
             ["ok"] = allSpliced && visible && mainAfter is not 0
                      && cleanUp?["ok"]?.GetValue<bool>() != false
-                     && sourceOnly["ok"]?.GetValue<bool>() != false,
+                     && sourceOnly?["ok"]?.GetValue<bool>() != false,
             ["route"] = "frameEntry",
             ["cleanUpDiagram"] = cleanUp,
             ["sourceOnly"] = sourceOnly,

@@ -12,6 +12,7 @@ self-contained element so a part can travel between VIs; `TypeTable` does the re
 is composed.
 """
 import copy
+import struct
 import os
 import re
 import subprocess
@@ -89,6 +90,48 @@ def value_bytes(s):
         return b"".join(bytes([ord(c)]) if ord(c) in _CP1252_HOLES else c.encode("cp1252") for c in s)
 
 
+def lv_text(s):
+    """Authored TEXT as pylabview has to be handed it so that LabVIEW on Windows shows `s`.
+    pylabview encodes heap text as MacRoman (the skeleton's Encoding), LabVIEW reads the bytes in
+    the station's code page, 1252 - so `s` goes to CP1252 bytes first and those bytes are handed
+    over as the MacRoman characters that encode to them. Until 2026-11-19 the text went in as it
+    was: a ring item `0503 0000h – Toggle bit` showed as `0503 0000h Ð Toggle bit` (the en dash is
+    MacRoman 0xD0, CP1252 `Ð`), `Größe 5 °C` as `Grš§e 5 ¡C` - measured by NI's own export of a
+    composed ring, a user's report. The reader undoes the same mapping (vi2aixml.heap_text). A
+    character CP1252 lacks keeps its compatibility form (NFKD), else becomes `?`. Only for text
+    from the document: a donor part's quoted string is already in this form (and may be binary)."""
+    if not s:
+        return s
+    try:
+        return value_bytes(s).decode("mac_roman")
+    except UnicodeEncodeError:
+        pass
+    import unicodedata
+    out = []
+    for ch in s:
+        alt = ch
+        for cand in (ch, {"−": "-"}.get(ch) or unicodedata.normalize("NFKD", ch), "?"):
+            try:
+                value_bytes(cand)
+                alt = cand
+                break
+            except UnicodeEncodeError:
+                continue
+        out.append(alt)
+    return value_bytes("".join(out)).decode("mac_roman")
+
+
+def pylv_to_text(s):
+    """The inverse of lv_text: text pylabview rendered as MacRoman, read as the CP1252 LabVIEW on
+    Windows wrote. A string MacRoman cannot hold is returned as it is."""
+    if not s:
+        return s
+    try:
+        return value_text(s.encode("mac_roman"))
+    except UnicodeEncodeError:
+        return s
+
+
 def _pylabview_argv():
     """How to start pylabview. The bundle's own python.exe on readRSRC.py, exactly what
     pylabview.cmd runs - NOT through `cmd /c`: cmd.exe re-parses the command line, so a path
@@ -157,7 +200,7 @@ def rebuild(main_xml, vi_path):
 class Bundle:
     """Read-only view of an extracted bundle: main tree, both heaps, the type chain."""
 
-    def __init__(self, main_xml, collections=False):
+    def __init__(self, main_xml, collections=True):
         self.main_xml = main_xml
         self.dir = os.path.dirname(main_xml)
         self.main = ET.parse(main_xml).getroot()
@@ -175,10 +218,26 @@ class Bundle:
                 "cannot be read as AIXML. Read the warnings of pylv_extract on the VI for the type "
                 "it failed on; on grpc NI's converter reads it.")
         self.flat = [td for td in vctp if td.tag == "TypeDesc"]
+        for td in self.flat:
+            # labels and enum items as LabVIEW wrote them (CP1252), not as pylabview rendered the
+            # bytes (MacRoman) - the inverse of lv_text, which vctp_section applies when a type
+            # goes back out. Before the collections, which decode their raw label themselves.
+            for e in td.iter():
+                if e.get("Label"):
+                    e.set("Label", pylv_to_text(e.get("Label")))
+                if e.tag == "EnumLabel" and e.text:
+                    e.text = pylv_to_text(e.text)
         if collections:
-            # the READER's view only: the composer copies a callee's types as they stand, and a
-            # rewritten set would no longer serialize
+            # the reader's view AND the composer's since issue #140: TypeTable writes a Map or Set
+            # back as its raw descriptor with the ids of the VI being composed. Until then the
+            # composer copied a callee's map as it stood - a sidecar File of the CALLEE's bundle -
+            # and the rebuild died with FileNotFoundError on <callee>_VCTP_td*.bin
             self._collections()
+        for td in self.flat:
+            # a type still RAW names the file it came from, so a composer that cannot carry it
+            # into another VI says WHICH callee (issue #140)
+            if td.get("Format") == "bin" and td.get("File"):
+                td.set("_origin", os.path.basename(main_xml)[:-4] + ".vi")
         self.toplevel = {int(t.get("Index")): int(t.get("FlatTypeID"))
                          for t in vctp.find("TopLevel")}
         dthp = self.main.find("DTHP/Section/TypeDescSlice")
@@ -227,22 +286,34 @@ class Bundle:
     def flat_of_consolidated(self, cons):
         return self.toplevel[cons]
 
-    def tree(self, flat_id):
+    # The READER's hook for linked typedefs: a callable taking a flat TypeDef element and returning
+    # the TypeDef as its .ctl on disk holds it now (fully inlined), or None to keep the copy this
+    # file embeds. None here - the composer copies a callee's types as they stand.
+    typedef_resolver = None
+
+    def tree(self, flat_id, snapshot=False):
         """A flat TypeDesc with every child reference inlined, recursively. A reference past
         the end of the list (NI's Set Collection - Word Counting.vi: a set type) comes back as
-        an Unknown type, which the reader reports, instead of ending the whole read."""
+        an Unknown type, which the reader reports, instead of ending the whole read.
+
+        A linked TYPEDEF comes back as its .ctl defines it when a typedef_resolver is set, unless
+        `snapshot`: then as this file embeds it - the type its saved DATA is flattened against."""
         if not 0 <= flat_id < len(self.flat):
             return ET.Element("TypeDesc", {"Type": "Unknown", "Format": "inline", "ref.TypeID": str(flat_id)})
-        return self._inline(self.flat[flat_id])
+        return self._inline(self.flat[flat_id], snapshot)
 
-    def _inline(self, src):
+    def _inline(self, src, snapshot=False):
+        if not snapshot and self.typedef_resolver is not None and src.get("Type") == "TypeDef":
+            disk = self.typedef_resolver(src, self._inline(src, True))
+            if disk is not None:
+                return disk
         out = ET.Element("TypeDesc", {k: v for k, v in src.attrib.items()})
         for child in src:
             if child.tag != "TypeDesc":
                 out.append(copy.deepcopy(child))
                 continue
             if child.get("TypeID") is not None:
-                sub = self.tree(int(child.get("TypeID")))
+                sub = self.tree(int(child.get("TypeID")), snapshot)
                 for k, v in child.attrib.items():
                     if k != "TypeID":
                         sub.set("ref." + k, v)
@@ -253,11 +324,19 @@ class Bundle:
                 # harvested LVPositionTypeDef.ctl carried its donor's ids for Left and Top into
                 # the composed VI, where 2 and 3 were two strings, and the VI loaded broken
                 # (2026-10-10, lvbd_graft_paste.xml; 72 of 1167 parts were affected).
-                out.append(self._inline(child))
+                out.append(self._inline(child, snapshot))
         return out
 
-    def heap_type_tree(self, heap_tid):
-        return self.tree(self.flat_of_heap(heap_tid))
+    def heap_type_tree(self, heap_tid, snapshot=False):
+        return self.tree(self.flat_of_heap(heap_tid), snapshot)
+
+
+class RawTypeError(Exception):
+    """A type the composer cannot write into a VI's type table; aixml2vi reports it as UNSUPPORTED."""
+
+
+# Map and Set, as lvheap.Bundle(collections=True) names them, -> the raw type code VCTP holds
+COLLECTION_CODES = {"Map": "116", "Set": "115"}
 
 
 class TypeTable:
@@ -283,6 +362,15 @@ class TypeTable:
         return self.add_flat(self._flat_form(tree))
 
     def _flat_form(self, tree):
+        if tree.get("Type") in COLLECTION_CODES:
+            return self._collection_form(tree)
+        if tree.get("Format") == "bin" and tree.get("File"):
+            # a type pylabview keeps RAW, copied from a callee's bundle: its bytes name flat ids of
+            # THAT file and its sidecar is not in this one - written as it stood, the rebuild died
+            # with FileNotFoundError on <callee>_VCTP_td*.bin (issue #140)
+            raise RawTypeError("type %s%s%s is stored raw by pylabview and cannot be carried into another VI"
+                               % (tree.get("Type"), " %r" % tree.get("Label") if tree.get("Label") else "",
+                                  " (from %s)" % tree.get("_origin") if tree.get("_origin") else ""))
         el = ET.Element("TypeDesc", {k: v for k, v in tree.attrib.items()
                                      if not k.startswith("ref.")})
         if "Format" not in el.attrib:
@@ -304,15 +392,61 @@ class TypeTable:
                 el.append(copy.deepcopy(child))
         return el
 
+    def _collection_form(self, tree):
+        """A MAP or SET as VCTP holds it: pylabview cannot parse 0x74/0x73, so the descriptor is a
+        raw sidecar - a map u16 2, then the key's and the value's FLAT ids, a set the element's -
+        and, when labelled, a Pascal label padded to an even length. Measured on NI's Map and Set
+        Collection examples (Word Counting: 0002 0004 0005 + "Map of word to occurrence count:" + 00).
+        The bytes stay on the element as `_raw` until vctp_section writes them out."""
+        kids = [c for c in tree if c.tag == "TypeDesc"]
+        want = 2 if tree.get("Type") == "Map" else 1
+        if len(kids) != want:
+            raise RawTypeError("a %s type needs %d element type(s), found %d" % (tree.get("Type"), want, len(kids)))
+        ids = [self.register(k) for k in kids]
+        raw = (struct.pack(">H", 2) if want == 2 else b"") + b"".join(struct.pack(">H", i) for i in ids)
+        el = ET.Element("TypeDesc", {"Type": COLLECTION_CODES[tree.get("Type")], "Format": "bin"})
+        label = tree.get("Label")
+        if label:
+            b = label.encode("cp1252", "replace")[:255]
+            raw += bytes([len(b)]) + b
+            if len(raw) % 2:
+                raw += b"\0"
+            el.set("HasLabel", "1")
+        el.set("_raw", raw.hex())
+        return el
+
     def use(self, flat_id):
         """A new consolidated index pointing at flat_id; returns the consolidated index."""
         self.toplevel.append(flat_id)
         return len(self.toplevel)
 
-    def vctp_section(self):
+    def vctp_section(self, out_dir=None, base=None):
+        """VCTP's section. A raw type (a map or set) is written as its sidecar <base>_VCTP_tdNNNN.bin
+        into `out_dir`, which a VI with one requires."""
         sec = ET.Element("Section", {"Index": "0", "Format": "inline"})
-        for el in self.flat:
-            sec.append(copy.deepcopy(el))
+        for i, el in enumerate(self.flat):
+            el = copy.deepcopy(el)
+            raw = el.attrib.pop("_raw", None)
+            if raw is not None:
+                if out_dir is None:
+                    raise RawTypeError("a map or set type needs the output folder to write its descriptor")
+                fn = "%s_VCTP_td%04d_%04d.bin" % (base, i, i)
+                with open(os.path.join(out_dir, fn), "wb") as f:
+                    f.write(bytes.fromhex(raw))
+                el.set("File", fn)
+                # pylabview reads File before HasLabel - keep its own attribute order
+                if el.attrib.pop("HasLabel", None):
+                    el.set("HasLabel", "1")
+            else:
+                # a label or an enum item is authored text: pylabview writes it as MacRoman,
+                # LabVIEW reads it in CP1252 (lv_text) - `Code Größe` was `Code Grš§e`
+                # until 2026-11-19. A raw type carries its label as CP1252 bytes already.
+                for e in el.iter():
+                    if e.get("Label"):
+                        e.set("Label", lv_text(e.get("Label")))
+                    if e.tag == "EnumLabel" and e.text:
+                        e.text = lv_text(e.text)
+            sec.append(el)
         top = ET.SubElement(sec, "TopLevel")
         for i, fid in enumerate(self.toplevel, 1):
             ET.SubElement(top, "TypeDesc", {"Index": str(i), "FlatTypeID": str(fid)})

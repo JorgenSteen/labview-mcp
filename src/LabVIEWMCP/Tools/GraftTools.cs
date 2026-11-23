@@ -63,9 +63,13 @@ internal sealed class GraftTools(LvaiConnection connection)
         call lvai_bind_control_references after the graft.
         NEEDS AN ACTIVE PROJECT: pass projectPath and the tool opens it when it is not active
         (`noActiveProject` otherwise). USES THE SYSTEM CLIPBOARD: run it from the
-        orchestrator, one graft at a time. To graft IN PLACE, copy the supplied VI aside, pass the
+        orchestrator, one graft at a time; while other agents' calls run (or ran in the last 60 s)
+        it is REFUSED before doing anything (`projectChangeWhileParallel`) - call it again once they
+        are done. To graft IN PLACE, copy the supplied VI aside, pass the
         copy as panelViPath and the original as outputViPath with overwrite; do not open the
-        supplied VI first. `switchActions` true means the saved control is NOT latched. The
+        supplied VI first. `switchActions` true means the saved control is NOT latched. Enable
+        automatic error handling, which exam templates carry ON, is cleared in the output
+        (`automaticErrorHandling`; keepAutomaticErrorHandling keeps it). The
         rewired diagram is laid out with lvai_layout_diagram (`cleanUpDiagram`); the panel is not touched.
         docs/keep-supplied-front-panel.md.
         """)]
@@ -85,10 +89,12 @@ internal sealed class GraftTools(LvaiConnection connection)
         bool allowNewControls = false,
         [Description("Empty the supplied diagram first when it already holds code - the old code is DISCARDED in the output, every control is kept")]
         bool replaceDiagram = false,
-        [Description("Boolean controls to set to Switch When Pressed, ONE LABEL PER LINE - latched buttons a test must signal (Error 1193 otherwise)")]
+        [Description("Boolean controls to set to Switch When Pressed, ONE LABEL PER LINE - latched buttons a test must signal over grpc (Error 1193 otherwise; pylabview presses a latched button)")]
         string? switchActionControls = null,
         [Description("Absolute path of the .lvproj to make active before the graft when it is not; empty requires an active project")]
         string? projectPath = null,
+        [Description("Keep the supplied VI's Enable automatic error handling as it is. Default false: the graft clears it")]
+        bool keepAutomaticErrorHandling = false,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 180,
         [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
@@ -104,6 +110,21 @@ internal sealed class GraftTools(LvaiConnection connection)
             var scaffold = Path.GetFullPath(scaffoldViPath);
             var output = Path.GetFullPath(outputViPath);
             if (PathRefusal(panel, scaffold, output, overwrite) is { } refused) return refused;
+
+            // ---- 0a. NOT while other agents share this LabVIEW, before anything is done: the graft
+            // uses the system clipboard and closes and reopens the active project to re-register
+            // the Event Structure (a pylabview edit). In the cold ATM build of 2026-11-18 it did that
+            // twice while four other agents worked, beside the place_handler close that raised a
+            // modal dialog and stalled them all. Calling it again once they are done costs nothing.
+            if (ParallelCalls.Shared.ProjectChangeRefusalFromInside() is { } parallel)
+                return Json.Error("projectChangeWhileParallel",
+                    "lvai_graft_diagram was REFUSED and did nothing: " + parallel + " The graft uses the " +
+                    "system clipboard and closes and reopens the active project for its event " +
+                    "registration, which other agents' calls must not run beside. Call it again once the " +
+                    "other agents have finished - the refusal names when the guard lifts.",
+                    new { tool = "lvai_graft_diagram",
+                          rule = "CLAUDE.md: NO AGENT MAY OPEN OR CLOSE A PROJECT while agents share one LabVIEW",
+                          docs = "docs/keep-supplied-front-panel.md" });
             string? project = null;
             if (!string.IsNullOrWhiteSpace(projectPath))
             {
@@ -297,16 +318,22 @@ internal sealed class GraftTools(LvaiConnection connection)
             //      to - measured 2026-09-30 on a producer loop: every frame came back with an EMPTY
             //      selector and the VI was eBad. The spec writer resolves a control by LABEL, so
             //      writing the scaffold's specs again lands them on the SUPPLIED controls.
-            var events = await ReregisterEventsAsync(Path.Combine(work, "scaffold.xml"), output,
-                                                     work, timeoutSeconds, ct);
+            //      The same pass clears Enable automatic error handling, which a supplied template
+            //      carries on and the copy kept (lvai_audit_files, 2026-11-21).
+            var autoErrorBefore = AutomaticErrorHandling(output);
+            var events = await ReregisterEventsAsync(Path.Combine(work, "scaffold.xml"), output, work,
+                                                     clearAutomaticErrorHandling: autoErrorBefore == true
+                                                                                  && !keepAutomaticErrorHandling,
+                                                     timeoutSeconds, ct);
             if (events?["ok"]?.GetValue<bool>() == false)
                 return Failed(Json.Document(new JsonObject
                 {
                     ["ok"] = false,
                     ["errorKind"] = "eventReregistrationFailed",
-                    ["error"] = "The diagram was grafted but its Event Structure's registrations " +
-                                "could not be written back onto the supplied controls. outputViPath " +
-                                "was put back to the plain supplied copy.",
+                    ["error"] = "The diagram was grafted but the pylabview pass after it failed - " +
+                                "writing the Event Structure's registrations back onto the supplied " +
+                                "controls, or clearing automatic error handling (read events.steps). " +
+                                "outputViPath was put back to the plain supplied copy.",
                     ["outputViPath"] = output,
                     ["swaps"] = swaps,
                     ["events"] = events,
@@ -336,7 +363,8 @@ internal sealed class GraftTools(LvaiConnection connection)
             // With new controls the panel is SUPPOSED to change, so the image comparison can only
             // be reported; everything else still decides.
             var switchVerdict = grafted is null ? null : SwitchVerdict(grafted, switches);
-            var ok = execState == 1 && check is { Clean: true } && typedefs.Kept
+            var autoErrorAfter = AutomaticErrorHandling(output);
+            var ok = (keepAutomaticErrorHandling || autoErrorAfter == false) && execState == 1 && check is { Clean: true } && typedefs.Kept
                      && (plan.New.Count > 0 || panelIdentical != false) && diagramChanged != false
                      && (switches.Count == 0 || switchVerdict?.All(kv => kv.Value) == true);
             return Json.Document(new JsonObject
@@ -362,6 +390,13 @@ internal sealed class GraftTools(LvaiConnection connection)
                 ["panelIdentical"] = panelIdentical,
                 ["diagramChanged"] = diagramChanged,
                 ["events"] = events,
+                // read from the file before the pylabview pass and after the verdict's export
+                ["automaticErrorHandling"] = new JsonObject
+                {
+                    ["supplied"] = autoErrorBefore,
+                    ["output"] = autoErrorAfter,
+                    ["kept"] = keepAutomaticErrorHandling,
+                },
                 ["diagramReplaced"] = replaced,
                 ["openProject"] = projectStep,
                 // label -> true when the saved file no longer carries style="latched" for it
@@ -380,13 +415,24 @@ internal sealed class GraftTools(LvaiConnection connection)
                         : "Grafted. The supplied panel is unchanged and the program is the scaffold's. ") +
                       "Run it (lvai_run_vi_and_read_values runForMs) to see it behave, and render it " +
                       "to look at the diagram. The clipboard now holds the scaffold's diagram."
-                    : "The grafted VI failed a check above - read execState, leftoverDuplicates, " +
+                    : "The grafted VI failed a check above - read automaticErrorHandling, execState, leftoverDuplicates, " +
                       "wiringMismatches, typedefsKept and panelIdentical. outputViPath holds the " +
                       "attempt; the supplied VI is untouched.",
             });
         }));
 
     // ------------------------------------------------------------------ pure parts
+
+    /// <summary>The saved Enable automatic error handling flag, read from the file with no
+    /// LabVIEW (LvFileAudit), or null when the file cannot be read.</summary>
+    internal static bool? AutomaticErrorHandling(string vi)
+    {
+        try { return LvFileAudit.Read(vi).AutomaticErrorHandling; }
+        catch (Exception e) when (e is InvalidDataException or IOException or OverflowException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>The refusal for a path set that cannot be grafted safely, or null.</summary>
     internal static string? PathRefusal(string panel, string scaffold, string output, bool overwrite)
@@ -915,12 +961,20 @@ internal sealed class GraftTools(LvaiConnection connection)
     /// lvai_bind_control_references needs it active, and leaving it closed cost one lvai_open_file per
     /// graft in the fifth Web Browser acceptance, 2026-10-02.
     /// User-event frames are not touched: they are not bound to a panel control.
+    /// The same pylabview pass clears Enable automatic error handling when
+    /// <paramref name="clearAutomaticErrorHandling"/> is set - and then runs even with no frame: a
+    /// supplied exam template carries the setting on, the graft kept it, and every grafted main VI
+    /// of the ATM and Car Wash builds (2026-11-05 to -18) was delivered with it (lvai_audit_files,
+    /// docs/offline-audit-evaluation.md). Our VIs carry error in/out; the dialog it raises on an
+    /// unwired error is not what they mean.
     /// </summary>
     private async Task<JsonObject?> ReregisterEventsAsync(string scaffoldXml, string output, string work,
+                                                          bool clearAutomaticErrorHandling,
                                                           int timeoutSeconds, CancellationToken ct)
     {
-        if (!File.Exists(scaffoldXml)) return null;
-        var reading = EventFrames.Read(scaffoldXml);
+        var reading = File.Exists(scaffoldXml) ? EventFrames.Read(scaffoldXml) : null;
+        if (reading is null && !clearAutomaticErrorHandling) return null;
+        reading ??= new EventFrames.Reading([], null, null);
         // A selector the reader REFUSES is not "no Event Structure": until 2026-10-15 both came
         // back as null here, so a scaffold whose frames could not be read was grafted with every
         // registration lost and answered `events: null` beside an eBad VI.
@@ -933,9 +987,8 @@ internal sealed class GraftTools(LvaiConnection connection)
                 ["note"] = "The scaffold's Event Structure could not be read, so no registration " +
                            "could be written back: " + reading.Refusal,
             };
-        if (reading.Frames.Count == 0) return null;
         var frames = reading.Frames.Where(f => f.Control is not null).ToList();
-        if (frames.Count == 0) return null;
+        if (frames.Count == 0 && !clearAutomaticErrorHandling) return null;
 
         var steps = new JsonArray();
         bool? reopened = null;
@@ -945,6 +998,7 @@ internal sealed class GraftTools(LvaiConnection connection)
             ["framesRegistered"] = ok ? frames.Count : 0,
             ["frames"] = new JsonArray(frames.Select(f => (JsonNode)$"[{f.Index}] {f.Control}: {f.Trigger}").ToArray()),
             ["userEventFramesLeftAlone"] = reading.Frames.Count(f => f.UserEvent is not null),
+            ["automaticErrorHandlingCleared"] = clearAutomaticErrorHandling ? ok : null,
             ["projectClosed"] = true,
             ["projectReopened"] = reopened,
             ["steps"] = steps,
@@ -975,6 +1029,21 @@ internal sealed class GraftTools(LvaiConnection connection)
         steps.Add(strip);
         if (strip["exitCode"]?.GetValue<int>() != 0)
             return Result(false, "Stripping the compiled code failed; nothing was registered.");
+
+        if (clearAutomaticErrorHandling)
+        {
+            var (set, notFound) = ViExecutionSettings.Patch(mainXml,
+                [new ViExecutionSettings.Field("Execution2", "DefaultErrorHandling", "0")]);
+            steps.Add(new JsonObject
+            {
+                ["step"] = "clearAutomaticErrorHandling",
+                ["fieldsSet"] = new JsonArray([.. set.Select(x => (JsonNode)x)]),
+                ["fieldsNotFound"] = new JsonArray([.. notFound.Select(x => (JsonNode)x)]),
+            });
+            if (notFound.Length > 0)
+                return Result(false, "The grafted VI's LVSR record lacks Execution2.DefaultErrorHandling, " +
+                                     "so automatic error handling was not cleared and nothing was rebuilt.");
+        }
 
         foreach (var frame in frames)
         {
@@ -1012,7 +1081,8 @@ internal sealed class GraftTools(LvaiConnection connection)
         };
         return rebuilt
             ? Result(true, $"{frames.Count} front-panel event frame(s) registered again on the supplied " +
-                           "controls." + projectNote)
+                           "controls." + (clearAutomaticErrorHandling ? " Automatic error handling cleared." : "") +
+                           projectNote)
             : Result(false, "Every spec was written but the rebuild failed." + projectNote);
     }
 

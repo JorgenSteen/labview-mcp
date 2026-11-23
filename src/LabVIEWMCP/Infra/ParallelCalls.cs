@@ -39,13 +39,16 @@ internal sealed class ParallelCalls(Func<DateTime> clock)
     /// Calls that change nothing in LabVIEW and run no VI in it - status reads and the knowledge
     /// tools. They neither count as an overlap nor see one: on 2026-11-12 (Branch_Retest) an agent's
     /// two status calls at the start of its work, run side by side, cost it the 60 s window before
-    /// its own project close, with no other agent anywhere.
+    /// its own project close, with no other agent anywhere. lvai_audit_files reads saved files and
+    /// never reaches LabVIEW: run beside lvai_exec_state at the end of the ATM build of 2026-11-22,
+    /// it cost the orchestrator the same 60 s before the project close.
     /// </summary>
     internal static readonly HashSet<string> NotCounted = new(StringComparer.Ordinal)
     {
         "lvai_status", "pylv_status", "lvai_labview_state", "lvai_list_labview_installations",
         "lvai_aixml_reference", "lvai_vi_server_reference", "lvai_lvproj_reference",
         "lvai_lvlib_reference", "lvai_dqmh_reference", "lvai_check_aixml", "lvai_check_build_contract",
+        "lvai_audit_files",
     };
 
     private sealed class Uncounted : IDisposable
@@ -93,6 +96,37 @@ internal sealed class ParallelCalls(Func<DateTime> clock)
                 return $"{others.Count} other tool call(s) are running on this server right now " +
                        $"({string.Join(", ", others.Distinct().Order())}), so several agents share this " +
                        "LabVIEW.";
+            if (_lastOverlap is { } seen && clock() - seen < Window)
+            {
+                var wait = (int)Math.Ceiling((Window - (clock() - seen)).TotalSeconds);
+                return $"tool calls overlapped {(int)(clock() - seen).TotalSeconds} s ago " +
+                       $"({string.Join(", ", _lastOverlapTools)}), so several agents share this LabVIEW. " +
+                       $"With no further overlap the guard lifts in {wait} s.";
+            }
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ProjectChangeRefusal"/> for a project change a tool makes INTERNALLY, from inside its
+    /// own top-level call: that call is in flight itself and is not counted, whatever its name.
+    ///
+    /// WHY. The guard covered only lvai_open_file and lvai_close_active_project called directly, and
+    /// tools that close the project for a pylabview edit went past it. On 2026-11-18, in the cold ATM
+    /// build of five parallel agents, lvai_dqmh_place_handler closed the project for its source-only
+    /// strip while the account agent regenerated one of the handler VIs: LabVIEW raised a modal
+    /// dialog, every lvai call of every agent stalled for a minute (two client timeouts) until the
+    /// user pressed Discard, and lvai_graft_diagram closed the project twice more in the same build.
+    /// </summary>
+    internal string? ProjectChangeRefusalFromInside()
+    {
+        lock (_gate)
+        {
+            var others = _inFlight.Count - 1;
+            if (others > 0)
+                return $"{others} other tool call(s) are running on this server right now " +
+                       $"({string.Join(", ", _inFlight.Values.Distinct().Order())}), so several agents " +
+                       "share this LabVIEW.";
             if (_lastOverlap is { } seen && clock() - seen < Window)
             {
                 var wait = (int)Math.Ceiling((Window - (clock() - seen)).TotalSeconds);
