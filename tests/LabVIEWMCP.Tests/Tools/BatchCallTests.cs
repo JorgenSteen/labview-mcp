@@ -221,6 +221,15 @@ public sealed class BatchCallTests
         Assert.Null(placed["wires"]);
         Assert.Equal("inside", placed["placement"]!.GetValue<string>());
 
+        // the by-field module data and the whole-module-data and entry splices are each handler's
+        // own result: a batch entry showed the plan but not what was wired (live check 2026-11-23)
+        var wired = DqmhBatch.CompactHandler(handler, Obj(
+            """{"ok":true,"route":"frameEntry","moduleData":{"connected":["Gain out->Gain"]},"moduleDataSplice":{"spliced":true},"entrySplice":{"errorChain":{"spliced":true}}}"""));
+        Assert.Equal("Gain out->Gain", wired["moduleData"]!["connected"]![0]!.GetValue<string>());
+        Assert.True(wired["moduleDataSplice"]!["spliced"]!.GetValue<bool>());
+        Assert.True(wired["entrySplice"]!["errorChain"]!["spliced"]!.GetValue<bool>());
+        Assert.Equal("frameEntry", wired["route"]!.GetValue<string>());
+
         JsonObject Answer(JsonArray entries, int? next, bool allOk, JsonObject? sourceOnly) =>
             DqmhBatch.HandlersAnswer("Bank", 2, entries, next, allOk, false, @"C:\M\Main.vi",
                 new JsonObject { ["ok"] = true }, sourceOnly, 1, 100);

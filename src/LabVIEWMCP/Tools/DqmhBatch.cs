@@ -56,7 +56,7 @@ internal static class DqmhBatch
             return entry;
         }
         foreach (var key in new[] { "dryRun", "frame", "route", "placement", "connected", "plan", "moduleDataWire",
-                                    "moduleDataSplice", "entrySplice", "warnings" })
+                                    "moduleData", "moduleDataSplice", "entrySplice", "warnings" })
             if (answer![key] is { } kept) entry[key] = kept.DeepClone();
         return entry;
     }

@@ -34,6 +34,13 @@ backslashes in Windows paths are eaten on the way.
 
 Each answer's header carries the call's wall clock in seconds: "==== label [12.3 s] ====".
 
+A LATE CALL. A tool that has not finished after about 50 s answers `errorKind: stillRunning`, and
+the SAME call collects the answer (the server's LateCalls/JobStore). The driver repeats such a call
+by itself, with the same arguments, until it answers something else - a repeat written into
+calls.json after it would run the work a second time once the first answer was collected. Each
+repeat is printed as "(stillRunning, collecting: repeat N)". After the last call the server may
+still finish jobs before it exits (it drains them up to 10 minutes), so the driver waits for it.
+
 Exit code 0 when every call got an answer (an answer may still report ok: false); 1 when the
 server closed its output early.
 """
@@ -89,6 +96,12 @@ def main(argv):
                 got[msg["id"]] = msg
         return got
 
+    def still_running(msg):
+        try:
+            return json.loads(text_of(msg)).get("errorKind") == "stillRunning"
+        except (ValueError, AttributeError):
+            return False
+
     def text_of(msg):
         if "error" in msg:
             return "RPC ERROR: " + json.dumps(msg["error"])
@@ -113,10 +126,26 @@ def main(argv):
         ids = [request("tools/call", {"name": c["name"], "arguments": c.get("arguments", {})})
                for c in batch]
         answers = read_until(ids)
-        seconds = time.monotonic() - started
         if answers is None:
             print("the server closed its output mid-run", file=sys.stderr)
             return 1
+        # a call that answered stillRunning is sent again, unchanged, until it answers
+        for repeat in range(1, 1000):
+            late = [(c, i) for c, i in zip(batch, ids) if still_running(answers[i])]
+            if not late:
+                break
+            for c, _ in late:
+                print("(stillRunning, collecting: repeat %d) %s" % (repeat, c.get("label", c["name"])),
+                      file=sys.stderr)
+            again = {i: request("tools/call", {"name": c["name"], "arguments": c.get("arguments", {})})
+                     for c, i in late}
+            more = read_until(list(again.values()))
+            if more is None:
+                print("the server closed its output mid-run", file=sys.stderr)
+                return 1
+            for old, new in again.items():
+                answers[old] = more[new]
+        seconds = time.monotonic() - started
         for c, i in zip(batch, ids):
             # the wall clock of the call (of the whole batch for a parallel entry), in the header
             print("=" * 20, "%s [%.1f s]" % (c.get("label", c["name"]), seconds), "=" * 20)
@@ -124,7 +153,11 @@ def main(argv):
             sys.stdout.flush()
 
     proc.stdin.close()
-    proc.wait(timeout=30)
+    try:
+        # the server finishes its late jobs before it exits (JobStore.DrainAsync: up to 10 min)
+        proc.wait(timeout=660)
+    except subprocess.TimeoutExpired:
+        print("the server did not exit within 660 s of the last call; left running", file=sys.stderr)
     return 0
 
 
