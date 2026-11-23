@@ -17,7 +17,9 @@ during the call is read again - a file named before the call counts as written o
 time changed (since 2026-11-13: with the 2 s margin alone, a call made within 2 s of an icon save
 was blamed for it), any other one when it was written after the call started, less 2 s. A FOLDER
 the arguments name counts as naming the LabVIEW files under it, for their write times (since
-2026-11-23: a dryRun over a folder, a second after another call saved its files, was blamed for them). A file now saved newer than it was before, or newer than the version its project
+2026-11-23: a dryRun over a folder, a second after another call saved its files, was blamed for them).
+A COLLECTED answer (`jobStartedUtc`, a job that answered `stillRunning` first) is judged from the
+job's start and the pin alone: the collecting call read its "before" after the job's writes. A file now saved newer than it was before, or newer than the version its project
 pins, is reported:
 
 ```json
@@ -208,6 +210,9 @@ What it gives up, and what is not measured:
   wrote **25.0** on LabVIEW 2026.3 (live check 2026-11-23: a VI and a typedef, twice; the read-back
   answered `targetNotReached`). FINDINGS.md had recorded the same for "24.0" and "20.0" earlier. The
   tool's first version used it; the Invoke Node with the same string writes 20.0 (§6);
-- `.lvclass`, `.lvlib` and `.lvproj` are XML and are not saved by it (`notAViOrCtl`);
-- a class member: LabVIEW 2026 asked for 24.0 or 20.0 wrote a 25 file for a class-linked VI
-  (`experiments/aixml-without-grpc/FINDINGS.md`); the read-back reports that as `targetNotReached`.
+- `.lvclass`, `.lvlib` and `.lvproj` are XML and are not saved by it (`notAViOrCtl`). Live
+  2026-11-23: a class member VI went 26.0 -> 20.0 and stayed executable, but its `.lvclass` kept
+  `LVVersion="26008000"`; whether LabVIEW 2020 opens that class file is not measured;
+- a class member: FINDINGS.md's 25.0 for a class-linked VI was the ActiveX route; through the
+  helper a dynamic-dispatch member reached 20.0 (live 2026-11-23). A miss would read back as
+  `targetNotReached`.

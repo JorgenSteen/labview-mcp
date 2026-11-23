@@ -124,6 +124,26 @@ public sealed class SaveVersionsTests : IDisposable
     }
 
     /// <summary>
+    /// A COLLECTED answer (a ResumableCall job answered `stillRunning` first): the collecting call
+    /// read the file's write time AFTER the job wrote it, so that reading must not clear it.
+    /// </summary>
+    [Fact]
+    public void A_collected_answer_reports_a_file_its_job_saved_before_the_collecting_call()
+    {
+        var vi = Vi();
+        Project("21.0", "../X.vi");
+        File.SetLastWriteTimeUtc(vi, DateTime.UtcNow.AddSeconds(-30));   // the job saved it
+        var args = Args(new { viPath = vi });
+        var before = SaveVersions.Capture(args);                         // the collecting call
+
+        Assert.Null(SaveVersions.Check(before, new JsonObject(), args));
+
+        var collected = new JsonObject { [ResumableCall.JobStartedUtcKey] = DateTime.UtcNow.AddMinutes(-2).ToString("o") };
+        var file = SaveVersions.Check(before, collected, args)!["files"]![0]!;
+        Assert.Equal("21.0", file["projectSaveVersion"]!.GetValue<string>());
+    }
+
+    /// <summary>
     /// The same for a FOLDER the call names and files only its answer names - live check of
     /// lvai_save_for_previous, 2026-11-23: a dryRun over a folder one second after another call
     /// saved its files was told it had saved them.

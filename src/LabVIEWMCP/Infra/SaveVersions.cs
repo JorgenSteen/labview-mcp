@@ -257,6 +257,13 @@ internal static class SaveVersions
         foreach (var path in PathsIn(answer)) candidates.Add(path);
         if (candidates.Count is 0 or > MaxFiles) return null;
 
+        // A COLLECTED answer (ResumableCall.JobStartedUtcKey): the job wrote its files before this
+        // call began, so what this call read "before" was read AFTER the writes - its write times
+        // and versions say nothing. Such files are judged by the job's start and the pin alone.
+        var jobStart = ResumableCall.JobStartedUtc(answer);
+        var collected = jobStart is { } js && js < before.StartedUtc;
+        var since = collected ? jobStart!.Value : before.StartedUtc;
+
         var findings = new JsonArray();
         foreach (var path in candidates.Order(StringComparer.OrdinalIgnoreCase))
         {
@@ -273,18 +280,18 @@ internal static class SaveVersions
             // lvai_add_vis_to_project and a lvai_running_vi signal, run within 2 s of
             // lvai_set_vi_icon, each answered "saved by this call" for the VI the icon call had
             // saved. The margin now applies only to files the call did not name before it ran.
-            if (before.WriteTimes is { } times && times.TryGetValue(path, out var then))
+            if (!collected && before.WriteTimes is { } times && times.TryGetValue(path, out var then))
             {
                 if (written == then) continue;
             }
-            else if (written < before.StartedUtc.AddSeconds(-2)) continue;
+            else if (written < since.AddSeconds(-2)) continue;
             if (Of(path) is not { } now) continue;
 
             // A FILE THE CALL SAVED WITHOUT NAMING IT - a typedef's callers - has no version read
             // before the call; the tool that saved it hands that version over in the answer
             // (VersionsBeforeKey). Measured 2026-11-23: lvai_set_representation re-saved a 20.0
             // caller of a typedef as 26.0 and saveVersionCheck named only the .ctl.
-            var was = before.Versions.GetValueOrDefault(path) ?? HandedOver(answer, path);
+            var was = (collected ? null : before.Versions.GetValueOrDefault(path)) ?? HandedOver(answer, path);
             // NOT LISTED YET IS NOT "NO PIN": the composer wrote a new VI at the pin of the project
             // in the folders above it (PinAbove), so the check judges it by the same rule. Measured
             // 2026-11-13: a VI generated into a 21.0 project's folder and given its icon BEFORE it was

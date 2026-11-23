@@ -86,7 +86,10 @@ condition was that it must not cause more trouble than it saves, so it is delibe
 - **Which files:** every existing LabVIEW file named in the answer and written since the call began
   (2 s slack), plus the members of a written `.lvlib`/`.lvclass` written since then. An owner is
   read even when not written, so the orphan rule can judge. No `.lvproj` (its only rule is a
-  warning), at most 400 files, an unparsable file is skipped.
+  warning), at most 400 files, an unparsable file is skipped. A COLLECTED answer - a job that
+  answered `stillRunning` first - is judged from the job's start (`jobStartedUtc`), not the
+  collecting call's: until 2026-11-23 such an answer carried no `audit` at all (live: a
+  `lvai_dqmh_new_event` collected after 158 s, five compiled-code files unreported).
 - **Never on** a read-only tool, `lvai_audit_files` itself or a failed call. Anything the audit
   throws leaves the answer as it was.
 
