@@ -40,12 +40,12 @@ public sealed class SaveForPreviousToolsTests : IDisposable
     }
 
     /// <summary>Stands in for LabVIEW's save: the version word 26.0 becomes the target's.</summary>
-    private SaveForPreviousTools Tool(bool reachesTarget = true) => new()
+    private SaveForPreviousTools Tool(bool reachesTarget = true, string? error = null) => new(null!)
     {
         SaveOverride = (path, version, _, _) =>
         {
             _saves.Add((path, version));
-            if (!reachesTarget) return Task.CompletedTask;
+            if (error is not null || !reachesTarget) return Task.FromResult(error);
             var bytes = File.ReadAllBytes(path);
             var major = int.Parse(version.Split('.')[0], System.Globalization.CultureInfo.InvariantCulture);
             var bcd = (byte)((major / 10 << 4) | (major % 10));
@@ -53,7 +53,7 @@ public sealed class SaveForPreviousToolsTests : IDisposable
                 if (bytes[i] == 0x26 && bytes[i + 1] == 0x00 && bytes[i + 2] == 0x80 && bytes[i + 3] == 0x00)
                     bytes[i] = bcd;
             File.WriteAllBytes(path, bytes);
-            return Task.CompletedTask;
+            return Task.FromResult<string?>(null);
         },
     };
 
@@ -114,6 +114,19 @@ public sealed class SaveForPreviousToolsTests : IDisposable
 
         Assert.False(answer["ok"]!.GetValue<bool>());
         Assert.Equal("targetNotReached", answer["files"]![0]!["errorKind"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_labview_error_is_a_failed_row_with_the_version_the_file_still_has()
+    {
+        var vi = Vi("A.vi");
+
+        var answer = Run(Tool(error: "LabVIEW error 1: x"), vi, "20.0");
+
+        var row = answer["files"]![0]!;
+        Assert.Equal("saveFailed", row["errorKind"]!.GetValue<string>());
+        Assert.Equal("26.0", row["savedAs"]!.GetValue<string>());
+        Assert.False(answer["ok"]!.GetValue<bool>());
     }
 
     [Fact]

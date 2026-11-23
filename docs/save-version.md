@@ -15,7 +15,9 @@ served tool passes). Before a call, the version and write time of each LabVIEW f
 name are read; after it, every LabVIEW file named in the arguments or the ANSWER that was written
 during the call is read again - a file named before the call counts as written only when its write
 time changed (since 2026-11-13: with the 2 s margin alone, a call made within 2 s of an icon save
-was blamed for it), any other one when it was written after the call started, less 2 s. A file now saved newer than it was before, or newer than the version its project
+was blamed for it), any other one when it was written after the call started, less 2 s. A FOLDER
+the arguments name counts as naming the LabVIEW files under it, for their write times (since
+2026-11-23: a dryRun over a folder, a second after another call saved its files, was blamed for them). A file now saved newer than it was before, or newer than the version its project
 pins, is reported:
 
 ```json
@@ -189,7 +191,8 @@ The route of §6 as a tool. `paths` names files or folders (every `.vi .ctl .vim
 folder); the target is `targetVersion` (`20.0`, `20` or `2020`) or, per file, the pin `saveVersionCheck`
 uses: a project listing the file or its owner (`pinFrom: listed`), else the pin every project above it
 agrees on (`pinFrom: folder`). A file at or below its target, or with no pin, is not touched. Each file
-is saved IN PLACE by LabVIEW's `SaveForPrevious(path, version)` over ActiveX, `.ctl` files first, and
+is saved IN PLACE by a helper VI (`scripts/lvai_save_for_previous.xml`: Open VI Reference ->
+`{LV.VI}` `Save.For Previous` -> Close Reference, the probe of §6), `.ctl` files first, and
 read back from disk: a save LabVIEW answered without error but that left the file newer is
 `targetNotReached`, and `ok` is false. `dryRun` lists what would be saved. `saveVersionCheck`'s warning
 names the tool since the same day; it used to advise "re-save them through the project that pins
@@ -201,6 +204,10 @@ What it gives up, and what is not measured:
   entry - name the folder;
 - measured with the project CLOSED. With it open, the default instance's open of a file the project
   holds is not measured; close the project first;
+- NOT the ActiveX method. `VI.SaveForPrevious(path, "20.0")` over ActiveX answered no error and
+  wrote **25.0** on LabVIEW 2026.3 (live check 2026-11-23: a VI and a typedef, twice; the read-back
+  answered `targetNotReached`). FINDINGS.md had recorded the same for "24.0" and "20.0" earlier. The
+  tool's first version used it; the Invoke Node with the same string writes 20.0 (§6);
 - `.lvclass`, `.lvlib` and `.lvproj` are XML and are not saved by it (`notAViOrCtl`);
 - a class member: LabVIEW 2026 asked for 24.0 or 20.0 wrote a 25 file for a class-linked VI
   (`experiments/aixml-without-grpc/FINDINGS.md`); the read-back reports that as `targetNotReached`.

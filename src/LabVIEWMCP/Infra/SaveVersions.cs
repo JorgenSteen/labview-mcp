@@ -192,7 +192,57 @@ internal static class SaveVersions
                 try { writeTimes[path] = File.GetLastWriteTimeUtc(path); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             }
+        // A FOLDER the arguments name: the write times of the LabVIEW files under it (no versions -
+        // reading every file would cost more than the check). Measured 2026-11-23: a dryRun of
+        // lvai_save_for_previous over a folder, one second after another call saved its files,
+        // was told it had saved them - the answer names the files, and with no write time read
+        // before the call only the 2 s margin judged them.
+        foreach (var folder in FoldersIn(arguments?.Select(a => a.Value) ?? []))
+            foreach (var path in FilesUnder(folder, MaxFiles - writeTimes.Count))
+            {
+                if (writeTimes.ContainsKey(path)) continue;
+                try { writeTimes[path] = File.GetLastWriteTimeUtc(path); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
         return new Before(started, versions, writeTimes);
+    }
+
+    /// <summary>Every rooted path to an existing FOLDER in these values, line by line.</summary>
+    internal static IEnumerable<string> FoldersIn(IEnumerable<JsonElement> values)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values)
+        {
+            if (value.ValueKind != JsonValueKind.String) continue;
+            foreach (var line in (value.GetString() ?? "").Split('\n'))
+            {
+                var t = line.Trim().Trim('"');
+                if (t.Length < 3 || t.Length > 400 || !Path.IsPathRooted(t)) continue;
+                try { if (Directory.Exists(t)) found.Add(Path.GetFullPath(t)); }
+                catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { }
+            }
+        }
+        return found;
+    }
+
+    private static IEnumerable<string> FilesUnder(string folder, int max)
+    {
+        if (max <= 0) yield break;
+        IEnumerable<string> all;
+        try { all = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+        var count = 0;
+        using var walk = all.GetEnumerator();
+        while (count < max)
+        {
+            try { if (!walk.MoveNext()) yield break; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+            var ext = Path.GetExtension(walk.Current);
+            if (!ResourceExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase) &&
+                !XmlExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase)) continue;
+            count++;
+            yield return Path.GetFullPath(walk.Current);
+        }
     }
 
     /// <summary>

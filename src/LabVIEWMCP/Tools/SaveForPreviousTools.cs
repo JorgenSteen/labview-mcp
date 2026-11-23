@@ -5,6 +5,7 @@
 using System.ComponentModel;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using LabVIEWMcp.Grpc;
 using LabVIEWMcp.Infra;
 using ModelContextProtocol.Server;
 
@@ -16,15 +17,23 @@ namespace LabVIEWMcp.Tools;
 /// own Save for Previous Version, in place, brings such a file back (§6, measured 2026-11-20 and
 /// 2026-11-23: a VI and a typedef `.ctl`, each to 20.0, one file per save; the project opened clean
 /// afterwards). This tool does that for every file named, newer than its target and nothing else.
+///
+/// THROUGH A VI SERVER HELPER, not ActiveX: the ActiveX method `VI.SaveForPrevious(path, "20.0")`
+/// answered no error and wrote 25.0 on LabVIEW 2026 (live check, 2026-11-23 - and FINDINGS.md had
+/// recorded the same for "24.0" and "20.0" earlier), while the Invoke Node `Save.For Previous`
+/// with the same string wrote 20.0. The read-back after each save catches a route that misses.
 /// </summary>
 [McpServerToolType]
-internal sealed class SaveForPreviousTools
+internal sealed class SaveForPreviousTools(LvaiConnection connection)
 {
+    /// <summary>The helper's AIXML in the scripts folder, without its extension.</summary>
+    internal const string Helper = "lvai_save_for_previous";
+
     /// <summary>More files than this in one call are refused: one save each, about a second apiece.</summary>
     internal const int MaxFiles = 300;
 
-    /// <summary>The save itself; a test replaces it and needs no LabVIEW.</summary>
-    internal Func<string, string, int, CancellationToken, Task>? SaveOverride { get; init; }
+    /// <summary>The save itself - null, or LabVIEW's error text; a test replaces it and needs no LabVIEW.</summary>
+    internal Func<string, string, int, CancellationToken, Task<string?>>? SaveOverride { get; init; }
 
     [McpServerTool(Name = "lvai_save_for_previous", Destructive = true, OpenWorld = true,
                    Title = "Save VIs back to the project's pinned LabVIEW version")]
@@ -66,6 +75,8 @@ internal sealed class SaveForPreviousTools
 
         var rows = new JsonArray();
         int saved = 0, failed = 0, skipped = 0, wouldSave = 0;
+        HousekeepingHelpers? helpers = null;
+        string? helperVi = null;
         foreach (var m in missing)
             rows.Add(new JsonObject { ["path"] = m.Path, ["action"] = "skipped", ["why"] = m.Why });
         skipped += missing.Count;
@@ -87,18 +98,36 @@ internal sealed class SaveForPreviousTools
             if (SaveVersions.Compare(was, goal) <= 0) { Skip(row, "atOrBelowTarget"); skipped++; continue; }
             if (dryRun) { row["action"] = "wouldSave"; wouldSave++; continue; }
 
-            try
+            string? error;
+            if (SaveOverride is { } save) error = await save(file, goal, timeoutSeconds, cancellationToken);
+            else
             {
-                if (SaveOverride is { } save) await save(file, goal, timeoutSeconds, cancellationToken);
-                else await LabViewCom.SaveForPreviousAsync(file, file, goal, timeoutSeconds, cancellationToken);
+                if (helperVi is null)
+                {
+                    helpers = new HousekeepingHelpers(connection);
+                    var (vi, _, failure) = await helpers.EnsureAsync(Helper, timeoutSeconds, cancellationToken);
+                    if (failure is not null) return failure;
+                    helperVi = vi!;
+                }
+                var (values, helperError) = await helpers!.RunAsync(helperVi, new Dictionary<string, string>
+                {
+                    ["vi path"] = file,
+                    ["save path"] = file,
+                    ["target version"] = goal,
+                }, timeoutSeconds, cancellationToken);
+                error = values is null
+                    ? $"The helper VI returned no values: {helperError ?? "no detail"}."
+                    : HousekeepingHelpers.Code(values, "error out") is { } code and not 0
+                        ? $"LabVIEW error {code}: {HousekeepingHelpers.Source(values, "error out")}"
+                        : null;
             }
-            catch (LabViewCom.ComException e)
+            if (error is not null)
             {
                 row["action"] = "failed";
-                row["errorKind"] = e.Kind;
-                row["error"] = e.Message;
+                row["errorKind"] = "saveFailed";
+                row["error"] = error;
+                row["savedAs"] = SaveVersions.Of(file);
                 failed++;
-                if (e.Kind is "labviewNotRunning" or "labviewAmbiguous") break;
                 continue;
             }
             var now = SaveVersions.Of(file);
