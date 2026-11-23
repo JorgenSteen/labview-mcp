@@ -166,8 +166,8 @@ Reference, with the project closed, in the default instance:
 
 LabVIEW 2026 then opened `Pin20.lvproj` with `projectBecameActive`, `execState 1` and no errors,
 nothing in memory modified, no dialog; the close answered `projectRewrite.changed: false`, and
-the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. No tool does this
-yet; it is the route if a pinned project's files must stay at the pin.
+the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. Since 2026-11-23
+`lvai_save_for_previous` does it (below); until then no tool did.
 
 **A dependency newer than the pin: one Save For Previous PER FILE (measured 2026-11-23).** This
 section said "one Save For Previous per file is the likely answer, unconfirmed". `Pin20.lvproj`
@@ -182,3 +182,25 @@ project closed:
   Previous` brought it to 20.0, to a new folder and in place, still a typedef with its type;
 - with both at 20.0 the project opened as before and its close answered `projectRewrite.changed:
   false`.
+
+## 7. `lvai_save_for_previous` (since 2026-11-23)
+
+The route of §6 as a tool. `paths` names files or folders (every `.vi .ctl .vim .vit .ctt` under a
+folder); the target is `targetVersion` (`20.0`, `20` or `2020`) or, per file, the pin `saveVersionCheck`
+uses: a project listing the file or its owner (`pinFrom: listed`), else the pin every project above it
+agrees on (`pinFrom: folder`). A file at or below its target, or with no pin, is not touched. Each file
+is saved IN PLACE by LabVIEW's `SaveForPrevious(path, version)` over ActiveX, `.ctl` files first, and
+read back from disk: a save LabVIEW answered without error but that left the file newer is
+`targetNotReached`, and `ok` is false. `dryRun` lists what would be saved. `saveVersionCheck`'s warning
+names the tool since the same day; it used to advise "re-save them through the project that pins
+the older version", which §5 had measured NOT to work.
+
+What it gives up, and what is not measured:
+
+- one file per save, as §6 measured: a subVI or typedef still newer than the target needs its own
+  entry - name the folder;
+- measured with the project CLOSED. With it open, the default instance's open of a file the project
+  holds is not measured; close the project first;
+- `.lvclass`, `.lvlib` and `.lvproj` are XML and are not saved by it (`notAViOrCtl`);
+- a class member: LabVIEW 2026 asked for 24.0 or 20.0 wrote a 25 file for a class-linked VI
+  (`experiments/aixml-without-grpc/FINDINGS.md`); the read-back reports that as `targetNotReached`.

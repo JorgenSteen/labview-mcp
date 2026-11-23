@@ -266,9 +266,10 @@ internal static class SaveVersions
             ["files"] = findings,
             ["warning"] = $"{findings.Count} file(s) were saved by this call in a NEWER LabVIEW version than " +
                           "they had, or than their project pins (NI.LV.All.SaveVersion) - see `files`. A LabVIEW " +
-                          $"older than {newest} cannot open them. Restore them from version control, or re-save " +
-                          "them through the project that pins the older version, before they reach the target " +
-                          "station.",
+                          $"older than {newest} cannot open them. lvai_save_for_previous saves them back to the pin in " +
+                          "place (close the project first), or restore them from version control - before they " +
+                          "reach the target station. A save through the pinned project does NOT keep the pin " +
+                          "(docs/save-version.md §5).",
         };
     }
 

@@ -277,6 +277,20 @@ internal static class LabViewCom
             return Get(vi, "FPWinOpen") is true;
         }), timeoutSeconds, ct);
 
+    /// <summary>
+    /// LabVIEW's own Save for Previous Version of one VI or `.ctl` (`{LV.VI}` `Save.For Previous`,
+    /// over ActiveX `SaveForPrevious(path, version)`), to <paramref name="savePath"/> - its own path
+    /// saves it in place. Measured 2026-11-20/23 (docs/save-version.md §6): a 26.0 VI or typedef
+    /// saved for "20.0" reads 20.0 afterwards, one file per call - its dependencies are NOT written.
+    /// </summary>
+    public static Task<bool> SaveForPreviousAsync(string path, string savePath, string version,
+                                                  int timeoutSeconds, CancellationToken ct) =>
+        WithLabViewAsync(app => WithVi(app, path, vi =>
+        {
+            Call(vi, "SaveForPrevious", Path.GetFullPath(savePath), version);
+            return true;
+        }), timeoutSeconds, ct);
+
     /// <summary>A VI's Execution State: 0 eBad, 1 eIdle, 2 eRunTopLevel, 3 eRunning.</summary>
     public static Task<int> ExecStateAsync(string viPath, int timeoutSeconds, CancellationToken ct) =>
         WithLabViewAsync(app => WithVi(app, viPath, vi => Convert.ToInt32(Get(vi, "ExecState"),
