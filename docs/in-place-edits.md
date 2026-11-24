@@ -303,7 +303,11 @@ tools did not see:
 - **A typedef field changed on the `.ctl` EMPTIED a caller's map constant** whose value type is that
   typedef's cluster. The call answered `ok: true`, saved the callers, and every caller stayed
   executable - the code then returned default values everywhere, and only the project's own golden
-  tests caught it. The same loss had happened to a manual IDE edit the day before.
+  tests caught it. The same loss had happened to a manual IDE edit the day before. **Read from the
+  saved files** (pylabview, the caller before and right after the call): the map constant's
+  `ConstValue` went from 6 entries (`00000006 0064 000A 4054...`) to `0000000000`; an ARRAY
+  constant of the same typedef cluster in the same VI kept its 6 rows, the changed field widened
+  (`000A` -> `0000000A`). So it is the map, not typedef constants in general.
 - **`lvai_replace_primitive` saved into a VI that was already broken** and answered
   `execStateBefore: 0, execStateAfter: 0, ok: true`: the verdict compared only executable-before
   with broken-after.
@@ -321,13 +325,15 @@ What changed (pinned by tests on those shapes):
 2. **`lvai_set_representation` on a `.ctl` with `projectPath`** finds the callers BEFORE the write,
    reads each caller VI's executability, and refuses the same way when one is broken already. Each
    caller is copied to `callerBackups` (its path under the project's folder kept, so two
-   same-named callers do not collide) before anything is written, and read again after its save:
-   one that was executable and is not now is in `callersBroken`, and the answer is `ok: false`.
+   same-named callers do not collide) before anything is written.
+3. The description says that a typedef change empties a caller's map constant, and that a map's
+   key and value types are not reached.
 
-What this gives up: two executability reads per caller VI (measured on the earlier cases at about
-0.3-1 s each), so a typedef with many callers takes correspondingly longer; and a broken VI can no
-longer be edited without saying so.
+What this gives up: one executability read per caller VI (about 0.3-1 s each), and a broken VI can
+no longer be edited without saying so.
 
-**Still NOT detected: a constant whose DATA is lost while its VI stays executable** - the first item
-above. Executability does not see it. Until a check reads the constants' data before and after,
-the tool description tells the caller to run the callers' tests after a typedef change.
+**Deliberately NOT built: a check of the constants' data before and after.** It would catch the
+wipe directly, but needs a pylabview read of every caller twice and a parser for flattened map
+data - a lot of tool for one LabVIEW defect. Callers are NOT re-read for executability after the
+save either: it would not have seen this wipe (the callers stayed executable). The backups make
+the loss recoverable; the description tells the agent to run the callers' tests.

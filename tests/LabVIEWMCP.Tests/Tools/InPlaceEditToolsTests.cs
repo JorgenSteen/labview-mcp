@@ -347,21 +347,6 @@ public class InPlaceEditToolsTests
     }
 
     [Fact]
-    public void Only_a_file_executable_before_and_broken_after_counts_as_broken_by_the_edit()
-    {
-        var rows = InPlaceEditTools.BrokenByEdit(
-        [
-            new(@"C:\p\broke.vi", Reading(1), Reading(0, ("Wire", "loose"))),
-            new(@"C:\p\was.vi", Reading(0), Reading(0)),
-            new(@"C:\p\fine.vi", Reading(1), Reading(1)),
-            new(@"C:\p\unread.vi", Reading(1), null),
-        ])!;
-
-        Assert.Equal(@"C:\p\broke.vi", Assert.Single(rows)!["path"]!.GetValue<string>());
-        Assert.Null(InPlaceEditTools.BrokenByEdit([new(@"C:\p\fine.vi", Reading(1), Reading(1))]));
-    }
-
-    [Fact]
     public void Callers_are_backed_up_by_their_path_under_the_project_in_one_folder()
     {
         var root = Path.Combine(Path.GetTempPath(), "LabVIEWMCP-test-" + Path.GetRandomFileName());

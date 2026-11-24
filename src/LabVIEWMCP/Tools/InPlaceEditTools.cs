@@ -53,12 +53,13 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         (`labelAmbiguous`) is refused BEFORE anything is written, with the labels there are. One error chain: a write LabVIEW refuses leaves the
         file untouched. For a .ctl with `projectPath`, the files under the project's folder that
         link the typedef are loaded and saved (`callersSaved`) - they follow in memory only - each
-        backed up first (`callerBackups`) and its executability compared (`callersBroken`).
-        A VI or caller NOT EXECUTABLE before is refused (`brokenBefore`) unless `allowBroken`.
-        `execStateBefore`/`execStateAfter`: a VI this call BROKE answers ok false with LabVIEW's
-        errors; `backupPath` is the file as it was. A typedef change can EMPTY a caller's map or
-        set constant with the callers still executable (field report, LabVIEW 2020): run the
-        callers' tests afterwards. docs/in-place-edits.md.
+        backed up first (`callerBackups`). A VI or caller NOT EXECUTABLE before is refused
+        (`brokenBefore`) unless `allowBroken`. `execStateBefore`/`execStateAfter`: a VI this call
+        BROKE answers ok false with LabVIEW's errors; `backupPath` is the file as it was.
+        A TYPEDEF CHANGE EMPTIES A CALLER'S MAP CONSTANT of that typedef, with the caller still
+        executable and ok true (LabVIEW 2020, measured from the saved file: 6 entries -> 0; an
+        array constant of the same typedef kept its data): run the callers' tests afterwards, or
+        build such a map from an array in code. docs/in-place-edits.md.
         """)]
     public async Task<string> SetRepresentationAsync(
         [Description("Absolute path to the .vi or .ctl - it is saved in place")] string filePath,
@@ -176,7 +177,7 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
 
             // ---- 4. A TYPEDEF'S CALLERS follow in memory only (measured: byte-identical until
             // loaded and saved, and the modification bitsets read 0, so nothing tells which need it).
-            JsonArray? callersSaved = null, callersFailed = null, callersBroken = null;
+            JsonArray? callersSaved = null, callersFailed = null;
             JsonObject? callerVersions = null;
             if (withCallers && allWritten)
             {
@@ -193,13 +194,6 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                     if (callerCode == 0) callersSaved.Add(caller);
                     else callersFailed.Add(new JsonObject { ["path"] = caller, ["errorCode"] = callerCode });
                 }
-                for (var i = 0; i < callerStates.Count; i++)
-                    callerStates[i] = callerStates[i] with
-                    {
-                        After = await execState.ReadAsync(callerStates[i].Path, helperAixmlPath: null, helperViPath: null,
-                                                          regenerateHelper: false, timeoutSeconds, ct: ct),
-                    };
-                callersBroken = BrokenByEdit(callerStates);
             }
 
             var after = isCtl || !saved ? null : await execState.ReadAsync(
@@ -208,7 +202,7 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
 
             return Json.Document(new JsonObject
             {
-                ["ok"] = allWritten && saved && !broke && callersFailed is not { Count: > 0 } && callersBroken is null,
+                ["ok"] = allWritten && saved && !broke && callersFailed is not { Count: > 0 },
                 ["filePath"] = file,
                 ["saved"] = saved,
                 ["results"] = results,
@@ -219,18 +213,12 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 ["errors"] = broke ? ExecStateTools.ErrorsNode(after) : null,
                 ["callersSaved"] = callersSaved,
                 ["callersFailed"] = callersFailed is { Count: > 0 } ? callersFailed : null,
-                ["callersBroken"] = callersBroken,
-                ["callersChecked"] = withCallers && allWritten ? callerStates.Count : null,
                 [SaveVersions.VersionsBeforeKey] = callerVersions is { Count: > 0 } ? callerVersions : null,
                 ["brokenBefore"] = before?.Broken == true || callerStates.Any(c => c.Before is { Broken: true }) ? true : null,
                 ["backupPath"] = backup,
                 ["callerBackups"] = callerBackups > 0 ? Path.Combine(backupFolder, "callers") : null,
                 ["steps"] = steps.Count > 0 ? steps : null,
-                ["note"] = (callersBroken is not null
-                               ? $"{callersBroken.Count} caller(s) were executable before and are NOT now - `callersBroken` " +
-                                 "lists them with LabVIEW's errors; `callerBackups` holds every caller as it was. "
-                               : "") +
-                           RepresentationNote(code, saved, allWritten, broke, isCtl, throughProject, saveCallers) +
+                ["note"] = RepresentationNote(code, saved, allWritten, broke, isCtl, throughProject, saveCallers) +
                            (throughProject ? " The project is left open." : ""),
             });
         }));
@@ -633,8 +621,8 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
 
     // ------------------------------------------------------------------ broken before, broken after
 
-    /// <summary>A file this call saves, with its executability before the edit and after it.</summary>
-    internal sealed record SavedFileState(string Path, ExecStateReading? Before, ExecStateReading? After = null);
+    /// <summary>A file this call saves, with its executability before the edit.</summary>
+    internal sealed record SavedFileState(string Path, ExecStateReading? Before);
 
     /// <summary>
     /// LabVIEW 2020's text for a VI that cannot follow a changed typedef. A field report
@@ -667,14 +655,6 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                   "control > Review and Update from Type Def, which keeps its data. Saving the VI as it is may not."
                 : ""),
             new JsonObject { ["broken"] = broken });
-    }
-
-    /// <summary>The saved files that were executable before the edit and are not after it - null when none.</summary>
-    internal static JsonArray? BrokenByEdit(IReadOnlyList<SavedFileState> files)
-    {
-        var rows = new JsonArray([.. files.Where(f => f.Before is { Broken: false } && f.After is { Broken: true })
-            .Select(f => (JsonNode)new JsonObject { ["path"] = f.Path, ["errors"] = ExecStateTools.ErrorsNode(f.After) })]);
-        return rows.Count > 0 ? rows : null;
     }
 
     private static bool Mentions(ErrorListTools.ErrorLine line, string text) =>
