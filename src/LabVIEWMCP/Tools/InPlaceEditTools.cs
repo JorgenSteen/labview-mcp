@@ -286,7 +286,10 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         : isCtl && !saveCallers
             ? "The typedef is saved. Its callers were NOT saved (saveCallers false): each is unchanged on " +
               "disk until it is loaded and saved."
-        : "Written and read back, from LabVIEW and from the saved file. A sink that still has the old type " +
+        : (isCtl ? "A MAP constant of this typedef in a caller is EMPTIED by the change while the caller stays " +
+                   "executable (measured on LabVIEW 2020; arrays keep their data): run the callers' tests, and " +
+                   "restore a caller from callerBackups if one lost data. " : "") +
+          "Written and read back, from LabVIEW and from the saved file. A sink that still has the old type " +
           "shows a coercion dot now (lvai_coercion_dots); widen it with another call, or replace the " +
           "conversion in front of it with lvai_replace_primitive.";
 
@@ -519,6 +522,9 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                       "LabVIEW's list. Nothing was rolled back; backupPath is the file as it was."
                 : !verified
                     ? "Saved, but a fresh listing does not show the counts asked for - compare fromAfter and toAfter."
+                : before?.Broken == true
+                    ? "Replaced and saved; a fresh listing of the saved VI shows the new counts." +
+                      (throughProject ? " The project is left open." : "")
                 : "Replaced and saved; a fresh listing of the saved VI shows the new counts and the VI is as " +
                   "executable as before. Where the new primitive has a terminal the old one lacked, it is " +
                   "unwired; where its output type differs, the sink shows a coercion dot (lvai_coercion_dots)." +

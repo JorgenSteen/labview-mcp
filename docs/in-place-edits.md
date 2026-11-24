@@ -332,6 +332,20 @@ What changed (pinned by tests on those shapes):
 What this gives up: one executability read per caller VI (about 0.3-1 s each), and a broken VI can
 no longer be edited without saying so.
 
+Live check of the branch build (LabVIEW 2020, 2026-11-24, copies of the field project):
+
+| case | result |
+|---|---|
+| the commit that loaded broken in the morning | loads EXECUTABLE now (state 1, no linker errors) - the morning's break was LabVIEW's state, not the files |
+| a VI broken on purpose (`To Long Integer` -> `Add`), then another replace | `brokenBefore` with LabVIEW's error, file unchanged (md5 and mtime), 0.5 s |
+| the same with `allowBroken` | saved, `brokenBefore: true`, `execStateBefore/After` 0/0, errors listed |
+| the typedef field U16 -> I32 with `projectPath` | ok, the same 4 callers saved, each in `callerBackups` at its project-relative path and byte-identical to the caller before the call |
+| the map constant after it (pylabview) | emptied again: `000000060064000A...` -> `0000000000`; the array constant beside it kept 6 rows, widened |
+| `lvai_vis_in_memory` | `labview: {release 2020, bits 32, pid, chosenBy running}` |
+
+The live run showed the map warning only in the description; the success note of a typedef change
+now says it too.
+
 **Deliberately NOT built: a check of the constants' data before and after.** It would catch the
 wipe directly, but needs a pylabview read of every caller twice and a parser for flattened map
 data - a lot of tool for one LabVIEW defect. Callers are NOT re-read for executability after the
