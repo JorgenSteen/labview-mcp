@@ -293,3 +293,41 @@ the tool reads each caller's version before it saves it and hands it to the chec
 Closing that unpinned 20.0 project in 2026 rewrote the `.lvproj` as 26.0 (`projectRewrite`,
 `docs/save-version.md` §3). Wall clock: a VI about 1 s, a typedef with callers 4-7 s, a replace
 0.5 s.
+
+## 8. A field report: broken before, and a map constant emptied (LabVIEW 2020, 2026-11-24)
+
+A maintenance edit of existing code on LabVIEW 2020 32-bit (U16 -> I32 conversions and indicators,
+seven `lvai_replace_primitive` and four `lvai_set_representation` calls) reported three things the
+tools did not see:
+
+- **A typedef field changed on the `.ctl` EMPTIED a caller's map constant** whose value type is that
+  typedef's cluster. The call answered `ok: true`, saved the callers, and every caller stayed
+  executable - the code then returned default values everywhere, and only the project's own golden
+  tests caught it. The same loss had happened to a manual IDE edit the day before.
+- **`lvai_replace_primitive` saved into a VI that was already broken** and answered
+  `execStateBefore: 0, execStateAfter: 0, ok: true`: the verdict compared only executable-before
+  with broken-after.
+- The broken state there was LabVIEW 2020's "LabVIEW cannot update from type definition without
+  incorrectly preserving default values", on a VI whose callers all broke with it. The IDE's
+  right-click > **Review and Update from Type Def** repaired it and kept the data. The cause was not
+  found; whether it is the load-time form of the first item is not measured.
+
+What changed (pinned by tests on those shapes):
+
+1. **Both tools refuse a VI that is NOT EXECUTABLE before the call** (`brokenBefore`, with
+   LabVIEW's errors per file; nothing written, no backup made) unless `allowBroken` is true. With
+   `allowBroken` the answer carries `brokenBefore: true` and the errors after the edit. When an
+   error is the "update from type definition" text, the refusal names the IDE command.
+2. **`lvai_set_representation` on a `.ctl` with `projectPath`** finds the callers BEFORE the write,
+   reads each caller VI's executability, and refuses the same way when one is broken already. Each
+   caller is copied to `callerBackups` (its path under the project's folder kept, so two
+   same-named callers do not collide) before anything is written, and read again after its save:
+   one that was executable and is not now is in `callersBroken`, and the answer is `ok: false`.
+
+What this gives up: two executability reads per caller VI (measured on the earlier cases at about
+0.3-1 s each), so a typedef with many callers takes correspondingly longer; and a broken VI can no
+longer be edited without saying so.
+
+**Still NOT detected: a constant whose DATA is lost while its VI stays executable** - the first item
+above. Executability does not see it. Until a check reads the constants' data before and after,
+the tool description tells the caller to run the callers' tests after a typedef change.
