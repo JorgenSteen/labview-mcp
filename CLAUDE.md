@@ -593,7 +593,7 @@ in history (a force push is the user's call), and the text is neutralised from t
 | Test a branch build against LabVIEW before a client restart | `scripts/mcp_drive.py` (its header) | `python -I scripts/mcp_drive.py <exe> <calls.json> [<private TEMP>]` |
 | Station check; crashes | `docs/aixml-backends.md`, `docs/labview-crash-signatures.md` | `pylv_status` (`labviewHealth`, `grpcService`), `lvai_status` |
 | Releases and versions | `docs/release-versioning.md` | `LabVIEWMCP --version` |
-| Files for an older LabVIEW: a project's pinned save version; vi.lib links the target lacks | `docs/save-version.md` | `saveVersionCheck` on every answer, `lvai_describe_project`, `lvai_check_links` |
+| Files for an older LabVIEW: a project's pinned save version; vi.lib links the target lacks | `docs/save-version.md` | `saveVersionCheck` on every answer, `lvai_save_for_previous`, `lvai_describe_project`, `lvai_check_links` |
 
 The served documents are embedded in the assembly and byte-verified on every build; all of `docs\`
 is copied beside the exe as well.

@@ -192,7 +192,57 @@ internal static class SaveVersions
                 try { writeTimes[path] = File.GetLastWriteTimeUtc(path); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
             }
+        // A FOLDER the arguments name: the write times of the LabVIEW files under it (no versions -
+        // reading every file would cost more than the check). Measured 2026-11-23: a dryRun of
+        // lvai_save_for_previous over a folder, one second after another call saved its files,
+        // was told it had saved them - the answer names the files, and with no write time read
+        // before the call only the 2 s margin judged them.
+        foreach (var folder in FoldersIn(arguments?.Select(a => a.Value) ?? []))
+            foreach (var path in FilesUnder(folder, MaxFiles - writeTimes.Count))
+            {
+                if (writeTimes.ContainsKey(path)) continue;
+                try { writeTimes[path] = File.GetLastWriteTimeUtc(path); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
         return new Before(started, versions, writeTimes);
+    }
+
+    /// <summary>Every rooted path to an existing FOLDER in these values, line by line.</summary>
+    internal static IEnumerable<string> FoldersIn(IEnumerable<JsonElement> values)
+    {
+        var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var value in values)
+        {
+            if (value.ValueKind != JsonValueKind.String) continue;
+            foreach (var line in (value.GetString() ?? "").Split('\n'))
+            {
+                var t = line.Trim().Trim('"');
+                if (t.Length < 3 || t.Length > 400 || !Path.IsPathRooted(t)) continue;
+                try { if (Directory.Exists(t)) found.Add(Path.GetFullPath(t)); }
+                catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { }
+            }
+        }
+        return found;
+    }
+
+    private static IEnumerable<string> FilesUnder(string folder, int max)
+    {
+        if (max <= 0) yield break;
+        IEnumerable<string> all;
+        try { all = Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+        var count = 0;
+        using var walk = all.GetEnumerator();
+        while (count < max)
+        {
+            try { if (!walk.MoveNext()) yield break; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { yield break; }
+            var ext = Path.GetExtension(walk.Current);
+            if (!ResourceExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase) &&
+                !XmlExtensions.Contains(ext, StringComparer.OrdinalIgnoreCase)) continue;
+            count++;
+            yield return Path.GetFullPath(walk.Current);
+        }
     }
 
     /// <summary>
@@ -206,6 +256,13 @@ internal static class SaveVersions
         foreach (var path in PathsIn(arguments?.Select(a => a.Value) ?? [])) candidates.Add(path);
         foreach (var path in PathsIn(answer)) candidates.Add(path);
         if (candidates.Count is 0 or > MaxFiles) return null;
+
+        // A COLLECTED answer (ResumableCall.JobStartedUtcKey): the job wrote its files before this
+        // call began, so what this call read "before" was read AFTER the writes - its write times
+        // and versions say nothing. Such files are judged by the job's start and the pin alone.
+        var jobStart = ResumableCall.JobStartedUtc(answer);
+        var collected = jobStart is { } js && js < before.StartedUtc;
+        var since = collected ? jobStart!.Value : before.StartedUtc;
 
         var findings = new JsonArray();
         foreach (var path in candidates.Order(StringComparer.OrdinalIgnoreCase))
@@ -223,18 +280,18 @@ internal static class SaveVersions
             // lvai_add_vis_to_project and a lvai_running_vi signal, run within 2 s of
             // lvai_set_vi_icon, each answered "saved by this call" for the VI the icon call had
             // saved. The margin now applies only to files the call did not name before it ran.
-            if (before.WriteTimes is { } times && times.TryGetValue(path, out var then))
+            if (!collected && before.WriteTimes is { } times && times.TryGetValue(path, out var then))
             {
                 if (written == then) continue;
             }
-            else if (written < before.StartedUtc.AddSeconds(-2)) continue;
+            else if (written < since.AddSeconds(-2)) continue;
             if (Of(path) is not { } now) continue;
 
             // A FILE THE CALL SAVED WITHOUT NAMING IT - a typedef's callers - has no version read
             // before the call; the tool that saved it hands that version over in the answer
             // (VersionsBeforeKey). Measured 2026-11-23: lvai_set_representation re-saved a 20.0
             // caller of a typedef as 26.0 and saveVersionCheck named only the .ctl.
-            var was = before.Versions.GetValueOrDefault(path) ?? HandedOver(answer, path);
+            var was = (collected ? null : before.Versions.GetValueOrDefault(path)) ?? HandedOver(answer, path);
             // NOT LISTED YET IS NOT "NO PIN": the composer wrote a new VI at the pin of the project
             // in the folders above it (PinAbove), so the check judges it by the same rule. Measured
             // 2026-11-13: a VI generated into a 21.0 project's folder and given its icon BEFORE it was
@@ -266,9 +323,10 @@ internal static class SaveVersions
             ["files"] = findings,
             ["warning"] = $"{findings.Count} file(s) were saved by this call in a NEWER LabVIEW version than " +
                           "they had, or than their project pins (NI.LV.All.SaveVersion) - see `files`. A LabVIEW " +
-                          $"older than {newest} cannot open them. Restore them from version control, or re-save " +
-                          "them through the project that pins the older version, before they reach the target " +
-                          "station.",
+                          $"older than {newest} cannot open them. lvai_save_for_previous saves them back to the pin in " +
+                          "place (close the project first), or restore them from version control - before they " +
+                          "reach the target station. A save through the pinned project does NOT keep the pin " +
+                          "(docs/save-version.md §5).",
         };
     }
 

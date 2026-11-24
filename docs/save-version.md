@@ -15,7 +15,11 @@ served tool passes). Before a call, the version and write time of each LabVIEW f
 name are read; after it, every LabVIEW file named in the arguments or the ANSWER that was written
 during the call is read again - a file named before the call counts as written only when its write
 time changed (since 2026-11-13: with the 2 s margin alone, a call made within 2 s of an icon save
-was blamed for it), any other one when it was written after the call started, less 2 s. A file now saved newer than it was before, or newer than the version its project
+was blamed for it), any other one when it was written after the call started, less 2 s. A FOLDER
+the arguments name counts as naming the LabVIEW files under it, for their write times (since
+2026-11-23: a dryRun over a folder, a second after another call saved its files, was blamed for them).
+A COLLECTED answer (`jobStartedUtc`, a job that answered `stillRunning` first) is judged from the
+job's start and the pin alone: the collecting call read its "before" after the job's writes. A file now saved newer than it was before, or newer than the version its project
 pins, is reported:
 
 ```json
@@ -166,8 +170,8 @@ Reference, with the project closed, in the default instance:
 
 LabVIEW 2026 then opened `Pin20.lvproj` with `projectBecameActive`, `execState 1` and no errors,
 nothing in memory modified, no dialog; the close answered `projectRewrite.changed: false`, and
-the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. No tool does this
-yet; it is the route if a pinned project's files must stay at the pin.
+the VI still read 20.0 afterwards. So a tool's 26.0 save can be undone per VI. Since 2026-11-23
+`lvai_save_for_previous` does it (below); until then no tool did.
 
 **A dependency newer than the pin: one Save For Previous PER FILE (measured 2026-11-23).** This
 section said "one Save For Previous per file is the likely answer, unconfirmed". `Pin20.lvproj`
@@ -182,3 +186,33 @@ project closed:
   Previous` brought it to 20.0, to a new folder and in place, still a typedef with its type;
 - with both at 20.0 the project opened as before and its close answered `projectRewrite.changed:
   false`.
+
+## 7. `lvai_save_for_previous` (since 2026-11-23)
+
+The route of §6 as a tool. `paths` names files or folders (every `.vi .ctl .vim .vit .ctt` under a
+folder); the target is `targetVersion` (`20.0`, `20` or `2020`) or, per file, the pin `saveVersionCheck`
+uses: a project listing the file or its owner (`pinFrom: listed`), else the pin every project above it
+agrees on (`pinFrom: folder`). A file at or below its target, or with no pin, is not touched. Each file
+is saved IN PLACE by a helper VI (`scripts/lvai_save_for_previous.xml`: Open VI Reference ->
+`{LV.VI}` `Save.For Previous` -> Close Reference, the probe of §6), `.ctl` files first, and
+read back from disk: a save LabVIEW answered without error but that left the file newer is
+`targetNotReached`, and `ok` is false. `dryRun` lists what would be saved. `saveVersionCheck`'s warning
+names the tool since the same day; it used to advise "re-save them through the project that pins
+the older version", which §5 had measured NOT to work.
+
+What it gives up, and what is not measured:
+
+- one file per save, as §6 measured: a subVI or typedef still newer than the target needs its own
+  entry - name the folder;
+- measured with the project CLOSED. With it open, the default instance's open of a file the project
+  holds is not measured; close the project first;
+- NOT the ActiveX method. `VI.SaveForPrevious(path, "20.0")` over ActiveX answered no error and
+  wrote **25.0** on LabVIEW 2026.3 (live check 2026-11-23: a VI and a typedef, twice; the read-back
+  answered `targetNotReached`). FINDINGS.md had recorded the same for "24.0" and "20.0" earlier. The
+  tool's first version used it; the Invoke Node with the same string writes 20.0 (§6);
+- `.lvclass`, `.lvlib` and `.lvproj` are XML and are not saved by it (`notAViOrCtl`). Live
+  2026-11-23: a class member VI went 26.0 -> 20.0 and stayed executable, but its `.lvclass` kept
+  `LVVersion="26008000"`; whether LabVIEW 2020 opens that class file is not measured;
+- a class member: FINDINGS.md's 25.0 for a class-linked VI was the ActiveX route; through the
+  helper a dynamic-dispatch member reached 20.0 (live 2026-11-23). A miss would read back as
+  `targetNotReached`.
