@@ -490,3 +490,36 @@ public class LabViewOwnershipTests
         Assert.Null(LabViewState.BlockingDialog(free));
     }
 }
+
+// FIELD REPORT 2026-11-24: lvai_vis_in_memory answered noActiveProject from an empty LabVIEW
+// 2026 started beside the user's 2020, which held the project - and named neither.
+public class VisInMemoryReachedTests
+{
+    private static LabViewContext Context(int major, int pid, string source) =>
+        LabViewContext.Build(null, null, pid, source) with { Major = major, Bits = 32 };
+
+    [Fact]
+    public void The_answer_names_the_LabVIEW_it_came_from()
+    {
+        var reached = LabViewStateTools.Reached(Context(26, 5176, "running"), running: 2);
+
+        Assert.Equal(2026, reached["release"]!.GetValue<int>());
+        Assert.Equal(5176, reached["pid"]!.GetValue<int>());
+        Assert.Equal("running", reached["chosenBy"]!.GetValue<string>());
+        Assert.Equal(2, reached["running"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void Several_running_warn_with_the_one_that_answered_and_one_does_not()
+    {
+        var two = LabViewStateTools.Reached(Context(26, 5176, "running"), running: 2);
+        var warning = LabViewStateTools.SeveralRunningWarning(two, running: 2)!;
+
+        Assert.Contains("LabVIEW 2026", warning);
+        Assert.Contains("pid 5176", warning);
+        Assert.Contains(LabViewContext.ExeSetting, warning);
+        Assert.Null(LabViewStateTools.SeveralRunningWarning(
+            LabViewStateTools.Reached(Context(20, 22536, "running"), running: 1), running: 1));
+        Assert.Null(LabViewStateTools.Reached(Context(20, 22536, "running"), running: 1)["running"]);
+    }
+}

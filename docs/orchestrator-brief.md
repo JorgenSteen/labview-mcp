@@ -11,7 +11,7 @@ Do not build VIs, classes or tests in your own session. Hand each piece to the m
 |---|---|
 | a new VI | `labview-vi-generator` |
 | implement a SUPPLIED VI whose front panel must be kept (exam template) | `labview-vi-generator` - pass the supplied VI; it grafts the diagram into it |
-| change an existing VI, or tidy its diagram | `labview-vi-editor` |
+| change an existing VI (types, primitives in place: not the user's IDE), or tidy it | `labview-vi-editor` |
 | a class, class hierarchy, interface or library (`.lvlib`) | `labview-class-generator` |
 | unit tests | `labview-caraya-unit-test` |
 | LUnit or VI Tester tests - ONLY when the user names that framework | `labview-lunit-unit-test` / `labview-vitester-unit-test` |
