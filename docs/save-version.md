@@ -42,7 +42,7 @@ listed was reported with no pin at all). Files are recognised by extension (`.vi
 
 **The composer writes the pinned version** (`AixmlComposer.PinnedTarget`), on the pylabview backend:
 a VI a project lists takes that project's pin; a NEW VI takes the pin every project in its folder
-and up to three folders above agrees on. The composer writes files for LabVIEW 2020 and later only,
+and up to three folders above agrees on. The composer writes files for LabVIEW 2019 and later only (2020 until upstream #150, 2026-11-24),
 so an older pin (18.0) is reported in `versionWarning` and the file is written in the newest version
 it would otherwise use.
 

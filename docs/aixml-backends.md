@@ -94,7 +94,7 @@ grpc route is no route: use pylabview, or a LabVIEW 2026.
 **AND THE COMPOSER WRITES FOR SUCH A LabVIEW AS THAT RELEASE - since the same evening, after the
 user's LabVIEW 2025 station refused every composed VI with `Error 1125, File version is later
 than the current LabVIEW version`.** The server passes `--lv-version <N>` for a LabVIEW in use
-older than the parts and not older than 2020 (`AixmlComposer.TargetRelease`); the composer then
+older than the parts and not older than 2019 (`AixmlComposer.TargetRelease`; 2020 until upstream #150 of 2026-11-24); the composer then
 rewrites, in the composed bundle only, `LVSR`'s and `vers`'s version and the version word a
 flattened variant starts with (`VITS`'s SourceOnly tag, variant constants), and pylabview writes
 that release's own records. A VI LabVIEW 2025 saved (`ArrayNoDups_String.vi`) carries exactly
@@ -104,7 +104,32 @@ of the connector pane's - LabVIEW 2026 let that pass on its own files and called
 with a pane `Another user tampered with the VI password` - and the 8 class-link bytes the
 pylabview patch wrote only from version 26 exist since version 20: composed as 20, 21, 23, 24 and
 25 files a class-calling VI loads and runs with them and is `Memory or data structure corrupt`
-without (19 fails either way). Composed helpers are cached per target release. Measured in
+without. (This said "19 fails either way" until 2026-11-23 - a reading of the 8-byte form; the
+later bracketing in `experiments/aixml-without-grpc/FINDINGS.md` already put the list's start at 20
+with 19 PASSING without it, and see below.) Composed helpers are cached per target release.
+
+**LabVIEW 2019 IS A TARGET TOO SINCE 2026-11-23** (issue #149). On a user's
+LabVIEW 2019 (19.0f2, 32-bit) station the default output was refused with Error 1125, and the
+same AIXML composed with `aixml2vi.py --lv-version 19 --labview-root <LabVIEW 2019>` loaded and ran
+there, and LabVIEW 2019 saved it itself: plain VIs, Case and Event Structures (timeout, Value
+Change, Panel Close?), While and For Loops with shift registers, Formula Node, subVI calls, and
+helper VIs that create and bind `.ctl` typedefs through VI Server. An application of six VIs built
+this way passed its unit and acceptance tests in 2019. VIs that USE CLASSES were not tried there.
+Here the class-tests suite - `t128_dynamic_class_call`, `t157_six_dynamic_calls`,
+`t162_ten_class_links` (dynamic dispatch, class constants, two classes, ten links) - composed as 19
+loaded and RAN with the expected values in LabVIEW 2026, pylabview writing the class links without
+the list that starts at 20 (`ComposerOlderReleaseTests`). And it matches what LabVIEW ITSELF
+writes for 2019: t162 saved by LabVIEW 2026's IDE dialog (File > Save for Previous Version > 2019)
+carries the same `LVSR`/`vers` 19.0, byte-identical `VITS` (`19 00 80 00`) and the same eleven
+block-diagram link records - one `IUVI`, eight `DyOM`, two `FPPI`, same contents, same offsets
+(`ComposerLv2019ReferenceTests`, the saved file its fixture). What differs is what LabVIEW 2025's
+reference showed and loads either way: LabVIEW drops the `VIVI` from LIvi, writes
+`APILinkLibVersion` 1.0.0.0, and leaves the tail byte uninitialised. **The ActiveX method
+`SaveForPrevious(path, version)` writes a 25 file for EVERY version string** - "19.0", "2019",
+"20.0", even "2019 SP1", no error - so the "LabVIEW 2026 saves back to 2025 only" below is a
+statement about that method, not the IDE. `TargetRelease` now starts at 2019, and the warning for
+2019 says that a class-using VI was not loaded in LabVIEW 2019 itself and that NI's gRPC service,
+which 2019 does not have, is no way out. Measured in
 LabVIEW 2026 only; a load in LabVIEW 2025 itself is the user's test. The text below records the
 WARNING stage before that, which was itself replacing a refusal.
 
@@ -133,7 +158,8 @@ things went wrong, each handled now:
   **no `VIPI` records in LIvi at all, no `DDPI`, a `DyOM`'s content is the method's 1-based place
   among the `DyOM`s**, and the 8 cache bytes carry a different fifth byte on every save (`00`,
   `10`, `40`, `58`, `70`, `80`, `a0`, `e0`, `f8` - uninitialised memory, not a field). Asked for
-  2024 or 2020 LabVIEW 2026 wrote the same 25 file. The composer writes that layout for any target
+  2024 or 2020 LabVIEW 2026 wrote the same 25 file - over ActiveX; its IDE dialog writes older
+  files (a 2019 one measured 2026-11-23, above). The composer writes that layout for any target
   below 26 since (`Composer.write_class_links`, the 8 bytes zero): t128, t157 and t162 composed as
   25 files load and run in LabVIEW 2026, and the minimal repro renders there - which the old layout
   did too. **Whether LabVIEW 2025 renders it is the user's test**: `C:\Temp\BR2probe\Tests\`
@@ -4137,3 +4163,86 @@ The three exports are the expected text of `ReaderIssue136Tests`.
 **The 144-VI comparison, rerun after all of this:** 135 exports identical to the old reader's
 except for the added `<?lvmcp linkcheck?>` line (77 of them carry one), and the same 9 real drift
 reports in the ATM build as before. No other difference.
+
+## Class property nodes (LVOOP properties): composed and run (2026-11-24, issue #153)
+
+A Property Node on a CLASS wire reads or writes a `Property Definition` of the class through the
+accessor VI listed in it (`lvai_create_accessors makeAvailableThroughPropertyNodes`,
+lvclass-creation.md). NI's exporter writes one as `type="{UDClassInst}"` with
+`fields="read+Name,read+Long Listing"` and never names the class; the reader drops the folder
+(`Name` for `Properties:Name`).
+
+**Authoring.** The composer takes the class from the wire into `reference` (a Call's class output,
+a class control), or from the node's own type, `type="{Motor.lvclass}"` /
+`type="{Lib.lvlib:Motor.lvclass}"` - a class CONSTANT wired into such a node then gets its class
+from it. A field is the property's name with or without its folder (`Flow` or
+`PropertiesAFlow`); a name in two folders, or one the class does not declare, is refused by
+name with the class's list. The value type is the accessor's own terminal.
+
+**Measured**: on the hand-made `Motor` class (lvclass-creation.md), a VI writing `Speed` and
+`Name` through one node and reading both back through a second returned 42.5 / `Pump A` and -3 /
+`x`; the same through `lvai_generate_vi` (layout, icon, executability) returned 12.5 /
+`after layout`; `Pump`'s `Properties:Flow` written 7.25 read 7.25; NI's `SFTP List Directory.vi`
+recomposed from the reader's export loads executable.
+
+**The type matrix, measured the same day** on a class `AllTypes` with 17 fields, all as LVOOP
+properties in the folder `Properties`: `string`, `path`, `bool`, `double`, `single`, `timestamp`,
+`int8`..`int64`, `uint8`..`uint64`, and typedefs of an enum (`uint16{Off,Run,Fault}`), a cluster
+(`{double.Min,double.Max,string.Unit}`) and an array (`array{double}`). One node writes all 17, a
+second reads all 17 back - every value came back exact, extremes included (I8 -128, I16 -32768,
+I32 -2147483648, I64 max, U32 4294967295, U64 18446744073709551615, -1e-300, empty string, path
+and array). Also measured:
+
+| case | result |
+|---|---|
+| `error in` set (code 5000) | no accessor runs, every output its default, the error passed through |
+| write and read in ONE node (`write+Dbl,read+Dbl,read+I32`) | rows run top to bottom - the read returns the value just written |
+| nodes inside a For Loop, the class on a shift register seeded by a class constant | N = 0, 5, 1000 counted exactly |
+| reader export of a composed VI recomposed (`{UDClassInst}`, the class from the wire) | runs as the original |
+| a CHILD class's wire reaching its parent's properties | written and read back; the row binds to the DECLARING class (PNOM, omid), the node to the wire's class |
+| a class inside a library, typed `{Lib153.lvlib\3ALibCls.lvclass}` or just `{LibCls.lvclass}` | both run; every link carries the library (read off `NI.Lib.ContainingLib`) |
+
+Two gaps those cases found, both fixed: a class constant reaching the node through a shift
+register or a tunnel did not find its class (refused by name), and a parent's property on a child
+wire was refused as "has no property".
+
+**What LabVIEW needs, measured by A/B on NI's `SFTP List Directory.vi`** (pylabview extract,
+one change, rebuild, `lvai_exec_state` on a fresh LabVIEW):
+
+| change to NI's file | result |
+|---|---|
+| none (round trip) | executable |
+| `PropItemCode` 14/12 -> `-1` | executable |
+| property name without its folder (`Name`) | executable |
+| both `PNOM` records (LIbd) removed | **eBad**, `VI has an error of type 200` |
+| `PNOM` content 3/4 -> 0, and the accessors' `VIVI` (LIvi) removed | executable |
+| ... and the `VICC` naming `File Attributes.ctl` removed too | executable |
+| ... plus a `VIPI` for the class in LIvi | executable |
+| ... with the composer's font table, diagram root `objFlags` and `InStBit4` | executable |
+| ... the two `udClassPropItemPrivInfo` uids (216, 265) renumbered | executable |
+
+So one `PNOM` per row binds it: the class's qualified name plus the accessor VI's name nested as
+`02 <length> <name>`, its cache list the propItem dco. NI writes its content as the accessor
+VIVI's LIvi index + 2 (3, 4); the composer writes a VIVI per accessor (its pane typed) and the
+plain index, as for DyOM.
+
+**THE ONE THAT KILLED LabVIEW: `oMId`.** The node's `oMId` is the CONSOLIDATED type index (hex)
+of the class refnum, unlabelled: `000D` in NI's SFTP file and `0004` in a three-node VI the user
+drew in LabVIEW 2026 by hand (class constant -> Property Node `Speed` -> indicator), both naming
+that refnum. The part kept the donor's `000D`, which in a composed VI named something else (the
+error cluster), and every composed VI died on load - `Insane PropItem(<uid>) in BDHP: {size }
+(0x1): owner=Property Node`, then `DAbort ... Fatal insanities`. Before the hand-made VI showed
+it, A/B on the composed side ruled out the class VIPI, short names, the rows' wires, where the
+node is defined (`zPlaneList` / `nodeList`) - and NI's own node transplanted into a composed VI
+died the same way, because its `000D` was just as wrong there. LabVIEW 2026 also writes
+`nodeName` as the class file name (`"Motor.lvclass"`, NI's older file `"File Attributes"`); the
+composer writes LabVIEW 2026's.
+
+The node is refused for an older LabVIEW (`--lv-version` below 26): not measured there.
+
+**Found on the way, and fixed:** `lvheap.Bundle._inline` dropped a type REFERENCE's own children,
+so a callee's Function slot lost its `<ThrallSources>` while the Function kept `HasThrall="13"`.
+A composed caller of a class method then made LabVIEW warn *"How could we have read more bytes
+than the size of the thrall map?"* (TDFunction.cpp). The slot's content now travels as
+`ref.ThrallSources` and is written back onto the slot (`REF_CONTENT`); the warning is gone.
+Changing lvheap invalidates every cached reader export (`staleRemoved` 976 at the next start).
