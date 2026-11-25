@@ -202,10 +202,10 @@ internal static class AixmlCheck
 
     /// <summary>
     /// A Property Node on a LabVIEW CLASS - <c>type="{UDClassInst}"</c>, NI's export spelling (17 of
-    /// NI's DQMH examples, `Module ID`). The pylabview composer, the default backend, refuses it:
-    /// LabVIEW builds such a node from the class's accessors marked "available through property
-    /// nodes", and no part for it is harvested (docs/aixml-backends.md, the census's "classes"
-    /// row). Each field IS one accessor call, so the working route is a <c>Call</c> of the accessor
+    /// NI's DQMH examples, `Module ID`). The pylabview composer, the default backend, composes it
+    /// for LabVIEW 2026 since upstream #154 (2026-11-24) and refuses it for an older LabVIEW (not
+    /// measured there); it refused it everywhere until then. Each field IS one accessor call, so the
+    /// route for an older LabVIEW is a <c>Call</c> of the accessor
     /// per field with the class and error wires chained through. A WARNING: NI's converter on grpc
     /// was never measured on it.
     /// </summary>
@@ -221,8 +221,9 @@ internal static class AixmlCheck
                 .Select(p => $"`<Class>.lvclass:{(p[0].Trim() == "write" ? "Write" : "Read")} {UnescapeAixml(p[1].Trim())}.vi`")
                 .ToList();
             findings.Add(new Finding(Severity.Warning, "classPropertyNodeNotComposable",
-                "A Property Node on a LabVIEW class ({UDClassInst}) is refused by the pylabview "
-                + "composer, the default backend. Call the class's accessor instead, one Call per field"
+                "A Property Node on a LabVIEW class ({UDClassInst}) is composed by the pylabview "
+                + "composer, the default backend, for LabVIEW 2026 only, and refused for an older "
+                + "LabVIEW. There, call the class's accessor instead, one Call per field"
                 + (calls.Count > 0 ? $" ({string.Join(", ", calls)} by NI's default naming)" : "")
                 + ", with the class wire and the error wire chained through them; "
                 + "lvai_describe_class lists the accessors the class really has.",

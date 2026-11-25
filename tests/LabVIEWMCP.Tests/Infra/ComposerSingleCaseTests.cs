@@ -419,28 +419,4 @@ public sealed class ComposerSingleCaseTests : IDisposable
 
         Assert.Contains("disabled index (col):", line);
     }
-
-    /// <summary>
-    /// A Property Node on a LabVIEW class ({UDClassInst}, 17 of NI's DQMH examples) is refused - no
-    /// part is harvested - but the refusal names the class off the wired refnum and the accessor
-    /// Call per field, where it said `class '{UDClassInst}' is not composable yet` (item H10).
-    /// </summary>
-    [Fact]
-    public async Task A_class_property_node_is_refused_naming_the_accessor_calls()
-    {
-        var got = await ComposeAsync("""
-            <VI _name="Probe.vi" description="x">
-              <Control _name="Module in" type="ref{UDClassInst}" uid="4201" uid_parent="root" value="" outputs="value:4201.value" />
-              <Indicator _name="ID" type="int32" uid="4300" uid_parent="root" value="0" inputs="value:4202.Module ID" />
-              <Node _name="Property Node" type="{UDClassInst}" fields="read+Module ID,write+Name" uid="4202" uid_parent="root" inputs="reference:4201.value" outputs="Module ID:4202.Module ID" />
-            </VI>
-            <?lvmcp classes uid="4201" names="Pump.lvlib:Pump.lvclass"?>
-            """);
-        if (got is not { } g) return;
-
-        Assert.False(g.Result.Written);
-        Assert.Contains("class Pump.lvlib:Pump.lvclass", g.Result.Message);
-        Assert.Contains("Pump.lvlib:Pump.lvclass:Read Module ID.vi", g.Result.Message);
-        Assert.Contains("Pump.lvlib:Pump.lvclass:Write Name.vi", g.Result.Message);
-    }
 }

@@ -1159,9 +1159,9 @@ def _is_class_node_type(cls: str) -> bool:
 
 def check_class_property_node(elements: list[_El]) -> list[Finding]:
     """A Property Node on a LabVIEW CLASS (type="{UDClassInst}", NI's export spelling) -
-    AixmlCheck.CheckClassPropertyNode. The pylabview composer, the default backend, refuses it
-    (no part harvested; 17 of NI's DQMH examples). Each field IS one accessor call, so the
-    route is a Call of the accessor per field. A WARNING: grpc was never measured on it."""
+    AixmlCheck.CheckClassPropertyNode. The pylabview composer, the default backend, composes it
+    for LabVIEW 2026 (upstream #154) and refuses it for an older LabVIEW. Each field IS one accessor
+    call, so the route there is a Call of the accessor per field. A WARNING: grpc was never measured on it."""
     findings: list[Finding] = []
     for e in elements:
         if e.tag != "Node" or e.name != "Property Node" or not _is_class_node_type(e.el.get("type") or ""):
@@ -1174,8 +1174,9 @@ def check_class_property_node(elements: list[_El]) -> list[Finding]:
                              % ("Write" if mode.strip() == "write" else "Read", unescape(name.strip())))
         findings.append(Finding(
             "warning", "class-property-node-not-composable", e.uid, e.label(), e.path,
-            "A Property Node on a LabVIEW class ({UDClassInst}) is refused by the pylabview composer, "
-            "the default backend. Call the class's accessor instead, one Call per field"
+            "A Property Node on a LabVIEW class ({UDClassInst}) is composed by the pylabview composer, "
+            "the default backend, for LabVIEW 2026 only, and refused for an older LabVIEW. There, "
+            "call the class's accessor instead, one Call per field"
             + (" (%s by NI's default naming)" % ", ".join(calls) if calls else "")
             + ", with the class wire and the error wire chained through them; lvai_describe_class "
             "lists the accessors the class really has."))

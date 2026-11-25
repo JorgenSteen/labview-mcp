@@ -3039,7 +3039,7 @@ its own, among the 41 broken free VIs above.
 | channel wires | about 70 | `no Stream-…/Tag-…/One Element Stream-….lvlib in the installation`: channel instance libraries LabVIEW generates per type, which the resolver does not look for (Channels, State Diagram) |
 | calls | about 45 | a terminal not on the callee's pane 29 (Express VIs, File IO); XNodes 12; a class not found 5 |
 | type inference | about 45 | a tunnel's type unknown 22, no typed wire reaches a tunnel 14, a Bundle/Unbundle cluster type unknown 8 |
-| classes | about 35 | a Property Node on a class (`{UDClassInst}`) 17 (DQMH - refused by name since 2026-11-15, naming the accessor `Call` per field: `lvai_check_aixml` `classPropertyNodeNotComposable`); a class constant not feeding a Call 7; a `LabVIEW Object` front-panel control 9 |
+| classes | about 35 | a Property Node on a class (`{UDClassInst}`) 17 (DQMH - composed for LabVIEW 2026 since upstream #154 of 2026-11-24, refused for an older LabVIEW; from 2026-11-15 it was refused everywhere, naming the accessor `Call` per field: `lvai_check_aixml` `classPropertyNodeNotComposable`); a class constant not feeding a Call 7; a `LabVIEW Object` front-panel control 9 |
 | VI Server parts | about 30 | XY Graph properties 11, invoke methods 8, VISA property node 6, String properties 2 |
 | other | about 205 | unit-typed numerics (`UnitFloat64`, Malleable VIs) 11; Picture and MeasureData constants 14; a net with no source 12; Expression Node 7; a Feedback Node inside a structure, or untyped, 9; unknown primitives 11; MGI control references 8; and a long tail of ones and twos |
 
