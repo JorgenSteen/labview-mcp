@@ -291,8 +291,8 @@ public sealed class ViServerNameCheckTests
     /// <summary>
     /// A Property Node on a LabVIEW CLASS ({UDClassInst}, NI's export spelling - DQMH's `Module ID`)
     /// names the class's own accessors, which no list knows: no name warning, but one finding that
-    /// says the default backend refuses the node and which accessor Calls do the same work
-    /// (field-report item H10, 2026-11-15).
+    /// says the default backend composes the node for LabVIEW 2026 only and which accessor Calls
+    /// do the same work for an older LabVIEW (field-report item H10, 2026-11-15; upstream #154).
     /// </summary>
     [Fact]
     public void A_class_property_node_points_at_the_accessor_calls_and_not_at_its_names()
