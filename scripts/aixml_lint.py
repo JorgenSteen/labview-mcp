@@ -1153,29 +1153,46 @@ def check_vi_server_names(elements: list[_El]) -> list[Finding]:
     return findings
 
 
+# the composer's CLASS_PROP_TYPE: an author's {Auto.lvclass}, library-qualified or not (#153)
+_NAMED_CLASS_NODE_TYPE = re.compile(r"\{\s*((?:[^{}:]+\.lvlib:)*[^{}:]+\.lvclass)\s*\}", re.I)
+
+
+def _class_node_name(cls: str):
+    """"" for {UDClassInst}, the class for the named spelling {Auto.lvclass}, None otherwise."""
+    if cls.replace(" ", "") == "{UDClassInst}":
+        return ""
+    m = _NAMED_CLASS_NODE_TYPE.fullmatch(unescape(cls).strip())
+    return m.group(1) if m else None
+
+
 def _is_class_node_type(cls: str) -> bool:
-    return cls.replace(" ", "") == "{UDClassInst}"
+    return _class_node_name(cls) is not None
 
 
 def check_class_property_node(elements: list[_El]) -> list[Finding]:
-    """A Property Node on a LabVIEW CLASS (type="{UDClassInst}", NI's export spelling) -
-    AixmlCheck.CheckClassPropertyNode. The pylabview composer, the default backend, composes it
+    """A Property Node on a LabVIEW CLASS (type="{UDClassInst}", NI's export spelling, or
+    type="{Auto.lvclass}", which names the class) - AixmlCheck.CheckClassPropertyNode. The pylabview composer, the default backend, composes it
     for LabVIEW 2026 (upstream #154) and refuses it for an older LabVIEW. Each field IS one accessor
     call, so the route there is a Call of the accessor per field. A WARNING: grpc was never measured on it."""
     findings: list[Finding] = []
     for e in elements:
-        if e.tag != "Node" or e.name != "Property Node" or not _is_class_node_type(e.el.get("type") or ""):
+        if e.tag != "Node" or e.name != "Property Node":
             continue
+        named = _class_node_name(e.el.get("type") or "")
+        if named is None:
+            continue
+        owner = named or "<Class>.lvclass"
         calls = []
         for entry in (e.el.get("fields") or "").split(","):
             mode, plus, name = entry.partition("+")
             if plus and name.strip():
-                calls.append("`<Class>.lvclass:%s %s.vi`"
-                             % ("Write" if mode.strip() == "write" else "Read", unescape(name.strip())))
+                calls.append("`%s:%s %s.vi`"
+                             % (owner, "Write" if mode.strip() == "write" else "Read", unescape(name.strip())))
         findings.append(Finding(
             "warning", "class-property-node-not-composable", e.uid, e.label(), e.path,
-            "A Property Node on a LabVIEW class ({UDClassInst}) is composed by the pylabview composer, "
-            "the default backend, for LabVIEW 2026 only, and refused for an older LabVIEW. There, "
+            "A Property Node on a LabVIEW class (%s) is composed by the pylabview composer, "
+            % unescape(e.el.get("type") or "").strip()
+            + "the default backend, for LabVIEW 2026 only, and refused for an older LabVIEW. There, "
             "call the class's accessor instead, one Call per field"
             + (" (%s by NI's default naming)" % ", ".join(calls) if calls else "")
             + ", with the class wire and the error wire chained through them; lvai_describe_class "

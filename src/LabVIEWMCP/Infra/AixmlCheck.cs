@@ -198,11 +198,30 @@ internal static class AixmlCheck
         }
     }
 
-    internal static bool IsClassNodeType(string type) => type.Replace(" ", "") == "{UDClassInst}";
+    /// <summary>The composer's CLASS_PROP_TYPE: an author's `{Auto.lvclass}`, library-qualified or not.</summary>
+    private static readonly System.Text.RegularExpressions.Regex NamedClassNodeType = new(
+        @"^\{\s*((?:[^{}:]+\.lvlib:)*[^{}:]+\.lvclass)\s*\}$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// A node type on a LabVIEW CLASS wire: NI's export spelling <c>{UDClassInst}</c>, or the class
+    /// named by the author, <c>{Auto.lvclass}</c> / <c>{Lib.lvlib:Auto.lvclass}</c> (upstream #153,
+    /// which the composer reads too). The named spelling drew a false <c>viServerClassUnknown</c>
+    /// until 2026-11-25.
+    /// </summary>
+    internal static bool IsClassNodeType(string type) => ClassNodeName(type) is not null;
+
+    /// <summary>"" for <c>{UDClassInst}</c>, the class name for the named spelling, null otherwise.</summary>
+    private static string? ClassNodeName(string type)
+    {
+        if (type.Replace(" ", "") == "{UDClassInst}") return "";
+        var m = NamedClassNodeType.Match(UnescapeAixml(type).Trim());
+        return m.Success ? m.Groups[1].Value : null;
+    }
 
     /// <summary>
     /// A Property Node on a LabVIEW CLASS - <c>type="{UDClassInst}"</c>, NI's export spelling (17 of
-    /// NI's DQMH examples, `Module ID`). The pylabview composer, the default backend, composes it
+    /// NI's DQMH examples, `Module ID`), or <c>type="{Auto.lvclass}"</c>, which names the class. The pylabview composer, the default backend, composes it
     /// for LabVIEW 2026 since upstream #154 (2026-11-24) and refuses it for an older LabVIEW (not
     /// measured there); it refused it everywhere until then. Each field IS one accessor call, so the
     /// route for an older LabVIEW is a <c>Call</c> of the accessor
@@ -214,14 +233,15 @@ internal static class AixmlCheck
         foreach (var node in root.Descendants("Node"))
         {
             if ((string?)node.Attribute("_name") != "Property Node") continue;
-            if ((string?)node.Attribute("type") is not { } type || !IsClassNodeType(type)) continue;
+            if ((string?)node.Attribute("type") is not { } type || ClassNodeName(type) is not { } named) continue;
+            var cls = named.Length > 0 ? named : "<Class>.lvclass";
             var calls = (((string?)node.Attribute("fields")) ?? "").Split(',')
                 .Select(f => f.Split('+', 2))
                 .Where(p => p.Length == 2 && p[1].Trim().Length > 0)
-                .Select(p => $"`<Class>.lvclass:{(p[0].Trim() == "write" ? "Write" : "Read")} {UnescapeAixml(p[1].Trim())}.vi`")
+                .Select(p => $"`{cls}:{(p[0].Trim() == "write" ? "Write" : "Read")} {UnescapeAixml(p[1].Trim())}.vi`")
                 .ToList();
             findings.Add(new Finding(Severity.Warning, "classPropertyNodeNotComposable",
-                "A Property Node on a LabVIEW class ({UDClassInst}) is composed by the pylabview "
+                $"A Property Node on a LabVIEW class ({UnescapeAixml(type).Trim()}) is composed by the pylabview "
                 + "composer, the default backend, for LabVIEW 2026 only, and refused for an older "
                 + "LabVIEW. There, call the class's accessor instead, one Call per field"
                 + (calls.Count > 0 ? $" ({string.Join(", ", calls)} by NI's default naming)" : "")
