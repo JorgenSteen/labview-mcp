@@ -293,3 +293,61 @@ the tool reads each caller's version before it saves it and hands it to the chec
 Closing that unpinned 20.0 project in 2026 rewrote the `.lvproj` as 26.0 (`projectRewrite`,
 `docs/save-version.md` §3). Wall clock: a VI about 1 s, a typedef with callers 4-7 s, a replace
 0.5 s.
+
+## 8. A field report: broken before, and a map constant emptied (LabVIEW 2020, 2026-11-24)
+
+A maintenance edit of existing code on LabVIEW 2020 32-bit (U16 -> I32 conversions and indicators,
+seven `lvai_replace_primitive` and four `lvai_set_representation` calls) reported three things the
+tools did not see:
+
+- **A typedef field changed on the `.ctl` EMPTIED a caller's map constant** whose value type is that
+  typedef's cluster. The call answered `ok: true`, saved the callers, and every caller stayed
+  executable - the code then returned default values everywhere, and only the project's own golden
+  tests caught it. The same loss had happened to a manual IDE edit the day before. **Read from the
+  saved files** (pylabview, the caller before and right after the call): the map constant's
+  `ConstValue` went from 6 entries (`00000006 0064 000A 4054...`) to `0000000000`; an ARRAY
+  constant of the same typedef cluster in the same VI kept its 6 rows, the changed field widened
+  (`000A` -> `0000000A`). So it is the map, not typedef constants in general.
+- **`lvai_replace_primitive` saved into a VI that was already broken** and answered
+  `execStateBefore: 0, execStateAfter: 0, ok: true`: the verdict compared only executable-before
+  with broken-after.
+- The broken state there was LabVIEW 2020's "LabVIEW cannot update from type definition without
+  incorrectly preserving default values", on a VI whose callers all broke with it. The IDE's
+  right-click > **Review and Update from Type Def** repaired it and kept the data. The cause was not
+  found; whether it is the load-time form of the first item is not measured.
+
+What changed (pinned by tests on those shapes):
+
+1. **Both tools refuse a VI that is NOT EXECUTABLE before the call** (`brokenBefore`, with
+   LabVIEW's errors per file; nothing written, no backup made) unless `allowBroken` is true. With
+   `allowBroken` the answer carries `brokenBefore: true` and the errors after the edit. When an
+   error is the "update from type definition" text, the refusal names the IDE command.
+2. **`lvai_set_representation` on a `.ctl` with `projectPath`** finds the callers BEFORE the write,
+   reads each caller VI's executability, and refuses the same way when one is broken already. Each
+   caller is copied to `callerBackups` (its path under the project's folder kept, so two
+   same-named callers do not collide) before anything is written.
+3. The description says that a typedef change empties a caller's map constant, and that a map's
+   key and value types are not reached.
+
+What this gives up: one executability read per caller VI (about 0.3-1 s each), and a broken VI can
+no longer be edited without saying so.
+
+Live check of the branch build (LabVIEW 2020, 2026-11-24, copies of the field project):
+
+| case | result |
+|---|---|
+| the commit that loaded broken in the morning | loads EXECUTABLE now (state 1, no linker errors) - the morning's break was LabVIEW's state, not the files |
+| a VI broken on purpose (`To Long Integer` -> `Add`), then another replace | `brokenBefore` with LabVIEW's error, file unchanged (md5 and mtime), 0.5 s |
+| the same with `allowBroken` | saved, `brokenBefore: true`, `execStateBefore/After` 0/0, errors listed |
+| the typedef field U16 -> I32 with `projectPath` | ok, the same 4 callers saved, each in `callerBackups` at its project-relative path and byte-identical to the caller before the call |
+| the map constant after it (pylabview) | emptied again: `000000060064000A...` -> `0000000000`; the array constant beside it kept 6 rows, widened |
+| `lvai_vis_in_memory` | `labview: {release 2020, bits 32, pid, chosenBy running}` |
+
+The live run showed the map warning only in the description; the success note of a typedef change
+now says it too.
+
+**Deliberately NOT built: a check of the constants' data before and after.** It would catch the
+wipe directly, but needs a pylabview read of every caller twice and a parser for flattened map
+data - a lot of tool for one LabVIEW defect. Callers are NOT re-read for executability after the
+save either: it would not have seen this wipe (the callers stayed executable). The backups make
+the loss recoverable; the description tells the agent to run the callers' tests.

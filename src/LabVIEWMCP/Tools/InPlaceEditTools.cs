@@ -47,13 +47,19 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         stay. `controlsJson`: front-panel controls and indicators by LABEL, cluster elements and
         the FIELDS OF A TYPEDEF .ctl included (any depth); `constantsJson`: block diagram numeric
         constants by label. Values: I8 I16 I32 I64 U8 U16 U32 U64 SGL DBL EXT (or int32, double,
-        ...); an enum takes U8/U16/U32 only. Value, default and wires survive; a sink of the old
+        ...); an enum takes U8/U16/U32 only. A map's or set's key and value types are NOT reached
+        (`labelNotFound`). Value, default and wires survive; a sink of the old
         type gets a coercion dot. A label on no numeric (`labelNotFound`) or on several
         (`labelAmbiguous`) is refused BEFORE anything is written, with the labels there are. One error chain: a write LabVIEW refuses leaves the
         file untouched. For a .ctl with `projectPath`, the files under the project's folder that
-        link the typedef are loaded and saved (`callersSaved`) - they follow in memory only.
-        `execStateBefore`/`execStateAfter`: a VI this call BROKE answers ok false with LabVIEW's
-        errors; `backupPath` is the file as it was. docs/in-place-edits.md.
+        link the typedef are loaded and saved (`callersSaved`) - they follow in memory only - each
+        backed up first (`callerBackups`). A VI or caller NOT EXECUTABLE before is refused
+        (`brokenBefore`) unless `allowBroken`. `execStateBefore`/`execStateAfter`: a VI this call
+        BROKE answers ok false with LabVIEW's errors; `backupPath` is the file as it was.
+        A TYPEDEF CHANGE EMPTIES A CALLER'S MAP CONSTANT of that typedef, with the caller still
+        executable and ok true (LabVIEW 2020, measured from the saved file: 6 entries -> 0; an
+        array constant of the same typedef kept its data): run the callers' tests afterwards, or
+        build such a map from an array in code. docs/in-place-edits.md.
         """)]
     public async Task<string> SetRepresentationAsync(
         [Description("Absolute path to the .vi or .ctl - it is saved in place")] string filePath,
@@ -71,6 +77,8 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         string? projectPath = null,
         [Description("For a .ctl with projectPath: load and save the files that link it (default true)")]
         bool saveCallers = true,
+        [Description("Edit and save even when the VI, or a typedef caller, is NOT EXECUTABLE before the call (default false: refused as brokenBefore)")]
+        bool allowBroken = false,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 180,
         [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
@@ -117,9 +125,26 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
             if (Unmatched(constants, constantLabels, "constantsJson", "block diagram numeric constant") is { } noConstant)
                 return noConstant;
 
-            var before = isCtl ? null : await new ExecStateTools(connection).ReadAsync(
+            var execState = new ExecStateTools(connection);
+            var before = isCtl ? null : await execState.ReadAsync(
                 file, helperAixmlPath: null, helperViPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
-            var backup = Backup(file);
+
+            // A TYPEDEF'S CALLERS are found and read BEFORE the write: a caller that is broken
+            // already is refused like a broken target, and each one is compared after its save.
+            var withCallers = isCtl && throughProject && saveCallers;
+            List<string> callers = withCallers ? Callers(file, projectPath!) : [];
+            var callerStates = new List<SavedFileState>();
+            foreach (var caller in callers.Where(IsVi))
+                callerStates.Add(new SavedFileState(caller, await execState.ReadAsync(
+                    caller, helperAixmlPath: null, helperViPath: null, regenerateHelper: false, timeoutSeconds, ct: ct)));
+            if (BrokenBeforeRefusal([new SavedFileState(file, before), .. callerStates], allowBroken) is { } brokenRefusal)
+                return brokenRefusal;
+
+            var backupFolder = BackupFolder();
+            var backup = Backup(file, backupFolder);
+            var projectFolder = withCallers ? Path.GetDirectoryName(Path.GetFullPath(projectPath!))! : null;
+            var callerBackups = callers.Count(c => Backup(c, backupFolder,
+                Path.Combine("callers", Path.GetRelativePath(projectFolder!, c))) is not null);
 
             // ---- 2. WRITE
             var inputs = new Dictionary<string, string>();
@@ -154,12 +179,12 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
             // loaded and saved, and the modification bitsets read 0, so nothing tells which need it).
             JsonArray? callersSaved = null, callersFailed = null;
             JsonObject? callerVersions = null;
-            if (isCtl && allWritten && throughProject && saveCallers)
+            if (withCallers && allWritten)
             {
                 callersSaved = new JsonArray();
                 callersFailed = new JsonArray();
                 callerVersions = new JsonObject();
-                foreach (var caller in Callers(file, projectPath!))
+                foreach (var caller in callers)
                 {
                     // read before the save, so saveVersionCheck can say a caller went up a version
                     if (SaveVersions.Of(caller) is { } callerWas) callerVersions[caller] = callerWas;
@@ -171,7 +196,7 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 }
             }
 
-            var after = isCtl || !saved ? null : await new ExecStateTools(connection).ReadAsync(
+            var after = isCtl || !saved ? null : await execState.ReadAsync(
                 file, helperAixmlPath: null, helperViPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
             var broke = before is { Broken: false } && after is { Broken: true };
 
@@ -189,7 +214,9 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 ["callersSaved"] = callersSaved,
                 ["callersFailed"] = callersFailed is { Count: > 0 } ? callersFailed : null,
                 [SaveVersions.VersionsBeforeKey] = callerVersions is { Count: > 0 } ? callerVersions : null,
+                ["brokenBefore"] = before?.Broken == true || callerStates.Any(c => c.Before is { Broken: true }) ? true : null,
                 ["backupPath"] = backup,
+                ["callerBackups"] = callerBackups > 0 ? Path.Combine(backupFolder, "callers") : null,
                 ["steps"] = steps.Count > 0 ? steps : null,
                 ["note"] = RepresentationNote(code, saved, allWritten, broke, isCtl, throughProject, saveCallers) +
                            (throughProject ? " The project is left open." : ""),
@@ -259,7 +286,10 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         : isCtl && !saveCallers
             ? "The typedef is saved. Its callers were NOT saved (saveCallers false): each is unchanged on " +
               "disk until it is loaded and saved."
-        : "Written and read back, from LabVIEW and from the saved file. A sink that still has the old type " +
+        : (isCtl ? "A MAP constant of this typedef in a caller is EMPTIED by the change while the caller stays " +
+                   "executable (measured on LabVIEW 2020; arrays keep their data): run the callers' tests, and " +
+                   "restore a caller from callerBackups if one lost data. " : "") +
+          "Written and read back, from LabVIEW and from the saved file. A sink that still has the old type " +
           "shows a coercion dot now (lvai_coercion_dots); widen it with another call, or replace the " +
           "conversion in front of it with lvai_replace_primitive.";
 
@@ -334,8 +364,9 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         false with LabVIEW's errors, and `backupPath` holds the file as it was. Replaces EVERY
         node named `from` unless `occurrences` picks some: call with `dryRun` first to get each
         match's index and diagram position (`matches`). A `from` no node carries is refused with
-        the names the diagram has; an unknown `to` is Error 1054 and nothing is saved. Verified
-        by listing the saved VI again (`fromAfter`, `toAfter`). SubVI calls and constants are
+        the names the diagram has; an unknown `to` is Error 1054 and nothing is saved. A VI that is
+        NOT EXECUTABLE before the call is refused (`brokenBefore`, with LabVIEW's errors) unless
+        `allowBroken`. Verified by listing the saved VI again (`fromAfter`, `toAfter`). SubVI calls and constants are
         lvai_swap_subvis' job. docs/in-place-edits.md.
         """)]
     public async Task<string> ReplacePrimitiveAsync(
@@ -350,6 +381,8 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
         [Description("List the matches (index, position) and change nothing (default false)")] bool dryRun = false,
         [Description("The .lvproj to open (and make active) first; the VI is then edited in the project's instance")]
         string? projectPath = null,
+        [Description("Edit and save the VI even when it is NOT EXECUTABLE before the call (default false: refused as brokenBefore)")]
+        bool allowBroken = false,
         [Description("Local budget in seconds, per step")] int timeoutSeconds = 180,
         [Description(AixmlBackend.RouteParameterDescription)] string? backend = null,
         CancellationToken ct = default) =>
@@ -415,6 +448,8 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
 
             var before = await new ExecStateTools(connection).ReadAsync(
                 vi, helperAixmlPath: null, helperViPath: null, regenerateHelper: false, timeoutSeconds, ct: ct);
+            if (BrokenBeforeRefusal([new SavedFileState(vi, before)], allowBroken) is { } brokenRefusal)
+                return brokenRefusal;
             var backup = Backup(vi);
 
             // ---- 2. REPLACE AND SAVE
@@ -468,10 +503,14 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 ["errorSource"] = code == 0 ? null : source,
                 ["execStateBefore"] = before?.State,
                 ["execStateAfter"] = state?.State,
-                ["errors"] = broke ? ExecStateTools.ErrorsNode(state) : null,
+                ["brokenBefore"] = before?.Broken == true ? true : null,
+                ["errors"] = broke || state is { Broken: true } ? ExecStateTools.ErrorsNode(state) : null,
                 ["backupPath"] = backup,
                 ["steps"] = steps.Count > 0 ? steps : null,
-                ["note"] = code == 1054
+                ["note"] = (before?.Broken == true
+                    ? "The VI was NOT EXECUTABLE before this call (allowBroken) and is saved as it now is; `errors` " +
+                      "is LabVIEW's list after the edit. "
+                    : "") + (code == 1054
                     ? $"LabVIEW knows no primitive named '{to}' (Error 1054). Nothing was saved. The name is the " +
                       "one the Functions palette and an AIXML export show."
                 : !saved
@@ -483,11 +522,13 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                       "LabVIEW's list. Nothing was rolled back; backupPath is the file as it was."
                 : !verified
                     ? "Saved, but a fresh listing does not show the counts asked for - compare fromAfter and toAfter."
+                : before?.Broken == true
+                    ? "Replaced and saved; a fresh listing of the saved VI shows the new counts." +
+                      (throughProject ? " The project is left open." : "")
                 : "Replaced and saved; a fresh listing of the saved VI shows the new counts and the VI is as " +
                   "executable as before. Where the new primitive has a terminal the old one lacked, it is " +
                   "unwired; where its output type differs, the sink shows a coercion dot (lvai_coercion_dots)." +
-                  (throughProject ? " The project is left open." : ""),
-
+                  (throughProject ? " The project is left open." : "")),
             });
         }));
 
@@ -563,20 +604,71 @@ internal sealed class InPlaceEditTools(LvaiConnection connection)
                 $"'{Path.GetFileName(path)}' is not one of {string.Join(", ", extensions)}.", new { path });
     }
 
-    /// <summary>A copy of the file as it is, beside nothing of the user's - null when it could not be made.</summary>
-    internal static string? Backup(string file)
+    /// <summary>One backup folder per call, beside nothing of the user's.</summary>
+    internal static string BackupFolder() =>
+        Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "inplace-backup",
+                     DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture));
+
+    /// <summary>
+    /// A copy of the file as it is, in <paramref name="folder"/> (a new one when null) under
+    /// <paramref name="relative"/> (its file name when null) - null when it could not be made.
+    /// </summary>
+    internal static string? Backup(string file, string? folder = null, string? relative = null)
     {
         try
         {
-            var folder = Path.Combine(Path.GetTempPath(), "LabVIEWMCP", "inplace-backup",
-                                      DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture));
-            Directory.CreateDirectory(folder);
-            var copy = Path.Combine(folder, Path.GetFileName(file));
+            var copy = Path.Combine(folder ?? BackupFolder(), relative ?? Path.GetFileName(file));
+            Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
             File.Copy(file, copy, overwrite: true);
             return copy;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
+
+    // ------------------------------------------------------------------ broken before, broken after
+
+    /// <summary>A file this call saves, with its executability before the edit.</summary>
+    internal sealed record SavedFileState(string Path, ExecStateReading? Before);
+
+    /// <summary>
+    /// LabVIEW 2020's text for a VI that cannot follow a changed typedef. A field report
+    /// (2026-11-24) met it on a VI with a map constant of the typedef's cluster; the IDE's
+    /// "Review and Update from Type Def" repaired it and kept the data. Nothing in VI Server was
+    /// found to do the same.
+    /// </summary>
+    internal const string TypedefUpdateText = "update from type definition";
+
+    /// <summary>
+    /// The refusal for an edit whose target or typedef callers are NOT EXECUTABLE before it - null
+    /// when every one is executable or unread, or when <paramref name="allowBroken"/>. The field
+    /// report of 2026-11-24: lvai_replace_primitive saved into a VI that was already broken and
+    /// answered ok true (it compared only executable-before with broken-after), and the break
+    /// that was there first cost most of a day.
+    /// </summary>
+    internal static string? BrokenBeforeRefusal(IReadOnlyList<SavedFileState> files, bool allowBroken)
+    {
+        if (allowBroken) return null;
+        var broken = new JsonArray([.. files.Where(f => f.Before is { Broken: true })
+            .Select(f => (JsonNode)new JsonObject { ["path"] = f.Path, ["errors"] = ExecStateTools.ErrorsNode(f.Before) })]);
+        if (broken.Count == 0) return null;
+        var typedefText = files.Any(f => f.Before?.Errors?.Any(e => Mentions(e, TypedefUpdateText)) == true);
+        return Json.Error("brokenBefore",
+            $"{broken.Count} file(s) this call would save are NOT EXECUTABLE before the edit - `broken` lists them " +
+            "with LabVIEW's errors. Saved on top of that, the edit's own effect cannot be told from the break that " +
+            "was there first. Nothing was written. Repair them first, or pass allowBroken true to edit anyway." +
+            (typedefText
+                ? " \"Cannot update from type definition\" is repaired in the IDE: right-click the constant or " +
+                  "control > Review and Update from Type Def, which keeps its data. Saving the VI as it is may not."
+                : ""),
+            new JsonObject { ["broken"] = broken });
+    }
+
+    private static bool Mentions(ErrorListTools.ErrorLine line, string text) =>
+        line.Error.Contains(text, StringComparison.OrdinalIgnoreCase)
+        || (line.Detail?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false);
+
+    private static bool IsVi(string path) =>
+        Path.GetExtension(path).ToLowerInvariant() is ".vi" or ".vit" or ".vim";
 
     private static List<int> Ints(IReadOnlyList<LvValuesXml.Value> values, string name) =>
         [.. HousekeepingHelpers.Strings(values, name)

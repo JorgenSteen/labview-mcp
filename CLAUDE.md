@@ -15,7 +15,7 @@ The user's standing rule of 2026-09-27. Work directly only when the user asks fo
 |---|---|
 | a new VI | `labview-vi-generator` |
 | implement a SUPPLIED VI whose front panel must be kept (exam template) | `labview-vi-generator` - pass the supplied VI; it grafts (Phase 6g) |
-| change an existing VI | `labview-vi-editor` |
+| change an existing VI (types, primitives in place: not the user's IDE) | `labview-vi-editor` |
 | a class, class hierarchy or interface | `labview-class-generator` |
 | a library (`.lvlib`), its members, description and icon | `labview-class-generator` |
 | unit tests (default framework) | `labview-caraya-unit-test` |

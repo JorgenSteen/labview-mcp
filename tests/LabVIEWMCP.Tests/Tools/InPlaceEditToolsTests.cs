@@ -302,6 +302,71 @@ public class InPlaceEditToolsTests
         Assert.Contains(expected, problem);
     }
 
+    // ------------------------------------------------------------------ broken before, broken after
+
+    private static ExecStateReading Reading(int state, params (string Error, string? Detail)[] errors) =>
+        new(state, "", 0, "", Errors: errors.Length == 0 ? null : [.. errors.Select(e => new ErrorListTools.ErrorLine(e.Error, e.Detail))]);
+
+    // FIELD REPORT 2026-11-24: replace_primitive answered execStateBefore 0, execStateAfter 0, ok
+    // true, and saved - the first build compared only executable-before with broken-after.
+    [Fact]
+    public void A_target_broken_before_the_edit_is_refused_with_its_errors()
+    {
+        var refusal = JsonNode.Parse(InPlaceEditTools.BrokenBeforeRefusal(
+            [new InPlaceEditTools.SavedFileState(@"C:\p\read.vi", Reading(0, ("Constant", "bad")))], allowBroken: false)!)!;
+
+        Assert.Equal("brokenBefore", refusal["errorKind"]!.GetValue<string>());
+        var broken = refusal["detail"]!["broken"]!.AsArray();
+        Assert.Equal(@"C:\p\read.vi", Assert.Single(broken)!["path"]!.GetValue<string>());
+        Assert.Equal("bad", broken[0]!["errors"]![0]!["detail"]!.GetValue<string>());
+        Assert.DoesNotContain("Review and Update", refusal["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_typedef_caller_broken_before_is_refused_too_and_its_known_text_names_the_IDE_fix()
+    {
+        var refusal = JsonNode.Parse(InPlaceEditTools.BrokenBeforeRefusal(
+        [
+            new InPlaceEditTools.SavedFileState(@"C:\p\param.ctl", null),
+            new InPlaceEditTools.SavedFileState(@"C:\p\ok.vi", Reading(1)),
+            new InPlaceEditTools.SavedFileState(@"C:\p\read.vi", Reading(0, ("Map Constant",
+                "LabVIEW cannot update from type definition without incorrectly preserving default values."))),
+        ], allowBroken: false)!)!;
+
+        Assert.Equal([@"C:\p\read.vi"],
+            refusal["detail"]!["broken"]!.AsArray().Select(b => b!["path"]!.GetValue<string>()));
+        Assert.Contains("Review and Update from Type Def", refusal["error"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Executable_unread_or_allowed_files_are_not_refused()
+    {
+        Assert.Null(InPlaceEditTools.BrokenBeforeRefusal(
+            [new(@"C:\p\a.vi", Reading(1)), new(@"C:\p\b.vi", null), new(@"C:\p\c.vi", Reading(-1))], allowBroken: false));
+        Assert.Null(InPlaceEditTools.BrokenBeforeRefusal([new(@"C:\p\a.vi", Reading(0))], allowBroken: true));
+    }
+
+    [Fact]
+    public void Callers_are_backed_up_by_their_path_under_the_project_in_one_folder()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "LabVIEWMCP-test-" + Path.GetRandomFileName());
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "a"));
+            Directory.CreateDirectory(Path.Combine(root, "b"));
+            File.WriteAllText(Path.Combine(root, "a", "same.vi"), "A");
+            File.WriteAllText(Path.Combine(root, "b", "same.vi"), "B");
+            var folder = Path.Combine(root, "backup");
+
+            var first = InPlaceEditTools.Backup(Path.Combine(root, "a", "same.vi"), folder, Path.Combine("callers", "a", "same.vi"));
+            var second = InPlaceEditTools.Backup(Path.Combine(root, "b", "same.vi"), folder, Path.Combine("callers", "b", "same.vi"));
+
+            Assert.Equal("A", File.ReadAllText(first!));
+            Assert.Equal("B", File.ReadAllText(second!));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     // ------------------------------------------------------------------ the helpers as shipped
 
     private static XElement Helper(string name) =>
