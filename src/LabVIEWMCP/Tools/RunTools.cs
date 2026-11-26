@@ -684,6 +684,9 @@ internal sealed class RunTools(LvaiConnection connection)
             namedSetHelper = helperVi;
         }
 
+        if (SignalLiterals(signals, panel, out var literalProblem) is not { } typedSignals)
+            return Json.Error("signalNotConvertible", literalProblem!, new { viPath = full });
+        signals = typedSignals;
         if (signals.Count > 0)
             return await RunSignalledOverComAsync(full, inputs, runForMs, signals, signalGapMs,
                                                   timeoutSeconds, ct, namedSetHelper, nativeValues, includeXml);
@@ -1081,6 +1084,44 @@ internal sealed class RunTools(LvaiConnection connection)
         }
         return list;
     }
+
+    /// <summary>
+    /// A signal written as an AIXML bracket literal (<c>[false,true,false]</c>) for a CLUSTER or
+    /// ARRAY control, turned into the LvVariant XML the signal helpers unflatten - the form `set`
+    /// and inputsJson already take (<see cref="ComValues.FromText"/>). Until 2026-11-26 the literal
+    /// went through as text and the helper answered Error 1103: three CLD benchmark rounds tried it
+    /// once each, having learnt it from the sibling inputs. Every other value is left as it is, so
+    /// a string control given text that starts with a bracket is untouched. Null, and the reason,
+    /// when a literal does not fit its control's type.
+    /// </summary>
+    internal static List<KeyValuePair<string, string>>? SignalLiterals(
+        IReadOnlyList<KeyValuePair<string, string>> signals, IReadOnlyList<AixmlComposer.PanelItem> panel,
+        out string? problem)
+    {
+        problem = null;
+        var converted = new List<KeyValuePair<string, string>>(signals.Count);
+        foreach (var (name, value) in signals)
+        {
+            var type = IsBracketLiteral(value)
+                ? panel.FirstOrDefault(i => !i.Indicator && i.Name == name)?.Type : null;
+            if (type is null || !LvXmlLiteral.IsCompound(type))
+            {
+                converted.Add(new(name, value));
+                continue;
+            }
+            var (xml, why) = LvXmlLiteral.Build(type, value);
+            if (xml is null)
+            {
+                problem = $"The signal for '{name}' ({type}) is not a value of that type: {why}. Nothing was signalled.";
+                return null;
+            }
+            converted.Add(new(name, xml));
+        }
+        return converted;
+    }
+
+    /// <summary>Whether a signal value is an AIXML bracket literal, the only kind <see cref="SignalLiterals"/> converts.</summary>
+    internal static bool IsBracketLiteral(string value) => value.TrimStart().StartsWith('[');
 
     /// <summary>Whether a helper can fire signals, read from its AIXML like <see cref="CanHonourRunForMs"/>.</summary>
     internal static bool CanSignal(string helperAixmlPath)

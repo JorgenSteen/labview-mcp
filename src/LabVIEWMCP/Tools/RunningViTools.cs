@@ -53,8 +53,8 @@ internal sealed class RunningViTools
         actions IN MEMORY before the run; press then writes TRUE and releases it again like a latch,
         and stop reverts the VI from disk (Revert VI), so the file never changes.
         signal - signalsJson, a JSON array of {"control":..,"value":..} in order, each written with
-        Value (Signaling) (a boolean TRUE/1, a numeric its number, a string its text, else LabVIEW
-        XML), signalGapMs between.
+        Value (Signaling) (a boolean TRUE/1, a numeric its number, a string its text, a cluster or
+        array WHOLE as a bracket literal [false,true,false] or LabVIEW XML), signalGapMs between.
         stop - press `stopControl` if given, wait up to waitMs for the VI to end, then ABORT it if
         it still runs (abort: false to leave it) - Abort runs no cleanup - and close its panel.
         steps - stepsJson, a JSON array run in order in ONE call, each step one of
@@ -273,6 +273,21 @@ internal sealed class RunningViTools
             throw new ArgumentException(act == "press"
                 ? "press needs `controls`: the booleans to press, one per line."
                 : "signal needs signalsJson: [{\"control\":..,\"value\":..}].");
+        // a bracket literal for a cluster or array control becomes LabVIEW's XML, as `set` takes it -
+        // the panel is read from the file only when a value is one (RunTools.SignalLiterals)
+        var asWritten = signals.Select(s => s.Value).ToList();
+        if (signals.Any(s => RunTools.IsBracketLiteral(s.Value)))
+        {
+            if (AixmlComposer.Locate(out var missing) is not { } setup)
+                return Json.Error("backendNotAvailable", missing, new { viPath = vi });
+            var (panel, readProblem) = await AixmlComposer.ReadPanelAsync(setup, vi, timeoutSeconds, ct);
+            if (panel is null)
+                return Json.Error("panelNotRead", "A bracket-literal value needs the control's type, and the " +
+                                  "panel could not be read from the file: " + readProblem, new { viPath = vi });
+            if (RunTools.SignalLiterals(signals, panel, out var literalProblem) is not { } typed)
+                return Json.Error("signalNotConvertible", literalProblem!, new { viPath = vi });
+            signals = typed;
+        }
         var (stateBefore, _) = await LabViewCom.ReadRunningAsync(vi, [], timeoutSeconds, ct);
         var (helper, problem) = await ComposedHelpers.EnsureAsync(SignalHelperFileName, timeoutSeconds, ct);
         if (helper is null)
@@ -288,7 +303,7 @@ internal sealed class RunningViTools
         var pressed = new List<string>();
         int? code = 0;
         string? failed = null, errorXml = null;
-        foreach (var (name, value) in signals)
+        foreach (var ((name, value), shown) in signals.Zip(asWritten))
         {
             var outputs = await LabViewCom.RunHelperAsync(helper, new Dictionary<string, string>
             {
@@ -300,11 +315,11 @@ internal sealed class RunningViTools
             code = ErrorCode(outputs.GetValueOrDefault("error xml"));
             if (code != 0)
             {
-                failed = $"{name} = {value}";
+                failed = $"{name} = {shown}";
                 errorXml = outputs.GetValueOrDefault("error xml");
                 break;
             }
-            written.Add($"{name} = {value}");
+            written.Add($"{name} = {shown}");
             pressed.Add(name);
         }
         // a switched latch stays TRUE after the write; a latch would reset when read - release it
@@ -319,7 +334,7 @@ internal sealed class RunningViTools
                 released.AddRange(toRelease);
             }
         }
-        var notSent = signals.Skip(written.Count + 1).Select(s => $"{s.Key} = {s.Value}").ToList();
+        var notSent = signals.Zip(asWritten).Skip(written.Count + 1).Select(p => $"{p.First.Key} = {p.Second}").ToList();
         var (state, _) = await LabViewCom.ReadRunningAsync(vi, [], timeoutSeconds, ct);
         var wasRunning = stateBefore is 2 or 3;
         return Answer(vi, act, state, code == 0, new JsonObject
@@ -342,9 +357,8 @@ internal sealed class RunningViTools
                 _ => $"The helper answered error {code} on `failed`: a name that is not a control on the panel, or " +
                      "a value that does not convert to its type. `signalled` took; `notSent` was not written." +
                      (code == 1103
-                         ? " A CLUSTER or ARRAY is written WHOLE, as LabVIEW's XML (<Cluster><Name>..</Name>" +
-                           "<NumElts>n</NumElts>..one element per field..</Cluster>) - a bracket list is not a " +
-                           "value; one button of a cluster is pressed by signalling the whole cluster."
+                         ? " A CLUSTER or ARRAY is written WHOLE - a bracket literal ([false,true,false]) or LabVIEW's " +
+                           "XML; one button of a cluster is pressed by signalling the whole cluster."
                          : ""),
             },
             ["helperError"] = errorXml,
