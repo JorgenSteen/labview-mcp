@@ -427,3 +427,10 @@ by hand at 0.66 s per 15 s closed that LabVIEW in 3.4 s. LabVIEW 2025 right afte
 The threshold is now three CPU seconds per 30 s (`LabViewState.IdleCpuSecondsPer30`). A LabVIEW
 that still does not take the close message is reported as before (`CloseMainWindow False`).
 
+Measured 2026-11-25 (LabVIEW 2026 Q3, at the end of a live check that composed class property
+nodes and saved a VI for 19.0, no project, no window, nothing unsaved): `close` with
+`waitForIdleSeconds` 300 read 0.8-5.0 CPU s per 5 s sample for 106 s (19 samples, all `busy`),
+then 0.09 and 0.06 - two quiet samples - and the close took 6.04 s. The busy spell ended on its
+own; the guard waited it out as designed, and the threshold was not the cause. What LabVIEW was
+doing in those 106 s was not measured.
+

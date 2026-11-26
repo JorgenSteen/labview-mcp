@@ -314,4 +314,38 @@ public sealed class ViServerNameCheckTests
         Assert.Contains("`<Class>.lvclass:Read Module ID.vi`", finding.Message);
         Assert.Contains("`<Class>.lvclass:Write Display:Name.vi`", finding.Message);
     }
+
+    /// <summary>
+    /// The NAMED spelling the composer reads too (upstream #153), `{Auto.lvclass}` or library-
+    /// qualified: until 2026-11-25 it drew a false `viServerClassUnknown` ("an invented class")
+    /// and no class finding. Now it is the same finding, naming the class in the accessor Calls.
+    /// </summary>
+    [Theory]
+    [InlineData("{Auto.lvclass}", "Auto.lvclass")]
+    [InlineData(@"{Cars.lvlib\3AAuto.lvclass}", "Cars.lvlib:Auto.lvclass")]
+    [InlineData("{ Cars.lvlib:Auto.LVCLASS }", "Cars.lvlib:Auto.LVCLASS")]
+    public void A_property_node_naming_its_class_is_a_class_node_and_not_an_unknown_VI_Server_class(
+        string type, string qualified)
+    {
+        var xml = $"""
+            <VI _name="t.vi" description="d">
+              <Node _name="Property Node" fields="read+Speed,write+Gear" outputs="Speed:4202.s" type="{type}" uid="4202" uid_parent="root"/>
+              <Indicator _name="Speed" type="double" uid="4300" uid_parent="root" value="0" inputs="value:4202.s"/>
+            </VI>
+            """;
+
+        var findings = AixmlCheck.Check(xml);
+
+        Assert.DoesNotContain(findings, f => NameCodes.Contains(f.Code));
+        var finding = Assert.Single(findings, f => f.Code == "classPropertyNodeNotComposable");
+        Assert.Contains($"`{qualified}:Read Speed.vi`", finding.Message);
+        Assert.Contains($"`{qualified}:Write Gear.vi`", finding.Message);
+    }
+
+    [Theory]
+    [InlineData("{LV.Application}")]
+    [InlineData("{Auto.lvlib}")]
+    [InlineData("{Auto.lvclass:Inner}")]
+    public void Only_a_class_spelling_is_a_class_node(string type) =>
+        Assert.False(AixmlCheck.IsClassNodeType(type));
 }
