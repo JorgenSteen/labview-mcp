@@ -78,10 +78,20 @@ of each build, the largest repeated cost after reading the spec.
 `set` and `signal` take a cluster or array as LabVIEW's XML, the whole value - that is how
 LabVIEW itself writes one, and pressing ONE button of a cluster of buttons is a signal of the
 whole cluster with that element TRUE (measured in a benchmark build: it works for LATCHED
-buttons inside the cluster too, which a write to the element alone would refuse). A bracket
-list (`[false,true,false]`) answers error 1103 - three benchmark rounds tried it once each -
-and the 1103 answer now says so. No short form was added: the user's call, the whole cluster
-is normal behaviour.
+buttons inside the cluster too, which a write to the element alone would refuse). No short form
+for one element was added: the user's call, the whole cluster is normal behaviour.
+
+**A bracket literal works too, since 2026-11-26** (`[false,true,false]`, `[1.5,2]`), in `signal`,
+in a `steps` signal and in `lvai_run_vi_and_read_values` `signalsJson` on pylabview - the form
+`set` and `inputsJson` already took. The server reads the control's type from the file and
+converts the literal with the same converter as `lvai_set_constant` (`LvXmlLiteral`); a value
+that is not a literal, or a control that is not a cluster or array, passes as written. Before,
+the literal went to the helper as text and it answered error 1103 - three benchmark rounds tried
+it once each, having learnt it from `set`. A literal that does not fit the type is refused by
+name (`signalNotConvertible`) before anything is signalled; an enum, path or refnum inside the
+cluster is refused so, as `lvai_set_constant` refuses it. Gives up: one panel read from the file
+(pylabview, no LabVIEW) when a value is a bracket literal. NI's gRPC route of
+`lvai_run_vi_and_read_values` still passes the text (it is being phased out).
 
 ## Latched booleans: `latchedAsSwitch` (2026-11-17)
 
