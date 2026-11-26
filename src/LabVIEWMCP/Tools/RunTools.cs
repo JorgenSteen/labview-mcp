@@ -482,7 +482,8 @@ internal sealed class RunTools(LvaiConnection connection)
         string target, IReadOnlyList<LabViewCom.Input> inputs, int runForMs,
         IReadOnlyList<KeyValuePair<string, string>> signals, int signalGapMs,
         int timeoutSeconds, CancellationToken ct, string? namedSetHelper = null,
-        bool nativeValues = false, bool includeXml = true)
+        bool nativeValues = false, bool includeXml = true,
+        IReadOnlyList<KeyValuePair<string, string>>? shownSignals = null)
     {
         if (DefaultHelperAixmlPath(timed: true) is not { } aixml || !File.Exists(aixml))
             return Json.Error("helperMissing",
@@ -538,7 +539,7 @@ internal sealed class RunTools(LvaiConnection connection)
         var endedOnItsOwn = TargetEndedBeforeAbort(true, rawHelperCode, errorXml);
         var helperCode = endedOnItsOwn ? 0 : rawHelperCode;
         var signalErrorXml = run.Outputs.GetValueOrDefault("signal error xml");
-        var signalsAnswer = SignalsAnswer(signals, signalGapMs, signalErrorXml);
+        var signalsAnswer = SignalsAnswer(shownSignals ?? signals, signalGapMs, signalErrorXml);
         signalsAnswer["latchedPressed"] = run.KeyPresses;
         // whether the panel was in front before the helper focused anything - a press on a panel
         // that comes to the front later can be lost, as activation resets the key focus
@@ -686,10 +687,10 @@ internal sealed class RunTools(LvaiConnection connection)
 
         if (SignalLiterals(signals, panel, out var literalProblem) is not { } typedSignals)
             return Json.Error("signalNotConvertible", literalProblem!, new { viPath = full });
-        signals = typedSignals;
         if (signals.Count > 0)
-            return await RunSignalledOverComAsync(full, inputs, runForMs, signals, signalGapMs,
-                                                  timeoutSeconds, ct, namedSetHelper, nativeValues, includeXml);
+            return await RunSignalledOverComAsync(full, inputs, runForMs, typedSignals, signalGapMs,
+                                                  timeoutSeconds, ct, namedSetHelper, nativeValues, includeXml,
+                                                  shownSignals: signals);
 
         // INDICATORS ONLY, as NI's helper reads them: Ctrl Val.Get All with its default answered
         // the indicators and none of the controls, measured 2026-10-10 on the same VIs. The answer
@@ -1112,7 +1113,7 @@ internal sealed class RunTools(LvaiConnection connection)
             var (xml, why) = LvXmlLiteral.Build(type, value);
             if (xml is null)
             {
-                problem = $"The signal for '{name}' ({type}) is not a value of that type: {why}. Nothing was signalled.";
+                problem = $"The signal for '{name}' ({type}) is not a value of that type: {(why ?? "").TrimEnd('.')}. Nothing was signalled.";
                 return null;
             }
             converted.Add(new(name, xml));

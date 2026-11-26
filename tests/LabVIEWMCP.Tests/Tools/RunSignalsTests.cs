@@ -136,5 +136,6 @@ public sealed class RunSignalsTests
         Assert.Null(RunTools.SignalLiterals(signals, Panel, out var problem));
         Assert.Contains("'Buttons'", problem);
         Assert.Contains("Nothing was signalled", problem);
+        Assert.DoesNotContain("..", problem);
     }
 }
